@@ -1,0 +1,45 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: navi_frontend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: navi_backend
+    ports:
+      - "8090:8000"
+    volumes:
+      - ./backend:/app
+    env_file:
+      - ./.env
+    depends_on:
+      db:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+  db:
+    image: postgres:16-alpine
+    container_name: navi_db
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d navi_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
