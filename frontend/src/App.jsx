@@ -3,6 +3,7 @@ import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import HomePage from "./pages/HomePage";
 import EngineLookupPage from "./pages/EngineLookupPage";
 import MotorsPage from "./pages/MotorsPage";
+import VehiclesPage from "./pages/VehiclesPage";
 
 export default function App() {
   return (
@@ -31,6 +32,10 @@ export default function App() {
                 <span>Motores</span>
                 <small>Catalogo tecnico</small>
               </NavLink>
+              <NavLink to="/vehiculos">
+                <span>Vehiculos</span>
+                <small>Placas asociadas</small>
+              </NavLink>
             </nav>
 
             <section className="sidebar-note">
@@ -48,6 +53,7 @@ export default function App() {
               <Route path="/" element={<HomePage />} />
               <Route path="/consulta-motor" element={<EngineLookupPage />} />
               <Route path="/motores" element={<MotorsPage />} />
+              <Route path="/vehiculos" element={<VehiclesPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </div>

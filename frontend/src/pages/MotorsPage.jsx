@@ -66,7 +66,7 @@ export default function MotorsPage() {
         <article className="card metric-card feature-card-accent">
           <span className="eyebrow">Cobertura</span>
           <strong>{totals.vehicles}</strong>
-          <p>Vehiculos asociados desde consultas</p>
+          <p>Vehiculos unicos asociados</p>
         </article>
 
         <article className="card metric-card">
@@ -96,7 +96,7 @@ export default function MotorsPage() {
         {motors.map((motor) => (
           <article className="card motor-card" key={motor.id}>
             <div className="motor-card-top">
-              <span className="motor-count">{motor.vehicle_count} vehiculos</span>
+              <span className="motor-count">{motor.vehicle_count} vehiculos unicos</span>
               <span className="status status-ok">activo</span>
             </div>
 

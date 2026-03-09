@@ -7,7 +7,12 @@ import psycopg
 from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 
-from app.schemas.vehicle import MotorCatalogRecord, MotorCatalogUpsertRequest, RegisteredMotorSummary
+from app.schemas.vehicle import (
+    MotorCatalogRecord,
+    MotorCatalogUpsertRequest,
+    RegisteredMotorSummary,
+    VehicleAssignmentRecord,
+)
 
 
 def _database_dsn() -> str:
@@ -149,6 +154,47 @@ def find_registered_motor(technical_number: str) -> RegisteredMotorSummary | Non
     if row is None:
         return None
     return RegisteredMotorSummary(**row)
+
+
+def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmentRecord]:
+    params: list[Any] = []
+    where_clause = ""
+
+    if search:
+        normalized_search = f"%{search.strip().upper()}%"
+        where_clause = """
+            WHERE UPPER(a.plate) LIKE %s
+               OR UPPER(COALESCE(a.vin, '')) LIKE %s
+               OR UPPER(a.technical_number) LIKE %s
+               OR UPPER(COALESCE(m.engine_name, '')) LIKE %s
+        """
+        params.extend([normalized_search, normalized_search, normalized_search, normalized_search])
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    a.plate,
+                    a.vin,
+                    a.engine_number,
+                    a.technical_number,
+                    m.engine_name,
+                    a.created_at,
+                    a.updated_at,
+                    a.last_seen_at
+                FROM vehicle_motor_assignments a
+                LEFT JOIN motor_catalog m
+                    ON m.technical_number = a.technical_number
+                {where_clause}
+                ORDER BY a.last_seen_at DESC, a.plate ASC;
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+
+    return [VehicleAssignmentRecord(**row) for row in rows]
 
 
 def register_vehicle_assignment(

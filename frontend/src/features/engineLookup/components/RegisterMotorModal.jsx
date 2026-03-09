@@ -34,18 +34,18 @@ export default function RegisterMotorModal({
 
   return (
     <div className="modal-overlay" role="presentation">
-      <section className="modal-card" role="dialog" aria-modal="true" aria-label={title}>
+      <section className="card modal-card" role="dialog" aria-modal="true" aria-label={title}>
         <header className="modal-header">
-          <div>
+          <div className="modal-heading">
             <span className="eyebrow">Alta de motor</span>
             <h3>{title}</h3>
           </div>
-          <button type="button" className="icon-button" onClick={onClose}>
+          <button type="button" className="icon-button modal-close-button" onClick={onClose}>
             Cerrar
           </button>
         </header>
 
-        <p className="support-copy">
+        <p className="support-copy modal-support-copy">
           Define el nombre visible del motor y asocialo al Technical Engine Configuration # que
           identificara futuras consultas.
         </p>
@@ -74,7 +74,7 @@ export default function RegisterMotorModal({
             />
           </div>
 
-          <div className="actions-row">
+          <div className="actions-row modal-actions">
             <button type="submit" disabled={loading}>
               {loading ? "Guardando..." : "Registrar motor"}
             </button>

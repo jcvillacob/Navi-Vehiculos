@@ -539,11 +539,21 @@ input[readonly] {
   color: var(--muted);
 }
 
+.warning-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.expand-button {
+  width: fit-content;
+}
+
 .lookup-layout,
 .empty-lookup-grid,
 .home-grid,
 .motor-overview-grid,
-.motor-cards-grid {
+.motor-cards-grid,
+.vehicles-summary-grid {
   display: grid;
   gap: 18px;
 }
@@ -560,6 +570,10 @@ input[readonly] {
 
 .motor-overview-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.vehicles-summary-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .motor-cards-grid {
@@ -622,6 +636,13 @@ input[readonly] {
   align-items: start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.detail-status-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .section-heading h3 {
@@ -701,6 +722,25 @@ input[readonly] {
   color: #7b2913;
 }
 
+.geotab-badge {
+  box-shadow: none;
+}
+
+.geotab-found {
+  background: var(--success);
+  color: #4d5829;
+}
+
+.geotab-not_found {
+  background: var(--danger);
+  color: #7b2913;
+}
+
+.geotab-unknown {
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--muted);
+}
+
 .motor-chip {
   display: grid;
   gap: 6px;
@@ -718,6 +758,60 @@ input[readonly] {
 
 .motor-chip span {
   color: var(--muted);
+  word-break: break-word;
+}
+
+.source-panels-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.source-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(255, 255, 255, 0.64);
+}
+
+.source-panel-header {
+  display: grid;
+  gap: 6px;
+}
+
+.source-panel-header h4 {
+  margin: 0;
+  font-family: "Sora", sans-serif;
+  font-size: 20px;
+  letter-spacing: -0.03em;
+}
+
+.source-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.source-field {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 252, 246, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.68);
+}
+
+.source-field span {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.source-field strong {
+  line-height: 1.5;
   word-break: break-word;
 }
 
@@ -810,6 +904,72 @@ input[readonly] {
   text-transform: uppercase;
 }
 
+.vehicles-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.vehicles-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.vehicles-search-field {
+  min-width: 0;
+}
+
+.vehicles-filter-actions {
+  flex-wrap: nowrap;
+}
+
+.vehicles-table-shell {
+  overflow: auto;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+}
+
+.vehicles-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 960px;
+}
+
+.vehicles-table thead th {
+  padding: 16px 18px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.vehicles-table tbody td {
+  padding: 18px;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(46, 42, 35, 0.08);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.vehicles-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.vehicles-table td strong {
+  font-family: "Sora", sans-serif;
+  font-size: 18px;
+  letter-spacing: -0.03em;
+}
+
+.vehicles-empty-state {
+  gap: 10px;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -822,11 +982,18 @@ input[readonly] {
 }
 
 .modal-card {
-  width: min(560px, 100%);
+  width: min(720px, calc(100vw - 40px));
   display: grid;
-  gap: 16px;
+  gap: 22px;
   max-height: 90svh;
   overflow-y: auto;
+  padding: 28px;
+  background:
+    radial-gradient(circle at top right, rgba(217, 108, 58, 0.12), transparent 26%),
+    rgba(255, 252, 246, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  box-shadow: 0 28px 80px rgba(24, 18, 7, 0.2);
+  backdrop-filter: blur(18px);
 }
 
 .modal-header {
@@ -836,11 +1003,36 @@ input[readonly] {
   gap: 16px;
 }
 
+.modal-heading {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
 .modal-header h3 {
-  margin: 6px 0 0;
-  font-size: 28px;
-  line-height: 1.05;
+  margin: 0;
+  font-size: clamp(34px, 4vw, 54px);
+  line-height: 0.98;
   letter-spacing: -0.04em;
+  max-width: 12ch;
+}
+
+.modal-close-button {
+  flex: 0 0 auto;
+}
+
+.modal-support-copy {
+  max-width: 58ch;
+  font-size: 16px;
+}
+
+.modal-actions {
+  padding-top: 6px;
+}
+
+.modal-actions button {
+  width: auto;
+  min-width: 156px;
 }
 
 @media (max-width: 1180px) {
@@ -855,7 +1047,8 @@ input[readonly] {
 
   .empty-lookup-grid,
   .home-grid,
-  .motor-overview-grid {
+  .motor-overview-grid,
+  .vehicles-summary-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -871,7 +1064,8 @@ input[readonly] {
   }
 
   .page-header-row,
-  .lookup-layout {
+  .lookup-layout,
+  .vehicles-filter-bar {
     grid-template-columns: 1fr;
   }
 
@@ -896,6 +1090,10 @@ input[readonly] {
     grid-template-columns: 1fr;
   }
 
+  .source-panels-grid {
+    grid-template-columns: 1fr;
+  }
+
   .actions-row,
   .hero-actions {
     flex-direction: column;
@@ -909,5 +1107,81 @@ input[readonly] {
   .card,
   .sidebar-panel {
     border-radius: 24px;
+  }
+
+  .modal-overlay {
+    padding: 14px;
+    align-items: end;
+  }
+
+  .modal-card {
+    width: 100%;
+    max-height: min(92svh, 100%);
+    padding: 22px 18px 18px;
+    gap: 18px;
+    border-radius: 28px 28px 22px 22px;
+  }
+
+  .modal-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .modal-header h3 {
+    max-width: none;
+    font-size: clamp(30px, 9vw, 42px);
+  }
+
+  .modal-close-button,
+  .modal-actions button {
+    width: 100%;
+  }
+
+  .vehicles-table-shell {
+    background: transparent;
+    border: 0;
+    overflow: visible;
+  }
+
+  .vehicles-table {
+    min-width: 0;
+  }
+
+  .vehicles-table thead {
+    display: none;
+  }
+
+  .vehicles-table tbody {
+    display: grid;
+    gap: 14px;
+  }
+
+  .vehicles-table tr {
+    display: grid;
+    gap: 10px;
+    padding: 16px;
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.64);
+    border: 1px solid rgba(255, 255, 255, 0.72);
+  }
+
+  .vehicles-table tbody td {
+    display: grid;
+    gap: 4px;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .vehicles-table td::before {
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .vehicles-filter-actions {
+    flex-wrap: wrap;
   }
 }

@@ -19,6 +19,9 @@ export default function HomePage() {
             <Link className="button button-secondary hero-link" to="/motores">
               Ver catalogo
             </Link>
+            <Link className="button button-secondary hero-link" to="/vehiculos">
+              Ver vehiculos
+            </Link>
           </div>
         </div>
 
@@ -48,8 +51,8 @@ export default function HomePage() {
           <span className="eyebrow">Catalogo de motores</span>
           <h3>Mide cuanta flota hay por motor</h3>
           <p>
-            Cada motor se convierte en una card limpia, con conteo de vehiculos detectados y fecha
-            de ultima actividad.
+            Cada motor se convierte en una card limpia, con conteo de vehiculos unicos detectados y
+            fecha de ultima actividad.
           </p>
         </article>
 

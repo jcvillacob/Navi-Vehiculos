@@ -11,9 +11,17 @@ class RegisteredMotorSummary(BaseModel):
     engine_name: str = Field(..., description="Nombre del motor")
 
 
+class VehicleSourceDetails(BaseModel):
+    fenix: dict[str, str | None] = Field(default_factory=dict, description="Datos desde SQL/Fenix")
+    cummins: dict[str, str] = Field(default_factory=dict, description="Dataplate desde Cummins")
+
+
 class VehicleLookupResponse(BaseModel):
-    plate: str = Field(..., description="Placa consultada")
+    plate: str | None = Field(default=None, description="Placa consultada")
+    lookup_value: str = Field(..., description="Valor usado para la consulta")
+    lookup_type: str = Field(..., description="plate | vin")
     vin: str | None = Field(default=None, description="VIN obtenido desde Geotab")
+    geotab_status: str = Field(default="unknown", description="found | not_found | unknown")
     engine_number: str | None = Field(
         default=None, description="Numero de motor (ESN) obtenido desde inventario"
     )
@@ -25,6 +33,11 @@ class VehicleLookupResponse(BaseModel):
         default=None,
         description="Motor registrado asociado al Technical Engine Configuration #",
     )
+    source_details: VehicleSourceDetails = Field(
+        default_factory=VehicleSourceDetails,
+        description="Detalle ampliado por fuente",
+    )
+    warnings: list[str] = Field(default_factory=list, description="Advertencias no bloqueantes")
     status: str = Field(..., description="ok | partial | not_found | error")
     message: str = Field(..., description="Descripcion del resultado")
 
@@ -44,3 +57,14 @@ class MotorCatalogRecord(BaseModel):
     )
     created_at: datetime = Field(..., description="Fecha de creacion")
     updated_at: datetime = Field(..., description="Fecha de actualizacion")
+
+
+class VehicleAssignmentRecord(BaseModel):
+    plate: str = Field(..., description="Placa del vehiculo")
+    vin: str | None = Field(default=None, description="VIN asociado")
+    engine_number: str | None = Field(default=None, description="Numero de motor")
+    technical_number: str = Field(..., description="Numero tecnico de motor")
+    engine_name: str | None = Field(default=None, description="Nombre visible del motor")
+    created_at: datetime = Field(..., description="Fecha de primer registro")
+    updated_at: datetime = Field(..., description="Fecha de ultima actualizacion")
+    last_seen_at: datetime = Field(..., description="Fecha de ultima consulta exitosa")

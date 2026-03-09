@@ -14,10 +14,22 @@ async function parseJsonOrThrow(response, fallbackMessage) {
   return response.json();
 }
 
-export async function getVehicleByPlate(plate) {
-  const query = new URLSearchParams({ plate: plate.trim().toUpperCase() });
+export async function lookupVehicle(identifier) {
+  const query = new URLSearchParams({ identifier: identifier.trim().toUpperCase() });
   const response = await fetch(`${API_BASE}/api/v1/vehicle/lookup?${query.toString()}`);
   return parseJsonOrThrow(response, "Error consultando la API");
+}
+
+export async function listVehicleAssignments(search = "") {
+  const normalizedSearch = search.trim().toUpperCase();
+  const query = new URLSearchParams();
+  if (normalizedSearch) {
+    query.set("search", normalizedSearch);
+  }
+
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await fetch(`${API_BASE}/api/v1/vehicle${suffix}`);
+  return parseJsonOrThrow(response, "Error listando vehiculos");
 }
 
 export async function listMotors() {
