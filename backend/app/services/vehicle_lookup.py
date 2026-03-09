@@ -4,6 +4,7 @@ from app.clients.geotab_client import get_vin_from_plate
 from app.clients.quickserve_client import get_technical_config_from_esn
 from app.clients.sql_client import get_engine_number_from_vin
 from app.core.config import load_geotab_config, load_quickserve_config, load_sql_config
+from app.services.motor_catalog import find_registered_motor, register_vehicle_assignment
 from app.schemas.vehicle import VehicleLookupResponse
 
 
@@ -42,11 +43,19 @@ def lookup_vehicle_by_plate(plate: str) -> VehicleLookupResponse:
                 message="Se encontro ESN, pero QuickServe no devolvio configuracion tecnica.",
             )
 
+        register_vehicle_assignment(
+            plate=normalized_plate,
+            technical_number=technical_config,
+            vin=vin,
+            engine_number=engine_number,
+        )
+
         return VehicleLookupResponse(
             plate=normalized_plate,
             vin=vin,
             engine_number=engine_number,
             technical_engine_configuration=technical_config,
+            registered_motor=find_registered_motor(technical_config),
             status="ok",
             message="Consulta completada.",
         )

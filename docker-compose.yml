@@ -1,9 +1,24 @@
 services:
+  proxy:
+    image: nginx:1.27-alpine
+    container_name: navi_proxy
+    ports:
+      - "${APP_PORT:-8091}:80"
+    volumes:
+      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_started
+
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: navi_frontend
+    expose:
+      - "5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -15,17 +30,17 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: navi_backend
-    ports:
-      - "8090:8000"
+    expose:
+      - "8000"
     volumes:
       - ./backend:/app
     env_file:
       - ./.env
+    environment:
+      - CORS_ORIGINS=http://localhost:${APP_PORT:-8091}
     depends_on:
       db:
         condition: service_healthy
-      frontend:
-        condition: service_started
 
   db:
     image: postgres:16-alpine

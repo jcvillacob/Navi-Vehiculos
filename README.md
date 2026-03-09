@@ -1,4 +1,4 @@
-﻿# Navi Vehiculos
+# Navi Vehiculos
 
 Estructura base dockerizada para una app modular con:
 - Frontend: React + Vite
@@ -10,8 +10,8 @@ Estructura base dockerizada para una app modular con:
 
 - `frontend/`: app React (feature `plateLookup`)
 - `backend/`: API FastAPI modular (`api`, `services`, `clients`, `schemas`, `core`)
-- `docker-compose.yml`: servicios frontend, backend y db
-- Puerto expuesto al host: `8090` (entrada única por backend/proxy)
+- `docker-compose.yml`: servicios `proxy`, `frontend`, `backend` y `db`
+- Puerto expuesto al host: `APP_PORT` (entrada unica por `nginx`)
 
 ## Funcionalidad inicial
 
@@ -25,7 +25,7 @@ Consulta por placa desde frontend y retorno de datos en backend con flujo:
 Rutas:
 
 - API: `GET /api/v1/vehicle/lookup?plate=TLK240`
-- App: `http://localhost:8090`
+- App: `http://localhost:<APP_PORT>`
 
 Nota: las integraciones de Geotab, SQL Server y QuickServe son reales y usan variables desde `.env`.
 
@@ -36,5 +36,10 @@ Revisa `.env.example` y crea `.env` con tus credenciales reales.
 ## Uso
 
 ```bash
+cp .env.example .env
+
+# Opcional: valida si el puerto esta libre (ejemplo 8091)
+ss -ltn "( sport = :8091 )"
+
 docker compose up --build
 ```

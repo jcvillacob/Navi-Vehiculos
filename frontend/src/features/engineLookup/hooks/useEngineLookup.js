@@ -1,27 +1,20 @@
 import { useMemo, useState } from "react";
 
-import { getVehicleByPlate } from "../../../api/vehicleApi";
-
-function todayIsoDate() {
-  return new Date().toISOString().slice(0, 10);
-}
+import { createMotor, getVehicleByPlate } from "../../../api/vehicleApi";
 
 export function useEngineLookup() {
   const [loading, setLoading] = useState(false);
   const [lookupResult, setLookupResult] = useState(null);
   const [error, setError] = useState("");
-  const [registeredVehicles, setRegisteredVehicles] = useState([
-    {
-      id: "veh-1",
-      plate: "TLK240",
-      engineName: "",
-      registeredAt: "2026-03-05",
-      engineType: "Diesel"
-    }
-  ]);
 
-  const canContinueToRegister = useMemo(
-    () => Boolean(lookupResult && lookupResult.status === "ok"),
+  const canRegisterCurrentMotor = useMemo(
+    () =>
+      Boolean(
+        lookupResult &&
+          lookupResult.status === "ok" &&
+          lookupResult.technical_engine_configuration &&
+          !lookupResult.registered_motor
+      ),
     [lookupResult]
   );
 
@@ -31,17 +24,14 @@ export function useEngineLookup() {
     setLoading(false);
   };
 
-  const searchVehicle = async (plate, fuelType) => {
+  const searchVehicle = async (plate) => {
     setLoading(true);
     setError("");
     setLookupResult(null);
 
     try {
       const response = await getVehicleByPlate(plate);
-      setLookupResult({
-        ...response,
-        fuel_type: fuelType
-      });
+      setLookupResult(response);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error inesperado consultando motor");
     } finally {
@@ -49,42 +39,58 @@ export function useEngineLookup() {
     }
   };
 
-  const addTemporaryVehicleFromLookup = () => {
+  const registerCurrentMotor = async (payload) => {
     if (!lookupResult || lookupResult.status !== "ok") {
-      return;
+      throw new Error("Debes consultar un vehiculo valido antes de registrar el motor.");
     }
 
-    const newVehicle = {
-      id: `veh-${Date.now()}`,
-      plate: lookupResult.plate,
-      engineName: "",
-      registeredAt: todayIsoDate(),
-      engineType: lookupResult.fuel_type || "Diesel"
-    };
+    const technicalNumber =
+      payload.technical_number?.trim() ||
+      lookupResult.technical_engine_configuration?.trim() ||
+      "";
+    const cleanName = payload.engine_name.trim();
+    if (!technicalNumber || !cleanName) {
+      throw new Error("Debes informar nombre de motor y Technical Engine Configuration #.");
+    }
 
-    setRegisteredVehicles((prev) => [newVehicle, ...prev]);
-  };
+    setLoading(true);
+    setError("");
+    try {
+      const motor = await createMotor({
+        technical_number: technicalNumber,
+        engine_name: cleanName
+      });
 
-  const updateVehicle = (vehicleId, nextData) => {
-    setRegisteredVehicles((prev) =>
-      prev.map((vehicle) => (vehicle.id === vehicleId ? { ...vehicle, ...nextData } : vehicle))
-    );
-  };
+      setLookupResult((current) =>
+        current
+          ? {
+              ...current,
+              registered_motor: {
+                id: motor.id,
+                technical_number: motor.technical_number,
+                engine_name: motor.engine_name
+              }
+            }
+          : current
+      );
 
-  const removeVehicle = (vehicleId) => {
-    setRegisteredVehicles((prev) => prev.filter((vehicle) => vehicle.id !== vehicleId));
+      return motor;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible registrar el motor";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
   };
 
   return {
     loading,
     lookupResult,
     error,
-    registeredVehicles,
-    canContinueToRegister,
+    canRegisterCurrentMotor,
     searchVehicle,
-    addTemporaryVehicleFromLookup,
-    updateVehicle,
-    removeVehicle,
+    registerCurrentMotor,
     resetLookup
   };
 }
