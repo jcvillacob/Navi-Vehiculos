@@ -46,6 +46,41 @@ export async function createMotor(payload) {
   return parseJsonOrThrow(response, "Error creando motor");
 }
 
+export async function uploadMotorAttachment(motorId, payload) {
+  const formData = new FormData();
+  formData.append("cpl", payload.cpl);
+  formData.append("attachment", payload.file);
+
+  const response = await fetch(`${API_BASE}/api/v1/motors/${motorId}/attachments`, {
+    method: "POST",
+    body: formData
+  });
+  return parseJsonOrThrow(response, "Error subiendo adjunto del motor");
+}
+
+export async function updateMotorAttachment(attachmentId, payload) {
+  const formData = new FormData();
+  formData.append("cpl", payload.cpl);
+  if (payload.file) {
+    formData.append("attachment", payload.file);
+  }
+
+  const response = await fetch(`${API_BASE}/api/v1/motors/attachments/${attachmentId}`, {
+    method: "PUT",
+    body: formData
+  });
+  return parseJsonOrThrow(response, "Error actualizando adjunto del motor");
+}
+
+export async function deleteMotorAttachment(attachmentId) {
+  const response = await fetch(`${API_BASE}/api/v1/motors/attachments/${attachmentId}`, {
+    method: "DELETE"
+  });
+  if (!response.ok) {
+    throw new Error(`Error eliminando adjunto del motor (${response.status})`);
+  }
+}
+
 export async function assignVehicleDatabase(plate, payload) {
   const normalizedPlate = plate.trim().toUpperCase();
   const response = await fetch(`${API_BASE}/api/v1/vehicle/${normalizedPlate}/database`, {
@@ -54,6 +89,14 @@ export async function assignVehicleDatabase(plate, payload) {
     body: JSON.stringify(payload)
   });
   return parseJsonOrThrow(response, "Error actualizando cliente y database del vehiculo");
+}
+
+export async function refreshVehicle(plate) {
+  const normalizedPlate = plate.trim().toUpperCase();
+  const response = await fetch(`${API_BASE}/api/v1/vehicle/${normalizedPlate}/refresh`, {
+    method: "POST"
+  });
+  return parseJsonOrThrow(response, "Error actualizando datos del vehiculo");
 }
 
 export async function listCustomers() {
@@ -77,4 +120,12 @@ export async function createCustomerDatabase(customerId, payload) {
     body: JSON.stringify(payload)
   });
   return parseJsonOrThrow(response, "Error creando database del cliente");
+}
+
+export async function revalidateCustomerGeotab(plate) {
+  const normalizedPlate = plate.trim().toUpperCase();
+  const response = await fetch(`${API_BASE}/api/v1/vehicle/${normalizedPlate}/revalidate-customer-geotab`, {
+    method: "POST"
+  });
+  return parseJsonOrThrow(response, "Error revalidando Geotab del cliente");
 }

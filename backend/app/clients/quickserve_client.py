@@ -1,12 +1,15 @@
 ﻿from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+from redis import Redis
+from redis.exceptions import RedisError
 
 from app.core.config import QuickServeConfig
 
@@ -22,6 +25,163 @@ FWUID_FALLBACK = (
     "YkVKdlZEd2t6eFplVFJNMGN2eVd5UTJEa1N5enhOU3R5"
     "QWl2VzNveFZTbGcxMy4tMjE0NzQ4MzY0OC45OTYxNDcy"
 )
+DEFAULT_QUICKSERVE_SESSION_TTL_SECONDS = 6 * 60 * 60
+DEFAULT_QUICKSERVE_SESSION_LOCK_TTL_SECONDS = 60
+DEFAULT_QUICKSERVE_SESSION_WAIT_SECONDS = 8.0
+DEFAULT_QUICKSERVE_SESSION_WAIT_INTERVAL_SECONDS = 0.4
+_REDIS_CLIENT: Redis | None = None
+
+
+def _redis_client() -> Redis | None:
+    global _REDIS_CLIENT
+
+    if _REDIS_CLIENT is not None:
+        return _REDIS_CLIENT
+
+    redis_url = os.getenv("REDIS_URL", "").strip()
+    if not redis_url:
+        return None
+
+    try:
+        _REDIS_CLIENT = Redis.from_url(redis_url, decode_responses=True)
+        _REDIS_CLIENT.ping()
+    except RedisError:
+        _REDIS_CLIENT = None
+    return _REDIS_CLIENT
+
+
+def _session_cache_key(cfg: QuickServeConfig) -> str:
+    return f"quickserve:session:{cfg.username}:{cfg.app_id}"
+
+
+def _session_lock_key(cfg: QuickServeConfig) -> str:
+    return f"{_session_cache_key(cfg)}:lock"
+
+
+def _session_ttl_seconds() -> int:
+    raw_value = os.getenv(
+        "QUICKSERVE_SESSION_TTL_SECONDS", str(DEFAULT_QUICKSERVE_SESSION_TTL_SECONDS)
+    )
+    try:
+        return max(int(raw_value), 60)
+    except ValueError:
+        return DEFAULT_QUICKSERVE_SESSION_TTL_SECONDS
+
+
+def _session_lock_ttl_seconds() -> int:
+    raw_value = os.getenv(
+        "QUICKSERVE_SESSION_LOCK_TTL_SECONDS", str(DEFAULT_QUICKSERVE_SESSION_LOCK_TTL_SECONDS)
+    )
+    try:
+        return max(int(raw_value), 15)
+    except ValueError:
+        return DEFAULT_QUICKSERVE_SESSION_LOCK_TTL_SECONDS
+
+
+def _session_wait_seconds() -> float:
+    raw_value = os.getenv(
+        "QUICKSERVE_SESSION_WAIT_SECONDS", str(DEFAULT_QUICKSERVE_SESSION_WAIT_SECONDS)
+    )
+    try:
+        return max(float(raw_value), 1.0)
+    except ValueError:
+        return DEFAULT_QUICKSERVE_SESSION_WAIT_SECONDS
+
+
+def _session_wait_interval_seconds() -> float:
+    raw_value = os.getenv(
+        "QUICKSERVE_SESSION_WAIT_INTERVAL_SECONDS",
+        str(DEFAULT_QUICKSERVE_SESSION_WAIT_INTERVAL_SECONDS),
+    )
+    try:
+        return max(float(raw_value), 0.1)
+    except ValueError:
+        return DEFAULT_QUICKSERVE_SESSION_WAIT_INTERVAL_SECONDS
+
+
+def _save_cached_session(session: requests.Session, cfg: QuickServeConfig) -> None:
+    redis_client = _redis_client()
+    if redis_client is None:
+        return
+
+    try:
+        payload = {
+            "cookies": requests.utils.dict_from_cookiejar(session.cookies),
+            "saved_at": int(time.time()),
+        }
+        redis_client.setex(_session_cache_key(cfg), _session_ttl_seconds(), json.dumps(payload))
+    except RedisError:
+        return
+
+
+def _load_cached_session(session: requests.Session, cfg: QuickServeConfig) -> bool:
+    redis_client = _redis_client()
+    if redis_client is None:
+        return False
+
+    try:
+        payload = redis_client.get(_session_cache_key(cfg))
+    except RedisError:
+        return False
+
+    if not payload:
+        return False
+
+    try:
+        parsed = json.loads(payload)
+        cookies = parsed.get("cookies") or {}
+        session.cookies.update(requests.utils.cookiejar_from_dict(cookies))
+    except Exception:
+        return False
+    return True
+
+
+def _clear_cached_session(cfg: QuickServeConfig) -> None:
+    redis_client = _redis_client()
+    if redis_client is None:
+        return
+    try:
+        redis_client.delete(_session_cache_key(cfg))
+    except RedisError:
+        return
+
+
+def _acquire_login_lock(cfg: QuickServeConfig) -> bool:
+    redis_client = _redis_client()
+    if redis_client is None:
+        return True
+
+    try:
+        acquired = redis_client.set(
+            _session_lock_key(cfg),
+            str(time.time()),
+            nx=True,
+            ex=_session_lock_ttl_seconds(),
+        )
+    except RedisError:
+        return True
+    return bool(acquired)
+
+
+def _release_login_lock(cfg: QuickServeConfig) -> None:
+    redis_client = _redis_client()
+    if redis_client is None:
+        return
+    try:
+        redis_client.delete(_session_lock_key(cfg))
+    except RedisError:
+        return
+
+
+def _wait_for_cached_session(session: requests.Session, cfg: QuickServeConfig) -> bool:
+    deadline = time.time() + _session_wait_seconds()
+    interval = _session_wait_interval_seconds()
+
+    while time.time() < deadline:
+        if _load_cached_session(session, cfg):
+            return True
+        time.sleep(interval)
+    return False
 
 
 def _make_soup(html: str) -> BeautifulSoup:
@@ -214,6 +374,12 @@ def _authenticate_quickserve(session: requests.Session, cfg: QuickServeConfig) -
     return _complete_saml_sso(session, iam_url, cfg)
 
 
+def _build_session(cfg: QuickServeConfig) -> requests.Session:
+    session = requests.Session()
+    session.cookies.set("GDPR_USER_CONSENT", cfg.username)
+    return session
+
+
 def _set_esn(session: requests.Session, cfg: QuickServeConfig, esn: str) -> bool:
     resp = session.get(
         f"{cfg.base_url}/qs3/portal/includes/ajax/set_esn.json",
@@ -284,11 +450,9 @@ def _get_dataplate(session: requests.Session, cfg: QuickServeConfig) -> dict[str
     return _parse_dataplate(resp.text)
 
 
-def get_engine_dataplate(esn: str, cfg: QuickServeConfig) -> dict[str, str]:
-    session = requests.Session()
-    session.cookies.set("GDPR_USER_CONSENT", cfg.username)
-    if not _authenticate_quickserve(session, cfg):
-        return {}
+def _fetch_dataplate_with_session(
+    session: requests.Session, cfg: QuickServeConfig, esn: str
+) -> dict[str, str]:
     time.sleep(0.3)
     if not _set_esn(session, cfg, esn):
         return {}
@@ -296,11 +460,64 @@ def get_engine_dataplate(esn: str, cfg: QuickServeConfig) -> dict[str, str]:
     return _get_dataplate(session, cfg)
 
 
+def _login_and_cache_session(session: requests.Session, cfg: QuickServeConfig) -> bool:
+    if not _authenticate_quickserve(session, cfg):
+        return False
+    _save_cached_session(session, cfg)
+    return True
+
+
+def get_engine_dataplate(esn: str, cfg: QuickServeConfig) -> dict[str, str]:
+    session = _build_session(cfg)
+
+    if _load_cached_session(session, cfg):
+        dataplate = _fetch_dataplate_with_session(session, cfg, esn)
+        if dataplate:
+            _save_cached_session(session, cfg)
+            return dataplate
+        _clear_cached_session(cfg)
+
+    has_lock = _acquire_login_lock(cfg)
+    if not has_lock:
+        waiting_session = _build_session(cfg)
+        if _wait_for_cached_session(waiting_session, cfg):
+            dataplate = _fetch_dataplate_with_session(waiting_session, cfg, esn)
+            if dataplate:
+                _save_cached_session(waiting_session, cfg)
+                return dataplate
+            _clear_cached_session(cfg)
+        has_lock = _acquire_login_lock(cfg)
+
+    try:
+        fresh_session = _build_session(cfg)
+        if not _login_and_cache_session(fresh_session, cfg):
+            return {}
+        dataplate = _fetch_dataplate_with_session(fresh_session, cfg, esn)
+        if dataplate:
+            _save_cached_session(fresh_session, cfg)
+        return dataplate
+    finally:
+        if has_lock:
+            _release_login_lock(cfg)
+
+
 def extract_technical_engine_configuration(dataplate: dict[str, str]) -> str | None:
     if "Technical Engine Configuration #" in dataplate:
         return dataplate["Technical Engine Configuration #"]
     for key, value in dataplate.items():
         if "technical engine configuration" in key.lower():
+            return value
+    return None
+
+
+def extract_cpl(dataplate: dict[str, str]) -> str | None:
+    for exact_key in ("N.º CPL", "N.o CPL", "No. CPL", "CPL"):
+        if dataplate.get(exact_key):
+            return dataplate[exact_key]
+
+    for key, value in dataplate.items():
+        normalized_key = key.lower()
+        if "cpl" in normalized_key and value:
             return value
     return None
 

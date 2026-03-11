@@ -8,6 +8,7 @@ export default function CustomersPage() {
   const [databaseName, setDatabaseName] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [connectionType, setConnectionType] = useState("database");
   const [message, setMessage] = useState("");
 
   const { loading, customers, error, registerCustomer, registerCustomerDatabase } =
@@ -39,11 +40,13 @@ export default function CustomersPage() {
       await registerCustomerDatabase(Number(selectedCustomerId), {
         database_name: databaseName.trim(),
         username: username.trim(),
-        password: password.trim()
+        password: password.trim(),
+        connection_type: connectionType
       });
       setDatabaseName("");
       setUsername("");
       setPassword("");
+      setConnectionType("database");
       setMessage("Database creada para el cliente.");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "No fue posible crear la database");
@@ -87,24 +90,26 @@ export default function CustomersPage() {
             <h4>Crear cliente</h4>
           </header>
 
-          <form className="register-form" onSubmit={handleCreateCustomer}>
-            <div className="form-field">
-              <label htmlFor="customer-name">Nombre</label>
-              <input
-                id="customer-name"
-                value={customerName}
-                onChange={(event) => setCustomerName(event.target.value)}
-                placeholder="Ej: Cliente Norte"
-                required
-              />
-            </div>
+          <div className="source-panel-body">
+            <form className="register-form" onSubmit={handleCreateCustomer}>
+              <div className="form-field">
+                <label htmlFor="customer-name">Nombre del cliente</label>
+                <input
+                  id="customer-name"
+                  value={customerName}
+                  onChange={(event) => setCustomerName(event.target.value)}
+                  placeholder="Ej: Cliente Norte"
+                  required
+                />
+              </div>
 
-            <div className="actions-row modal-actions">
-              <button type="submit" disabled={loading}>
-                {loading ? "Guardando..." : "Crear cliente"}
-              </button>
-            </div>
-          </form>
+              <div className="actions-row">
+                <button type="submit" disabled={loading}>
+                  {loading ? "Guardando..." : "Crear cliente"}
+                </button>
+              </div>
+            </form>
+          </div>
         </article>
 
         <article className="card source-panel">
@@ -113,64 +118,78 @@ export default function CustomersPage() {
             <h4>Anadir database</h4>
           </header>
 
-          <form className="register-form" onSubmit={handleCreateDatabase}>
-            <div className="form-field">
-              <label htmlFor="database-customer">Cliente</label>
-              <select
-                id="database-customer"
-                value={selectedCustomerId}
-                onChange={(event) => setSelectedCustomerId(event.target.value)}
-                required
-              >
-                <option value="">Selecciona un cliente</option>
-                {customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div className="source-panel-body">
+            <form className="register-form" onSubmit={handleCreateDatabase}>
+              <div className="form-field">
+                <label htmlFor="database-customer">Cliente</label>
+                <select
+                  id="database-customer"
+                  value={selectedCustomerId}
+                  onChange={(event) => setSelectedCustomerId(event.target.value)}
+                  required
+                >
+                  <option value="">Selecciona un cliente</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div className="form-field">
-              <label htmlFor="database-name">Database</label>
-              <input
-                id="database-name"
-                value={databaseName}
-                onChange={(event) => setDatabaseName(event.target.value)}
-                placeholder="Ej: fenix_prod"
-                required
-              />
-            </div>
+              <div className="form-field">
+                <label htmlFor="database-name">Database</label>
+                <input
+                  id="database-name"
+                  value={databaseName}
+                  onChange={(event) => setDatabaseName(event.target.value)}
+                  placeholder="Ej: fenix_prod"
+                  required
+                />
+              </div>
 
-            <div className="form-field">
-              <label htmlFor="database-username">Usuario</label>
-              <input
-                id="database-username"
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                placeholder="Ej: navifleet"
-                required
-              />
-            </div>
+              <div className="form-field">
+                <label htmlFor="database-username">Usuario</label>
+                <input
+                  id="database-username"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  placeholder="Ej: navifleet"
+                  required
+                />
+              </div>
 
-            <div className="form-field">
-              <label htmlFor="database-password">Contrasena</label>
-              <input
-                id="database-password"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Ej: ********"
-                required
-              />
-            </div>
+              <div className="form-field">
+                <label htmlFor="database-password">Contrasena</label>
+                <input
+                  id="database-password"
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Ej: ********"
+                  required
+                />
+              </div>
 
-            <div className="actions-row modal-actions">
-              <button type="submit" disabled={loading || customers.length === 0}>
-                {loading ? "Guardando..." : "Crear database"}
-              </button>
-            </div>
-          </form>
+              <div className="form-field">
+                <label htmlFor="database-connection-type">Tipo de conexion</label>
+                <select
+                  id="database-connection-type"
+                  value={connectionType}
+                  onChange={(event) => setConnectionType(event.target.value)}
+                >
+                  <option value="database">Database</option>
+                  <option value="geotab">Geotab</option>
+                </select>
+              </div>
+
+              <div className="actions-row">
+                <button type="submit" disabled={loading || customers.length === 0}>
+                  {loading ? "Guardando..." : "Crear database"}
+                </button>
+              </div>
+            </form>
+          </div>
         </article>
       </section>
 
@@ -193,7 +212,12 @@ export default function CustomersPage() {
               ) : (
                 customer.databases.map((database) => (
                   <div className="source-field" key={database.id}>
-                    <span>{database.database_name}</span>
+                    <span>
+                      {database.database_name}
+                      {database.connection_type === "geotab" ? (
+                        <span className="status geotab-badge geotab-type-label">Geotab</span>
+                      ) : null}
+                    </span>
                     <strong>{database.username}</strong>
                   </div>
                 ))

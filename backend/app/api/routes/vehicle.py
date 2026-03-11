@@ -6,7 +6,11 @@ from app.schemas.vehicle import (
     VehicleDatabaseAssignmentRequest,
     VehicleLookupResponse,
 )
-from app.services.motor_catalog import assign_vehicle_database, list_vehicle_assignments
+from app.services.motor_catalog import (
+    assign_vehicle_database,
+    list_vehicle_assignments,
+    revalidate_vehicle_customer_geotab,
+)
 from app.services.vehicle_lookup import lookup_vehicle as lookup_vehicle_service
 
 router = APIRouter(prefix="/vehicle", tags=["vehicle"])
@@ -38,6 +42,24 @@ def assign_database_to_vehicle(
 ) -> AssignedDatabaseSummary:
     try:
         return assign_vehicle_database(plate, payload)
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.post("/{plate}/refresh", response_model=VehicleLookupResponse)
+def refresh_vehicle_assignment(
+    plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
+) -> VehicleLookupResponse:
+    return lookup_vehicle_service(plate)
+
+
+@router.post("/{plate}/revalidate-customer-geotab")
+def revalidate_customer_geotab(
+    plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
+) -> dict:
+    try:
+        return revalidate_vehicle_customer_geotab(plate)
     except ValueError as exc:
         status_code = 404 if "no existe" in str(exc).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc

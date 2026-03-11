@@ -1,6 +1,11 @@
 import { useMemo, useState } from "react";
 
-import { assignVehicleDatabase, createMotor, lookupVehicle } from "../../../api/vehicleApi";
+import {
+  assignVehicleDatabase,
+  createMotor,
+  lookupVehicle,
+  uploadMotorAttachment
+} from "../../../api/vehicleApi";
 
 export function useEngineLookup() {
   const [loading, setLoading] = useState(false);
@@ -53,10 +58,6 @@ export function useEngineLookup() {
       throw new Error("La consulta actual no resolvio una placa valida.");
     }
 
-    if (!payload.customer_database_id) {
-      throw new Error("Debes seleccionar una database para el vehiculo.");
-    }
-
     setLoading(true);
     setError("");
     try {
@@ -77,6 +78,13 @@ export function useEngineLookup() {
           engine_name: cleanName
         });
 
+        if (payload.attachmentFile) {
+          await uploadMotorAttachment(motor.id, {
+            cpl: payload.attachmentCpl,
+            file: payload.attachmentFile
+          });
+        }
+
         registeredMotor = {
           id: motor.id,
           technical_number: motor.technical_number,
@@ -84,9 +92,13 @@ export function useEngineLookup() {
         };
       }
 
-      const assignedDatabase = await assignVehicleDatabase(lookupResult.plate, {
-        customer_database_id: payload.customer_database_id
-      });
+      let assignedDatabase = lookupResult.assigned_database || null;
+
+      if (payload.customer_database_id) {
+        assignedDatabase = await assignVehicleDatabase(lookupResult.plate, {
+          customer_database_id: payload.customer_database_id
+        });
+      }
 
       setLookupResult((current) =>
         current

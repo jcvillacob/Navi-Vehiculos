@@ -1,7 +1,33 @@
 import { useMemo, useState } from "react";
 
+import MotorAttachmentModal from "../features/engineLookup/components/MotorAttachmentModal";
 import RegisterMotorModal from "../features/engineLookup/components/RegisterMotorModal";
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
+
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
+
+function AttachmentIcon({ contentType }) {
+  const isPdf = contentType === "application/pdf";
+
+  return (
+    <span className="attachment-icon" aria-hidden="true">
+      {isPdf ? (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6" />
+          <path d="M8 13h8" />
+          <path d="M8 17h5" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <circle cx="9" cy="10" r="1.2" />
+          <path d="m21 15-4.5-4.5L8 19" />
+        </svg>
+      )}
+    </span>
+  );
+}
 
 function formatLastSeen(value) {
   if (!value) {
@@ -15,8 +41,10 @@ function formatLastSeen(value) {
 
 export default function MotorsPage() {
   const [isRegisterOpen, setIsRegisterOpen] = useState(false);
+  const [selectedMotorForUpload, setSelectedMotorForUpload] = useState(null);
   const [message, setMessage] = useState("");
-  const { loading, motors, error, registerMotor } = useMotorsCatalog();
+  const { loading, motors, error, registerMotor, uploadAttachment, updateAttachment, deleteAttachment } =
+    useMotorsCatalog();
 
   const totals = useMemo(() => {
     return motors.reduce(
@@ -29,6 +57,13 @@ export default function MotorsPage() {
     );
   }, [motors]);
 
+  const activeMotorForAttachments = useMemo(() => {
+    if (!selectedMotorForUpload) {
+      return null;
+    }
+    return motors.find((motor) => motor.id === selectedMotorForUpload.id) || selectedMotorForUpload;
+  }, [motors, selectedMotorForUpload]);
+
   const handleSubmit = async (payload) => {
     try {
       await registerMotor(payload);
@@ -36,6 +71,33 @@ export default function MotorsPage() {
       setIsRegisterOpen(false);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "No fue posible registrar el motor");
+    }
+  };
+
+  const handleCreateAttachment = async (motorId, payload) => {
+    try {
+      await uploadAttachment(motorId, payload);
+      setMessage("Adjunto cargado.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "No fue posible subir el adjunto");
+    }
+  };
+
+  const handleUpdateAttachment = async (attachmentId, payload) => {
+    try {
+      await updateAttachment(attachmentId, payload);
+      setMessage("Adjunto actualizado.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "No fue posible actualizar el adjunto");
+    }
+  };
+
+  const handleDeleteAttachment = async (attachmentId) => {
+    try {
+      await deleteAttachment(attachmentId);
+      setMessage("Adjunto eliminado.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "No fue posible eliminar el adjunto");
     }
   };
 
@@ -115,6 +177,39 @@ export default function MotorsPage() {
                 <strong>{formatLastSeen(motor.created_at)}</strong>
               </div>
             </div>
+
+            <div className="motor-card-attachments">
+              <div className="motor-attachments-header">
+                <span>Adjuntos</span>
+                <button
+                  type="button"
+                  className="button-secondary button-sm"
+                  onClick={() => setSelectedMotorForUpload(motor)}
+                >
+                  Gestionar
+                </button>
+              </div>
+
+              {motor.attachments?.length ? (
+                <div className="attachment-list">
+                  {motor.attachments.map((attachment) => (
+                    <a
+                      key={attachment.id}
+                      className="attachment-chip"
+                      href={`${API_BASE}${attachment.download_url}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={`${attachment.original_filename} | CPL ${attachment.cpl || "Sin CPL"}`}
+                      aria-label={`Abrir adjunto ${attachment.original_filename} del CPL ${attachment.cpl || "sin cpl"} en otra pestana`}
+                    >
+                      <AttachmentIcon contentType={attachment.content_type} />
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <p className="support-copy">Sin adjuntos todavia.</p>
+              )}
+            </div>
           </article>
         ))}
       </section>
@@ -125,6 +220,16 @@ export default function MotorsPage() {
         title="Registrar nuevo motor"
         onClose={() => setIsRegisterOpen(false)}
         onSubmit={handleSubmit}
+      />
+
+      <MotorAttachmentModal
+        open={Boolean(selectedMotorForUpload)}
+        loading={loading}
+        motor={activeMotorForAttachments}
+        onClose={() => setSelectedMotorForUpload(null)}
+        onCreate={handleCreateAttachment}
+        onUpdate={handleUpdateAttachment}
+        onDelete={handleDeleteAttachment}
       />
     </section>
   );

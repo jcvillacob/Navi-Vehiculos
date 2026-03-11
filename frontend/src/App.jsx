@@ -29,6 +29,10 @@ export default function App() {
                 <span>Consulta motor</span>
                 <small>Lookup por placa</small>
               </NavLink>
+              <NavLink to="/vehiculos">
+                <span>Vehiculos</span>
+                <small>Placas asociadas</small>
+              </NavLink>
               <NavLink to="/motores">
                 <span>Motores</span>
                 <small>Catalogo tecnico</small>
@@ -36,10 +40,6 @@ export default function App() {
               <NavLink to="/clientes">
                 <span>Clientes</span>
                 <small>Databases y accesos</small>
-              </NavLink>
-              <NavLink to="/vehiculos">
-                <span>Vehiculos</span>
-                <small>Placas asociadas</small>
               </NavLink>
             </nav>
 

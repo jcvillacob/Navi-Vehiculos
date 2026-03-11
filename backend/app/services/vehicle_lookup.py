@@ -8,6 +8,7 @@ from app.clients.geotab_client import (
     get_vin_from_plate as get_geotab_vin_from_plate,
 )
 from app.clients.quickserve_client import (
+    extract_cpl,
     extract_technical_engine_configuration,
     get_engine_dataplate,
 )
@@ -17,6 +18,7 @@ from app.schemas.vehicle import VehicleLookupResponse
 from app.services.motor_catalog import (
     find_registered_motor,
     get_vehicle_database_assignment,
+    get_vehicle_geotab_customer_status,
     register_vehicle_assignment,
 )
 
@@ -44,6 +46,7 @@ def _not_found_response(
     plate: str | None = None,
     vin: str | None = None,
     geotab_status: str = "unknown",
+    geotab_customer_status: str = "not_applicable",
     fenix_details: dict[str, str | None] | None = None,
     cummins_details: dict[str, str] | None = None,
     warnings: list[str] | None = None,
@@ -54,6 +57,7 @@ def _not_found_response(
         lookup_type=lookup_type,
         vin=vin,
         geotab_status=geotab_status,
+        geotab_customer_status=geotab_customer_status,
         source_details={
             "fenix": fenix_details or {},
             "cummins": cummins_details or {},
@@ -71,6 +75,7 @@ def _error_response(
     plate: str | None = None,
     vin: str | None = None,
     geotab_status: str = "unknown",
+    geotab_customer_status: str = "not_applicable",
     fenix_details: dict[str, str | None] | None = None,
     cummins_details: dict[str, str] | None = None,
     warnings: list[str] | None = None,
@@ -81,6 +86,7 @@ def _error_response(
         lookup_type=lookup_type,
         vin=vin,
         geotab_status=geotab_status,
+        geotab_customer_status=geotab_customer_status,
         source_details={
             "fenix": fenix_details or {},
             "cummins": cummins_details or {},
@@ -195,6 +201,7 @@ def lookup_vehicle(identifier: str) -> VehicleLookupResponse:
 
         cummins_details = get_engine_dataplate(engine_number, quickserve_cfg)
         technical_config = extract_technical_engine_configuration(cummins_details)
+        cpl = extract_cpl(cummins_details)
         if not technical_config:
             return _not_found_response(
                 normalized_identifier,
@@ -211,6 +218,8 @@ def lookup_vehicle(identifier: str) -> VehicleLookupResponse:
             register_vehicle_assignment(
                 plate=plate,
                 technical_number=technical_config,
+                cpl=cpl,
+                geotab_status=geotab_status,
                 vin=vin,
                 engine_number=engine_number,
             )
@@ -219,14 +228,20 @@ def lookup_vehicle(identifier: str) -> VehicleLookupResponse:
         if warnings:
             message = "Consulta completada con advertencias."
 
+        geotab_customer_info = get_vehicle_geotab_customer_status(plate)
+
         return VehicleLookupResponse(
             plate=plate,
             lookup_value=normalized_identifier,
             lookup_type=lookup_type,
             vin=vin,
             geotab_status=geotab_status,
+            geotab_customer_status=geotab_customer_info.get(
+                "geotab_customer_status", "not_applicable"
+            ),
             engine_number=engine_number,
             technical_engine_configuration=technical_config,
+            cpl=cpl,
             registered_motor=find_registered_motor(technical_config),
             assigned_database=get_vehicle_database_assignment(plate),
             source_details={

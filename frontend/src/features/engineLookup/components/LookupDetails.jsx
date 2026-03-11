@@ -18,11 +18,24 @@ function SourceField({ label, value }) {
   );
 }
 
-function GeotabBadge({ status }) {
-  const statusLabel =
-    status === "found" ? "Geotab OK" : status === "not_found" ? "Geotab NO" : "Geotab ?";
+function GeotabBadge({ label, status }) {
+  const statusText =
+    status === "found"
+      ? "OK"
+      : status === "not_found"
+        ? "NO"
+        : status === "not_applicable"
+          ? "N/A"
+          : "?";
 
-  return <span className={`status geotab-badge geotab-${status}`}>{statusLabel}</span>;
+  const badgeClass =
+    status === "not_applicable" ? "geotab-na" : `geotab-${status}`;
+
+  return (
+    <span className={`status geotab-badge ${badgeClass}`}>
+      {label}: {statusText}
+    </span>
+  );
 }
 
 export default function LookupDetails({ result }) {
@@ -48,7 +61,11 @@ export default function LookupDetails({ result }) {
         </div>
 
         <div className="detail-status-group">
-          <GeotabBadge status={result.geotab_status} />
+          <GeotabBadge label="Navitrans" status={result.geotab_status} />
+          <GeotabBadge
+            label="Cliente"
+            status={result.geotab_customer_status || "not_applicable"}
+          />
           <span className={`status status-${result.status}`}>{result.status}</span>
         </div>
       </header>
@@ -63,6 +80,7 @@ export default function LookupDetails({ result }) {
           label="Technical Engine Configuration #"
           value={result.technical_engine_configuration}
         />
+        <DataItem label="N.o CPL" value={result.cpl} />
         <DataItem
           label="Motor registrado"
           value={result.registered_motor?.engine_name || "No registrado"}
@@ -95,7 +113,7 @@ export default function LookupDetails({ result }) {
 
       <button
         type="button"
-        className="button-secondary expand-button"
+        className="button-secondary button-sm expand-button"
         onClick={() => setShowFullInfo((current) => !current)}
       >
         {showFullInfo ? "Ocultar info completa" : "Ver info completa"}

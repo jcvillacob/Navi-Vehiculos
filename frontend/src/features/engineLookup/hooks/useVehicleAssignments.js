@@ -22,8 +22,12 @@ export function useVehicleAssignments() {
   };
 
   useEffect(() => {
-    loadVehicles("");
-  }, []);
+    const timeoutId = window.setTimeout(() => {
+      loadVehicles(search);
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [search]);
 
   return {
     loading,

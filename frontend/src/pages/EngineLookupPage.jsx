@@ -36,7 +36,7 @@ export default function EngineLookupPage() {
   const handleRegisterMotor = async (payload) => {
     try {
       await registerCurrentMotor(payload);
-      setRegisterMessage("Vehiculo actualizado con cliente y database.");
+      setRegisterMessage("Vehiculo actualizado correctamente.");
       setIsRegisterOpen(false);
     } catch (err) {
       setRegisterMessage(err instanceof Error ? err.message : "No fue posible registrar el motor");
@@ -102,7 +102,7 @@ export default function EngineLookupPage() {
             <button type="submit" disabled={loading}>
               {loading ? "Consultando..." : "Consultar vehiculo"}
             </button>
-            <button type="button" className="button-secondary" onClick={clearLookup}>
+            <button type="button" className="button-secondary button-sm" onClick={clearLookup}>
               Limpiar
             </button>
           </div>
@@ -211,11 +211,19 @@ export default function EngineLookupPage() {
       <VehicleAssignmentModal
         open={isRegisterOpen}
         loading={loading || customersLoading}
-        title="Configurar vehiculo desde consulta"
+        title="Detalles del vehiculo desde consulta"
         vehicle={{
+          plate: lookupResult?.plate || null,
+          vin: lookupResult?.vin || null,
+          geotab_status: lookupResult?.geotab_status || "unknown",
+          engine_number: lookupResult?.engine_number || null,
+          technical_number: lookupResult?.technical_engine_configuration || null,
+          engine_name: lookupResult?.registered_motor?.engine_name || null,
+          cpl: lookupResult?.cpl || "",
           client_name: lookupResult?.assigned_database?.client_name || null,
           database_name: lookupResult?.assigned_database?.database_name || null,
-          database_username: lookupResult?.assigned_database?.database_username || null
+          database_username: lookupResult?.assigned_database?.database_username || null,
+          geotab_customer_status: lookupResult?.geotab_customer_status || "not_applicable"
         }}
         customers={customers}
         initialTechnicalNumber={lookupResult?.technical_engine_configuration || ""}

@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 
-import { createMotor, listMotors } from "../../../api/vehicleApi";
+import {
+  createMotor,
+  deleteMotorAttachment,
+  listMotors,
+  updateMotorAttachment,
+  uploadMotorAttachment
+} from "../../../api/vehicleApi";
 
 export function useMotorsCatalog() {
   const [loading, setLoading] = useState(false);
@@ -28,8 +34,16 @@ export function useMotorsCatalog() {
     setLoading(true);
     setError("");
     try {
-      const created = await createMotor(payload);
-      setMotors((prev) => [created, ...prev]);
+      const { attachmentFile, attachmentCpl, ...motorPayload } = payload;
+      const created = await createMotor(motorPayload);
+      if (attachmentFile) {
+        await uploadMotorAttachment(created.id, {
+          cpl: attachmentCpl,
+          file: attachmentFile
+        });
+      }
+      const records = await listMotors();
+      setMotors(records);
       return created;
     } catch (err) {
       const message = err instanceof Error ? err.message : "No fue posible registrar el motor";
@@ -45,6 +59,52 @@ export function useMotorsCatalog() {
     motors,
     error,
     loadMotors,
-    registerMotor
+    registerMotor,
+    uploadAttachment: async (motorId, payload) => {
+      setLoading(true);
+      setError("");
+      try {
+        await uploadMotorAttachment(motorId, payload);
+        const records = await listMotors();
+        setMotors(records);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "No fue posible subir el adjunto";
+        setError(message);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    updateAttachment: async (attachmentId, payload) => {
+      setLoading(true);
+      setError("");
+      try {
+        await updateMotorAttachment(attachmentId, payload);
+        const records = await listMotors();
+        setMotors(records);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "No fue posible actualizar el adjunto";
+        setError(message);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    deleteAttachment: async (attachmentId) => {
+      setLoading(true);
+      setError("");
+      try {
+        await deleteMotorAttachment(attachmentId);
+        const records = await listMotors();
+        setMotors(records);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "No fue posible eliminar el adjunto";
+        setError(message);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    }
   };
 }

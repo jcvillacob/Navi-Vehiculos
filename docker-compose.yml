@@ -1,7 +1,8 @@
+name: navi-vehiculos-dev
+
 services:
   proxy:
     image: nginx:1.27-alpine
-    container_name: navi_proxy
     ports:
       - "${APP_PORT:-8091}:80"
     volumes:
@@ -16,7 +17,6 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: navi_frontend
     expose:
       - "5173"
     volumes:
@@ -29,7 +29,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: navi_backend
     expose:
       - "8000"
     volumes:
@@ -41,20 +40,36 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
   db:
     image: postgres:16-alpine
-    container_name: navi_db
     restart: unless-stopped
     env_file:
       - ./.env
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - legacy_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d navi_db"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
-  postgres_data:
+  legacy_postgres_data:
+    external: true
+    name: navi-vehiculos_postgres_data
+  redis_data:

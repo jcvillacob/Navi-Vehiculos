@@ -33,7 +33,11 @@ class VehicleLookupResponse(BaseModel):
     lookup_value: str = Field(..., description="Valor usado para la consulta")
     lookup_type: str = Field(..., description="plate | vin")
     vin: str | None = Field(default=None, description="VIN obtenido desde Geotab")
-    geotab_status: str = Field(default="unknown", description="found | not_found | unknown")
+    geotab_status: str = Field(default="unknown", description="Geotab global: found | not_found | unknown")
+    geotab_customer_status: str = Field(
+        default="not_applicable",
+        description="Geotab cliente: found | not_found | unknown | not_applicable",
+    )
     engine_number: str | None = Field(
         default=None, description="Numero de motor (ESN) obtenido desde inventario"
     )
@@ -41,6 +45,7 @@ class VehicleLookupResponse(BaseModel):
         default=None,
         description="Technical Engine Configuration # obtenido desde QuickServe",
     )
+    cpl: str | None = Field(default=None, description="N.o CPL obtenido desde QuickServe")
     registered_motor: RegisteredMotorSummary | None = Field(
         default=None,
         description="Motor registrado asociado al Technical Engine Configuration #",
@@ -63,6 +68,18 @@ class MotorCatalogUpsertRequest(BaseModel):
     engine_name: str = Field(..., min_length=1, description="Nombre del motor")
 
 
+class MotorAttachmentRecord(BaseModel):
+    id: int = Field(..., description="ID del adjunto")
+    motor_id: int = Field(..., description="ID del motor asociado")
+    cpl: str | None = Field(default=None, description="CPL asociado al adjunto")
+    original_filename: str = Field(..., description="Nombre original del archivo")
+    content_type: str = Field(..., description="Tipo MIME del archivo")
+    file_size: int = Field(..., description="Tamano del archivo en bytes")
+    download_url: str = Field(..., description="Ruta para descargar o abrir el archivo")
+    created_at: datetime = Field(..., description="Fecha de carga")
+    updated_at: datetime = Field(..., description="Fecha de ultima actualizacion")
+
+
 class MotorCatalogRecord(BaseModel):
     id: int = Field(..., description="ID del registro")
     technical_number: str = Field(..., description="Numero tecnico de motor")
@@ -71,6 +88,12 @@ class MotorCatalogRecord(BaseModel):
     last_seen_at: datetime | None = Field(
         default=None, description="Ultima vez que se consulto un vehiculo con este motor"
     )
+    attachments: list[MotorAttachmentRecord] = Field(
+        default_factory=list, description="Adjuntos asociados al motor"
+    )
+    available_cpls: list[str] = Field(
+        default_factory=list, description="CPLs conocidos para ese motor"
+    )
     created_at: datetime = Field(..., description="Fecha de creacion")
     updated_at: datetime = Field(..., description="Fecha de actualizacion")
 
@@ -78,16 +101,31 @@ class MotorCatalogRecord(BaseModel):
 class VehicleAssignmentRecord(BaseModel):
     plate: str = Field(..., description="Placa del vehiculo")
     vin: str | None = Field(default=None, description="VIN asociado")
+    geotab_status: str = Field(default="unknown", description="Estado en Geotab global Navitrans")
+    geotab_customer_status: str = Field(
+        default="not_applicable",
+        description="Estado en Geotab del cliente: found | not_found | unknown | not_applicable",
+    )
+    geotab_customer_database_id: int | None = Field(
+        default=None, description="ID de la database Geotab del cliente usada para validar"
+    )
     engine_number: str | None = Field(default=None, description="Numero de motor")
     technical_number: str = Field(..., description="Numero tecnico de motor")
+    cpl: str | None = Field(default=None, description="CPL del motor consultado")
     engine_name: str | None = Field(default=None, description="Nombre visible del motor")
     client_name: str | None = Field(default=None, description="Cliente asociado al vehiculo")
     database_name: str | None = Field(default=None, description="Database asociada al vehiculo")
     database_username: str | None = Field(
         default=None, description="Usuario de la database asociada al vehiculo"
     )
+    database_connection_type: str | None = Field(
+        default=None, description="Tipo de conexion de la database asignada"
+    )
     has_database_password: bool = Field(
         default=False, description="Indica si existe contrasena almacenada"
+    )
+    attachments: list[MotorAttachmentRecord] = Field(
+        default_factory=list, description="Adjuntos del motor asociado"
     )
     created_at: datetime = Field(..., description="Fecha de primer registro")
     updated_at: datetime = Field(..., description="Fecha de ultima actualizacion")
@@ -102,6 +140,10 @@ class CustomerDatabaseCreateRequest(BaseModel):
     database_name: str = Field(..., min_length=1, description="Nombre de la database")
     username: str = Field(..., min_length=1, description="Usuario de la database")
     password: str = Field(..., min_length=1, description="Contrasena no hasheada de la database")
+    connection_type: str = Field(
+        default="database",
+        description="Tipo de conexion: 'database' o 'geotab'",
+    )
 
 
 class CustomerCreateRequest(BaseModel):
@@ -114,6 +156,10 @@ class CustomerDatabaseRecord(BaseModel):
     database_name: str = Field(..., description="Nombre de la database")
     username: str = Field(..., description="Usuario configurado")
     has_password: bool = Field(..., description="Indica si tiene contrasena almacenada")
+    connection_type: str = Field(
+        default="database",
+        description="Tipo de conexion: 'database' o 'geotab'",
+    )
     created_at: datetime = Field(..., description="Fecha de creacion")
     updated_at: datetime = Field(..., description="Fecha de actualizacion")
 
