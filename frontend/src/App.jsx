@@ -1,6 +1,7 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 import HomePage from "./pages/HomePage";
+import CustomersPage from "./pages/CustomersPage";
 import EngineLookupPage from "./pages/EngineLookupPage";
 import MotorsPage from "./pages/MotorsPage";
 import VehiclesPage from "./pages/VehiclesPage";
@@ -32,6 +33,10 @@ export default function App() {
                 <span>Motores</span>
                 <small>Catalogo tecnico</small>
               </NavLink>
+              <NavLink to="/clientes">
+                <span>Clientes</span>
+                <small>Databases y accesos</small>
+              </NavLink>
               <NavLink to="/vehiculos">
                 <span>Vehiculos</span>
                 <small>Placas asociadas</small>
@@ -53,6 +58,7 @@ export default function App() {
               <Route path="/" element={<HomePage />} />
               <Route path="/consulta-motor" element={<EngineLookupPage />} />
               <Route path="/motores" element={<MotorsPage />} />
+              <Route path="/clientes" element={<CustomersPage />} />
               <Route path="/vehiculos" element={<VehiclesPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

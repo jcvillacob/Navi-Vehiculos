@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { getVehicleByPlate } from "../../../api/vehicleApi";
+import { lookupVehicle } from "../../../api/vehicleApi";
 
 export function usePlateLookup() {
   const [loading, setLoading] = useState(false);
@@ -13,7 +13,7 @@ export function usePlateLookup() {
     setResult(null);
 
     try {
-      const data = await getVehicleByPlate(plate);
+      const data = await lookupVehicle(plate);
       setResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error inesperado");

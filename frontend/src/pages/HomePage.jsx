@@ -19,6 +19,9 @@ export default function HomePage() {
             <Link className="button button-secondary hero-link" to="/motores">
               Ver catalogo
             </Link>
+            <Link className="button button-secondary hero-link" to="/clientes">
+              Administrar clientes
+            </Link>
             <Link className="button button-secondary hero-link" to="/vehiculos">
               Ver vehiculos
             </Link>
@@ -53,6 +56,15 @@ export default function HomePage() {
           <p>
             Cada motor se convierte en una card limpia, con conteo de vehiculos unicos detectados y
             fecha de ultima actividad.
+          </p>
+        </article>
+
+        <article className="card feature-card">
+          <span className="eyebrow">Clientes y databases</span>
+          <h3>Prepara las opciones que usaran los vehiculos</h3>
+          <p>
+            Cada cliente puede tener varias databases con su usuario y contrasena resguardada para
+            futuras integraciones.
           </p>
         </article>
 

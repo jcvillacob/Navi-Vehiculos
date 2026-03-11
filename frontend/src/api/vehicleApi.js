@@ -45,3 +45,36 @@ export async function createMotor(payload) {
   });
   return parseJsonOrThrow(response, "Error creando motor");
 }
+
+export async function assignVehicleDatabase(plate, payload) {
+  const normalizedPlate = plate.trim().toUpperCase();
+  const response = await fetch(`${API_BASE}/api/v1/vehicle/${normalizedPlate}/database`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonOrThrow(response, "Error actualizando cliente y database del vehiculo");
+}
+
+export async function listCustomers() {
+  const response = await fetch(`${API_BASE}/api/v1/customers`);
+  return parseJsonOrThrow(response, "Error listando clientes");
+}
+
+export async function createCustomer(payload) {
+  const response = await fetch(`${API_BASE}/api/v1/customers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonOrThrow(response, "Error creando cliente");
+}
+
+export async function createCustomerDatabase(customerId, payload) {
+  const response = await fetch(`${API_BASE}/api/v1/customers/${customerId}/databases`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonOrThrow(response, "Error creando database del cliente");
+}
