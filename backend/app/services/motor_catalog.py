@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import psycopg
 from psycopg.errors import UniqueViolation
@@ -14,7 +13,9 @@ from app.schemas.vehicle import (
     CustomerCreateRequest,
     CustomerDatabaseCreateRequest,
     CustomerDatabaseRecord,
+    CustomerDatabaseUpdateRequest,
     CustomerRecord,
+    CustomerUpdateRequest,
     MotorAttachmentRecord,
     MotorCatalogRecord,
     MotorCatalogUpsertRequest,
@@ -22,20 +23,15 @@ from app.schemas.vehicle import (
     VehicleDatabaseAssignmentRequest,
     VehicleAssignmentRecord,
 )
+from app.services.storage import (
+    delete_file,
+    download_file,
+    upload_file,
+)
 
 import logging
 
 _logger = logging.getLogger(__name__)
-
-ALLOWED_MOTOR_ATTACHMENT_TYPES = {
-    "application/pdf",
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-}
-DEFAULT_MOTOR_ATTACHMENTS_DIR = "/app/uploads/motor-attachments"
-DEFAULT_MOTOR_ATTACHMENTS_MAX_BYTES = 10 * 1024 * 1024
-FILE_READ_CHUNK_SIZE = 1024 * 1024
 
 
 def _database_dsn() -> str:
@@ -63,30 +59,6 @@ def _normalize_motor_payload(payload: MotorCatalogUpsertRequest) -> dict[str, An
     }
 
 
-def _motor_attachments_root() -> Path:
-    root = Path(os.getenv("MOTOR_ATTACHMENTS_DIR", DEFAULT_MOTOR_ATTACHMENTS_DIR)).expanduser()
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _motor_attachments_max_bytes() -> int:
-    raw_value = os.getenv("MOTOR_ATTACHMENTS_MAX_BYTES", str(DEFAULT_MOTOR_ATTACHMENTS_MAX_BYTES))
-    try:
-        parsed = int(raw_value)
-    except ValueError as exc:
-        raise RuntimeError("MOTOR_ATTACHMENTS_MAX_BYTES debe ser un entero.") from exc
-    return max(parsed, 1)
-
-
-def _normalize_attachment_suffix(filename: str) -> str:
-    suffix = Path(filename or "").suffix.lower()
-    if not suffix:
-        return ""
-    if len(suffix) > 16:
-        return suffix[:16]
-    return suffix
-
-
 def _attachment_download_url(attachment_id: int) -> str:
     return f"/api/v1/motors/attachments/{attachment_id}/download"
 
@@ -95,46 +67,6 @@ def _build_attachment_record(row: dict[str, Any]) -> MotorAttachmentRecord:
     payload = dict(row)
     payload["download_url"] = _attachment_download_url(int(payload["id"]))
     return MotorAttachmentRecord(**payload)
-
-
-def _store_uploaded_file(
-    *,
-    filename: str,
-    content_type: str | None,
-    fileobj: Any,
-) -> tuple[str, Path, str, int]:
-    normalized_filename = (filename or "").strip()
-    normalized_content_type = (content_type or "").strip().lower()
-
-    if not normalized_filename:
-        raise ValueError("Debes seleccionar un archivo.")
-    if normalized_content_type not in ALLOWED_MOTOR_ATTACHMENT_TYPES:
-        raise ValueError("Solo se permiten imagenes JPG/PNG/WEBP o archivos PDF.")
-
-    storage_root = _motor_attachments_root()
-    stored_filename = f"{uuid4().hex}{_normalize_attachment_suffix(normalized_filename)}"
-    storage_path = storage_root / stored_filename
-    max_bytes = _motor_attachments_max_bytes()
-    written_bytes = 0
-
-    try:
-        with storage_path.open("wb") as destination:
-            while True:
-                chunk = fileobj.read(FILE_READ_CHUNK_SIZE)
-                if not chunk:
-                    break
-                written_bytes += len(chunk)
-                if written_bytes > max_bytes:
-                    raise ValueError(
-                        f"El archivo supera el maximo permitido de {max_bytes // (1024 * 1024)} MB."
-                    )
-                destination.write(chunk)
-    except Exception:
-        if storage_path.exists():
-            storage_path.unlink()
-        raise
-
-    return normalized_filename, storage_path, normalized_content_type, written_bytes
 
 
 def _list_attachments_by_motor_ids(
@@ -385,6 +317,18 @@ def _ensure_motor_tables(conn: psycopg.Connection) -> None:
             ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
             """
         )
+        cur.execute(
+            """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS access_url TEXT NULL;
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE customer_databases
+            ADD COLUMN IF NOT EXISTS access_url TEXT NULL;
+            """
+        )
 
 
 def list_motors() -> list[MotorCatalogRecord]:
@@ -489,12 +433,11 @@ def create_motor_attachment(
         raise ValueError("Debes indicar el CPL del adjunto.")
 
     row = None
-    normalized_filename, storage_path, normalized_content_type, written_bytes = _store_uploaded_file(
+    normalized_filename, object_name, normalized_content_type, file_size = upload_file(
         filename=filename,
         content_type=content_type,
         fileobj=fileobj,
     )
-    stored_filename = storage_path.name
 
     try:
         with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
@@ -538,17 +481,16 @@ def create_motor_attachment(
                         motor_id,
                         normalized_cpl,
                         normalized_filename,
-                        stored_filename,
-                        str(storage_path),
+                        object_name,
+                        object_name,
                         normalized_content_type,
-                        written_bytes,
+                        file_size,
                     ),
                 )
                 row = cur.fetchone()
             conn.commit()
     except Exception:
-        if storage_path.exists():
-            storage_path.unlink()
+        delete_file(object_name)
         raise
     finally:
         try:
@@ -574,12 +516,12 @@ def update_motor_attachment(
         raise ValueError("Debes indicar el CPL del adjunto.")
 
     row = None
-    replacement_file: tuple[str, Path, str, int] | None = None
-    old_storage_path: Path | None = None
+    replacement_file: tuple[str, str, str, int] | None = None
+    old_object_name: str | None = None
 
     try:
         if fileobj is not None:
-            replacement_file = _store_uploaded_file(
+            replacement_file = upload_file(
                 filename=filename or "",
                 content_type=content_type,
                 fileobj=fileobj,
@@ -630,8 +572,8 @@ def update_motor_attachment(
                         (normalized_cpl, attachment_id),
                     )
                 else:
-                    normalized_filename, storage_path, normalized_content_type, written_bytes = replacement_file
-                    old_storage_path = Path(str(current_row["storage_path"]))
+                    normalized_filename, object_name, normalized_content_type, file_size = replacement_file
+                    old_object_name = str(current_row["stored_filename"])
                     cur.execute(
                         """
                         UPDATE motor_attachments
@@ -656,10 +598,10 @@ def update_motor_attachment(
                         (
                             normalized_cpl,
                             normalized_filename,
-                            storage_path.name,
-                            str(storage_path),
+                            object_name,
+                            object_name,
                             normalized_content_type,
-                            written_bytes,
+                            file_size,
                             attachment_id,
                         ),
                     )
@@ -668,9 +610,8 @@ def update_motor_attachment(
             conn.commit()
     except Exception:
         if replacement_file is not None:
-            _, replacement_path, _, _ = replacement_file
-            if replacement_path.exists():
-                replacement_path.unlink()
+            _, new_object_name, _, _ = replacement_file
+            delete_file(new_object_name)
         raise
     finally:
         if fileobj is not None:
@@ -679,8 +620,8 @@ def update_motor_attachment(
             except Exception:
                 pass
 
-    if replacement_file is not None and old_storage_path and old_storage_path.exists():
-        old_storage_path.unlink()
+    if replacement_file is not None and old_object_name:
+        delete_file(old_object_name)
 
     if row is None:
         raise RuntimeError("No se pudo actualizar el adjunto.")
@@ -695,7 +636,7 @@ def delete_motor_attachment(attachment_id: int) -> None:
                 """
                 DELETE FROM motor_attachments
                 WHERE id = %s
-                RETURNING storage_path;
+                RETURNING stored_filename;
                 """,
                 (attachment_id,),
             )
@@ -705,12 +646,11 @@ def delete_motor_attachment(attachment_id: int) -> None:
     if row is None:
         raise ValueError("El adjunto indicado no existe.")
 
-    storage_path = Path(str(row["storage_path"]))
-    if storage_path.exists():
-        storage_path.unlink()
+    delete_file(str(row["stored_filename"]))
 
 
-def get_motor_attachment_file(attachment_id: int) -> tuple[MotorAttachmentRecord, Path]:
+def get_motor_attachment_file(attachment_id: int) -> tuple[MotorAttachmentRecord, Any]:
+    """Returns (attachment_record, file_stream) where file_stream is a BytesIO."""
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         with conn.cursor() as cur:
@@ -723,7 +663,7 @@ def get_motor_attachment_file(attachment_id: int) -> tuple[MotorAttachmentRecord
                     original_filename,
                     content_type,
                     file_size,
-                    storage_path,
+                    stored_filename,
                     created_at,
                     updated_at
                 FROM motor_attachments
@@ -736,9 +676,8 @@ def get_motor_attachment_file(attachment_id: int) -> tuple[MotorAttachmentRecord
     if row is None:
         raise ValueError("El adjunto indicado no existe.")
 
-    file_path = Path(str(row["storage_path"]))
-    if not file_path.exists():
-        raise FileNotFoundError("El archivo del adjunto no se encontro en disco.")
+    object_name = str(row["stored_filename"])
+    file_stream, _ = download_file(object_name)
 
     attachment = _build_attachment_record(
         {
@@ -752,7 +691,94 @@ def get_motor_attachment_file(attachment_id: int) -> tuple[MotorAttachmentRecord
             "updated_at": row["updated_at"],
         }
     )
-    return attachment, file_path
+    return attachment, file_stream
+
+
+def migrate_local_files_to_minio() -> dict[str, Any]:
+    """Migra archivos locales existentes (en /app/uploads/) al bucket de MinIO.
+
+    Lee cada registro de motor_attachments cuyo storage_path apunta a un archivo
+    local, lo sube a MinIO y actualiza la BD con el nuevo object_name.
+    """
+    from app.services.storage import ensure_bucket, file_exists, _get_client, _get_bucket
+    import io
+
+    ensure_bucket()
+    client = _get_client()
+    bucket = _get_bucket()
+
+    migrated = 0
+    skipped = 0
+    errors: list[str] = []
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, stored_filename, storage_path, content_type, file_size
+                FROM motor_attachments
+                ORDER BY id;
+                """
+            )
+            rows = cur.fetchall()
+
+    for row in rows:
+        stored_filename = str(row["stored_filename"])
+        storage_path_str = str(row["storage_path"])
+
+        # Si ya es un object name de MinIO (no es una ruta con /)
+        # y ya existe en MinIO, saltar
+        if "/" not in storage_path_str and file_exists(stored_filename):
+            skipped += 1
+            continue
+
+        # Intentar leer desde el path local
+        local_path = Path(storage_path_str)
+        if not local_path.exists():
+            errors.append(f"ID {row['id']}: archivo local no encontrado en {storage_path_str}")
+            continue
+
+        try:
+            file_data = local_path.read_bytes()
+            object_name = stored_filename  # Mantener el mismo nombre de archivo
+
+            client.put_object(
+                bucket_name=bucket,
+                object_name=object_name,
+                data=io.BytesIO(file_data),
+                length=len(file_data),
+                content_type=str(row["content_type"]),
+            )
+
+            # Actualizar BD: storage_path y stored_filename apuntan al object name
+            with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE motor_attachments
+                        SET storage_path = %s,
+                            stored_filename = %s,
+                            updated_at = NOW()
+                        WHERE id = %s;
+                        """,
+                        (object_name, object_name, row["id"]),
+                    )
+                conn.commit()
+
+            migrated += 1
+            _logger.info("Migrado adjunto ID %s a MinIO: %s", row["id"], object_name)
+
+        except Exception as exc:
+            errors.append(f"ID {row['id']}: {exc}")
+            _logger.error("Error migrando adjunto ID %s: %s", row["id"], exc, exc_info=True)
+
+    return {
+        "migrated": migrated,
+        "skipped": skipped,
+        "errors": errors,
+        "total": len(rows),
+    }
 
 
 def find_registered_motor(technical_number: str) -> RegisteredMotorSummary | None:
@@ -827,6 +853,7 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     cd.username AS database_username,
                     cd.connection_type AS database_connection_type,
                     (cd.password IS NOT NULL AND cd.password <> '') AS has_database_password,
+                    COALESCE(a.access_url, cd.access_url) AS access_url,
                     a.created_at,
                     a.updated_at,
                     a.last_seen_at
@@ -996,6 +1023,7 @@ def list_customers() -> list[CustomerRecord]:
                     username,
                     (password IS NOT NULL AND password <> '') AS has_password,
                     connection_type,
+                    access_url,
                     created_at,
                     updated_at
                 FROM customer_databases
@@ -1052,6 +1080,9 @@ def create_customer_database(
     normalized_connection_type = (payload.connection_type or "database").strip().lower()
     if normalized_connection_type not in ("database", "geotab"):
         normalized_connection_type = "database"
+    normalized_access_url = (payload.access_url or "").strip() or None
+    if normalized_connection_type == "geotab":
+        normalized_access_url = None
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
@@ -1070,9 +1101,10 @@ def create_customer_database(
                         database_name,
                         username,
                         password,
-                        connection_type
+                        connection_type,
+                        access_url
                     )
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     RETURNING
                         id,
                         customer_id,
@@ -1080,6 +1112,7 @@ def create_customer_database(
                         username,
                         (password IS NOT NULL AND password <> '') AS has_password,
                         connection_type,
+                        access_url,
                         created_at,
                         updated_at;
                     """,
@@ -1089,6 +1122,7 @@ def create_customer_database(
                         normalized_username,
                         normalized_password,
                         normalized_connection_type,
+                        normalized_access_url,
                     ),
                 )
                 row = cur.fetchone()
@@ -1099,6 +1133,119 @@ def create_customer_database(
 
     if row is None:
         raise RuntimeError("No se pudo crear la database del cliente.")
+    return CustomerDatabaseRecord(**row)
+
+
+def update_customer(customer_id: int, payload: CustomerUpdateRequest) -> CustomerRecord:
+    normalized_name = payload.name.strip()
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM customers WHERE id = %s;", (customer_id,))
+            if cur.fetchone() is None:
+                raise ValueError("El cliente no existe.")
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE customers
+                    SET name = %s, updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING id, name, created_at, updated_at;
+                    """,
+                    (normalized_name, customer_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        except UniqueViolation:
+            conn.rollback()
+            raise ValueError("Ya existe un cliente con ese nombre.") from None
+
+    if row is None:
+        raise RuntimeError("No se pudo actualizar el cliente.")
+
+    customers = list_customers()
+    return next(c for c in customers if c.id == customer_id)
+
+
+def update_customer_database(
+    database_id: int, payload: CustomerDatabaseUpdateRequest
+) -> CustomerDatabaseRecord:
+    normalized_database_name = payload.database_name.strip()
+    normalized_username = payload.username.strip()
+    normalized_connection_type = (payload.connection_type or "database").strip().lower()
+    if normalized_connection_type not in ("database", "geotab"):
+        normalized_connection_type = "database"
+    normalized_access_url = (payload.access_url or "").strip() or None
+    if normalized_connection_type == "geotab":
+        normalized_access_url = None
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM customer_databases WHERE id = %s;", (database_id,))
+            if cur.fetchone() is None:
+                raise ValueError("La database no existe.")
+
+        try:
+            with conn.cursor() as cur:
+                if payload.password is not None:
+                    cur.execute(
+                        """
+                        UPDATE customer_databases
+                        SET database_name = %s,
+                            username = %s,
+                            password = %s,
+                            connection_type = %s,
+                            access_url = %s,
+                            updated_at = NOW()
+                        WHERE id = %s
+                        RETURNING id, customer_id, database_name, username,
+                                  (password IS NOT NULL AND password <> '') AS has_password,
+                                  connection_type, access_url, created_at, updated_at;
+                        """,
+                        (
+                            normalized_database_name,
+                            normalized_username,
+                            payload.password.strip(),
+                            normalized_connection_type,
+                            normalized_access_url,
+                            database_id,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE customer_databases
+                        SET database_name = %s,
+                            username = %s,
+                            connection_type = %s,
+                            access_url = %s,
+                            updated_at = NOW()
+                        WHERE id = %s
+                        RETURNING id, customer_id, database_name, username,
+                                  (password IS NOT NULL AND password <> '') AS has_password,
+                                  connection_type, access_url, created_at, updated_at;
+                        """,
+                        (
+                            normalized_database_name,
+                            normalized_username,
+                            normalized_connection_type,
+                            normalized_access_url,
+                            database_id,
+                        ),
+                    )
+                row = cur.fetchone()
+            conn.commit()
+        except UniqueViolation:
+            conn.rollback()
+            raise ValueError(
+                "Ya existe esa combinacion de database y usuario para el cliente."
+            ) from None
+
+    if row is None:
+        raise RuntimeError("No se pudo actualizar la database.")
     return CustomerDatabaseRecord(**row)
 
 
@@ -1302,6 +1449,8 @@ def assign_vehicle_database(
     if not normalized_plate:
         raise ValueError("La placa es obligatoria.")
 
+    normalized_access_url = _normalize_optional_text(payload.access_url)
+
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         with conn.cursor() as cur:
@@ -1318,6 +1467,21 @@ def assign_vehicle_database(
         if existing_vehicle is None:
             raise ValueError("El vehiculo no existe en la base de asociaciones.")
 
+        # Si no se selecciona database, solo actualizar access_url
+        if not payload.customer_database_id:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE vehicle_motor_assignments
+                    SET access_url = %s,
+                        updated_at = NOW()
+                    WHERE plate = %s;
+                    """,
+                    (normalized_access_url, normalized_plate),
+                )
+            conn.commit()
+            return AssignedDatabaseSummary()
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1327,6 +1491,7 @@ def assign_vehicle_database(
                     c.name AS client_name,
                     cd.database_name,
                     cd.username AS database_username,
+                    cd.access_url,
                     cd.password,
                     cd.connection_type,
                     (cd.password IS NOT NULL AND cd.password <> '') AS has_database_password
@@ -1359,6 +1524,7 @@ def assign_vehicle_database(
                 SET
                     customer_id = %s,
                     customer_database_id = %s,
+                    access_url = %s,
                     geotab_customer_status = CASE WHEN %s THEN 'unknown' ELSE 'not_applicable' END,
                     geotab_customer_database_id = CASE WHEN %s THEN %s ELSE NULL END,
                     updated_at = NOW()
@@ -1367,6 +1533,7 @@ def assign_vehicle_database(
                 (
                     selected_database["customer_id"],
                     selected_database["id"],
+                    selected_database["access_url"],
                     is_geotab_db,
                     is_geotab_db,
                     selected_database["id"],

@@ -161,6 +161,20 @@ export default function VehicleAssignmentModal({
           <DataItem label="Usuario DB" value={vehicle.database_username || "Sin usuario"} />
         </div>
 
+        {vehicle.access_url ? (
+          <div className="detail-access-url">
+            <span className="form-label-subtle">Enlace de acceso</span>
+            <a
+              href={vehicle.access_url}
+              target="_blank"
+              rel="noreferrer"
+              className="access-url-link"
+            >
+              {vehicle.access_url}
+            </a>
+          </div>
+        ) : null}
+
         <p className="support-copy modal-support-copy">
           Desde aqui puedes revisar el detalle y ajustar la asignacion del cliente/database.
         </p>

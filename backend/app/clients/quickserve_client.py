@@ -99,6 +99,11 @@ def _session_wait_interval_seconds() -> float:
         return DEFAULT_QUICKSERVE_SESSION_WAIT_INTERVAL_SECONDS
 
 
+def _reuse_session_enabled() -> bool:
+    raw_value = os.getenv("QUICKSERVE_REUSE_SESSION", "false").strip().lower()
+    return raw_value in {"1", "true", "yes", "on"}
+
+
 def _save_cached_session(session: requests.Session, cfg: QuickServeConfig) -> None:
     redis_client = _redis_client()
     if redis_client is None:
@@ -468,6 +473,12 @@ def _login_and_cache_session(session: requests.Session, cfg: QuickServeConfig) -
 
 
 def get_engine_dataplate(esn: str, cfg: QuickServeConfig) -> dict[str, str]:
+    if not _reuse_session_enabled():
+        session = _build_session(cfg)
+        if not _authenticate_quickserve(session, cfg):
+            return {}
+        return _fetch_dataplate_with_session(session, cfg, esn)
+
     session = _build_session(cfg)
 
     if _load_cached_session(session, cfg):

@@ -122,6 +122,24 @@ export async function createCustomerDatabase(customerId, payload) {
   return parseJsonOrThrow(response, "Error creando database del cliente");
 }
 
+export async function updateCustomer(customerId, payload) {
+  const response = await fetch(`${API_BASE}/api/v1/customers/${customerId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonOrThrow(response, "Error actualizando cliente");
+}
+
+export async function updateCustomerDatabase(databaseId, payload) {
+  const response = await fetch(`${API_BASE}/api/v1/customers/databases/${databaseId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonOrThrow(response, "Error actualizando database del cliente");
+}
+
 export async function revalidateCustomerGeotab(plate) {
   const normalizedPlate = plate.trim().toUpperCase();
   const response = await fetch(`${API_BASE}/api/v1/vehicle/${normalizedPlate}/revalidate-customer-geotab`, {

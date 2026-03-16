@@ -124,6 +124,7 @@ class VehicleAssignmentRecord(BaseModel):
     has_database_password: bool = Field(
         default=False, description="Indica si existe contrasena almacenada"
     )
+    access_url: str | None = Field(default=None, description="Enlace de acceso externo")
     attachments: list[MotorAttachmentRecord] = Field(
         default_factory=list, description="Adjuntos del motor asociado"
     )
@@ -133,7 +134,8 @@ class VehicleAssignmentRecord(BaseModel):
 
 
 class VehicleDatabaseAssignmentRequest(BaseModel):
-    customer_database_id: int = Field(..., description="ID de la database seleccionada")
+    customer_database_id: int | None = Field(default=None, description="ID de la database seleccionada")
+    access_url: str | None = Field(default=None, description="Enlace de acceso externo (para databases no-Geotab)")
 
 
 class CustomerDatabaseCreateRequest(BaseModel):
@@ -144,10 +146,33 @@ class CustomerDatabaseCreateRequest(BaseModel):
         default="database",
         description="Tipo de conexion: 'database' o 'geotab'",
     )
+    access_url: str | None = Field(
+        default=None, description="Enlace de acceso externo (solo para databases no-Geotab)"
+    )
 
 
 class CustomerCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, description="Nombre del cliente")
+
+
+class CustomerUpdateRequest(BaseModel):
+    name: str = Field(..., min_length=1, description="Nuevo nombre del cliente")
+
+
+class CustomerDatabaseUpdateRequest(BaseModel):
+    database_name: str = Field(..., min_length=1, description="Nombre de la database")
+    username: str = Field(..., min_length=1, description="Usuario de la database")
+    password: str | None = Field(
+        default=None,
+        description="Nueva contrasena (None = no cambiar)",
+    )
+    connection_type: str = Field(
+        default="database",
+        description="Tipo de conexion: 'database' o 'geotab'",
+    )
+    access_url: str | None = Field(
+        default=None, description="Enlace de acceso externo (solo para databases no-Geotab)"
+    )
 
 
 class CustomerDatabaseRecord(BaseModel):
@@ -159,6 +184,9 @@ class CustomerDatabaseRecord(BaseModel):
     connection_type: str = Field(
         default="database",
         description="Tipo de conexion: 'database' o 'geotab'",
+    )
+    access_url: str | None = Field(
+        default=None, description="Enlace de acceso externo (solo para databases no-Geotab)"
     )
     created_at: datetime = Field(..., description="Fecha de creacion")
     updated_at: datetime = Field(..., description="Fecha de actualizacion")

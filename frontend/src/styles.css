@@ -580,7 +580,15 @@ select {
   font-size: 13px;
   color: var(--text);
   transition: border-color 130ms ease, box-shadow 130ms ease;
-  appearance: auto;
+}
+
+select {
+  appearance: none;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23354550' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  cursor: pointer;
 }
 
 input::placeholder,
@@ -899,6 +907,37 @@ input[readonly] {
   color: var(--text);
 }
 
+.detail-access-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.form-label-subtle {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  white-space: nowrap;
+}
+
+.access-url-link {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--blue, #185979);
+  word-break: break-all;
+  text-decoration: none;
+}
+
+.access-url-link:hover {
+  text-decoration: underline;
+}
+
 /* ─────────────────────────────
    INSIGHT CARD / STATE PANEL
 ───────────────────────────── */
@@ -1121,6 +1160,20 @@ input[readonly] {
   line-height: 1.45;
   word-break: break-word;
   color: var(--text);
+}
+
+.source-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.motor-card-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 /* ─────────────────────────────
@@ -1438,7 +1491,7 @@ input[readonly] {
 
 .vehicles-filter-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 180px 180px auto;
   gap: 10px;
   align-items: end;
 }

@@ -2,6 +2,163 @@ import { useMemo, useState } from "react";
 
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 
+function EditCustomerModal({ customer, loading, onClose, onSubmit }) {
+  const [name, setName] = useState(customer.name);
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    await onSubmit({ name: name.trim() });
+  };
+
+  return (
+    <div className="modal-overlay" role="presentation">
+      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Editar cliente">
+        <header className="modal-header">
+          <div className="modal-heading">
+            <span className="eyebrow">Editar</span>
+            <h3>Cliente: {customer.name}</h3>
+          </div>
+          <button type="button" className="icon-button modal-close-button" onClick={onClose}>
+            Cerrar
+          </button>
+        </header>
+
+        <form className="register-form" onSubmit={handleSubmit}>
+          <div className="form-field">
+            <label htmlFor="edit-customer-name">Nombre del cliente</label>
+            <input
+              id="edit-customer-name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              required
+            />
+          </div>
+
+          <div className="actions-row modal-actions">
+            <button type="submit" disabled={loading || !name.trim()}>
+              {loading ? "Guardando..." : "Guardar cambios"}
+            </button>
+            <button type="button" className="button-secondary" onClick={onClose}>
+              Cancelar
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function EditDatabaseModal({ database, loading, onClose, onSubmit }) {
+  const [databaseName, setDatabaseName] = useState(database.database_name);
+  const [username, setUsername] = useState(database.username);
+  const [password, setPassword] = useState("");
+  const [connectionType, setConnectionType] = useState(database.connection_type || "database");
+  const [accessUrl, setAccessUrl] = useState(database.access_url || "");
+
+  const showAccessUrl = connectionType !== "geotab";
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    const payload = {
+      database_name: databaseName.trim(),
+      username: username.trim(),
+      connection_type: connectionType,
+      access_url: showAccessUrl ? accessUrl.trim() || null : null
+    };
+    if (password.trim()) {
+      payload.password = password.trim();
+    }
+    await onSubmit(payload);
+  };
+
+  return (
+    <div className="modal-overlay" role="presentation">
+      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Editar database">
+        <header className="modal-header">
+          <div className="modal-heading">
+            <span className="eyebrow">Editar</span>
+            <h3>Database: {database.database_name}</h3>
+          </div>
+          <button type="button" className="icon-button modal-close-button" onClick={onClose}>
+            Cerrar
+          </button>
+        </header>
+
+        <form className="register-form" onSubmit={handleSubmit}>
+          <div className="form-field">
+            <label htmlFor="edit-db-name">Database</label>
+            <input
+              id="edit-db-name"
+              value={databaseName}
+              onChange={(event) => setDatabaseName(event.target.value)}
+              required
+            />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="edit-db-username">Usuario</label>
+            <input
+              id="edit-db-username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              required
+            />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="edit-db-password">
+              Contrasena <span className="form-optional">(dejar vacio para no cambiar)</span>
+            </label>
+            <input
+              id="edit-db-password"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="********"
+            />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="edit-db-connection-type">Tipo de conexion</label>
+            <select
+              id="edit-db-connection-type"
+              value={connectionType}
+              onChange={(event) => setConnectionType(event.target.value)}
+            >
+              <option value="database">Database</option>
+              <option value="geotab">Geotab</option>
+            </select>
+          </div>
+
+          {showAccessUrl ? (
+            <div className="form-field">
+              <label htmlFor="edit-db-access-url">
+                Enlace de acceso <span className="form-optional">(opcional)</span>
+              </label>
+              <input
+                id="edit-db-access-url"
+                type="url"
+                value={accessUrl}
+                onChange={(event) => setAccessUrl(event.target.value)}
+                placeholder="https://..."
+              />
+            </div>
+          ) : null}
+
+          <div className="actions-row modal-actions">
+            <button type="submit" disabled={loading || !databaseName.trim() || !username.trim()}>
+              {loading ? "Guardando..." : "Guardar cambios"}
+            </button>
+            <button type="button" className="button-secondary" onClick={onClose}>
+              Cancelar
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 export default function CustomersPage() {
   const [customerName, setCustomerName] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
@@ -9,10 +166,21 @@ export default function CustomersPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [connectionType, setConnectionType] = useState("database");
+  const [createAccessUrl, setCreateAccessUrl] = useState("");
   const [message, setMessage] = useState("");
 
-  const { loading, customers, error, registerCustomer, registerCustomerDatabase } =
-    useCustomersCatalog();
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [editingDatabase, setEditingDatabase] = useState(null);
+
+  const {
+    loading,
+    customers,
+    error,
+    registerCustomer,
+    editCustomer,
+    registerCustomerDatabase,
+    editCustomerDatabase
+  } = useCustomersCatalog();
 
   const totals = useMemo(
     () => ({
@@ -41,15 +209,37 @@ export default function CustomersPage() {
         database_name: databaseName.trim(),
         username: username.trim(),
         password: password.trim(),
-        connection_type: connectionType
+        connection_type: connectionType,
+        access_url: connectionType !== "geotab" ? createAccessUrl.trim() || null : null
       });
       setDatabaseName("");
       setUsername("");
       setPassword("");
       setConnectionType("database");
+      setCreateAccessUrl("");
       setMessage("Database creada para el cliente.");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "No fue posible crear la database");
+    }
+  };
+
+  const handleEditCustomer = async (payload) => {
+    try {
+      await editCustomer(editingCustomer.id, payload);
+      setEditingCustomer(null);
+      setMessage("Cliente actualizado.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "No fue posible actualizar el cliente");
+    }
+  };
+
+  const handleEditDatabase = async (payload) => {
+    try {
+      await editCustomerDatabase(editingDatabase.id, editingDatabase.customer_id, payload);
+      setEditingDatabase(null);
+      setMessage("Database actualizada.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "No fue posible actualizar la database");
     }
   };
 
@@ -183,6 +373,21 @@ export default function CustomersPage() {
                 </select>
               </div>
 
+              {connectionType !== "geotab" ? (
+                <div className="form-field">
+                  <label htmlFor="database-access-url">
+                    Enlace de acceso <span className="form-optional">(opcional)</span>
+                  </label>
+                  <input
+                    id="database-access-url"
+                    type="url"
+                    value={createAccessUrl}
+                    onChange={(event) => setCreateAccessUrl(event.target.value)}
+                    placeholder="https://..."
+                  />
+                </div>
+              ) : null}
+
               <div className="actions-row">
                 <button type="submit" disabled={loading || customers.length === 0}>
                   {loading ? "Guardando..." : "Crear database"}
@@ -203,7 +408,16 @@ export default function CustomersPage() {
 
             <div className="motor-card-heading">
               <h3>{customer.name}</h3>
-              <p className="motor-technical-number">Cliente #{customer.id}</p>
+              <div className="motor-card-heading-row">
+                <p className="motor-technical-number">Cliente #{customer.id}</p>
+                <button
+                  type="button"
+                  className="button-secondary button-sm"
+                  onClick={() => setEditingCustomer(customer)}
+                >
+                  Editar
+                </button>
+              </div>
             </div>
 
             <div className="source-grid">
@@ -218,7 +432,26 @@ export default function CustomersPage() {
                         <span className="status geotab-badge geotab-type-label">Geotab</span>
                       ) : null}
                     </span>
-                    <strong>{database.username}</strong>
+                    <div className="source-field-row">
+                      <strong>{database.username}</strong>
+                      <button
+                        type="button"
+                        className="button-secondary button-sm"
+                        onClick={() => setEditingDatabase(database)}
+                      >
+                        Editar
+                      </button>
+                    </div>
+                    {database.access_url ? (
+                      <a
+                        href={database.access_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="access-url-link"
+                      >
+                        {database.access_url}
+                      </a>
+                    ) : null}
                   </div>
                 ))
               )}
@@ -226,6 +459,24 @@ export default function CustomersPage() {
           </article>
         ))}
       </section>
+
+      {editingCustomer ? (
+        <EditCustomerModal
+          customer={editingCustomer}
+          loading={loading}
+          onClose={() => setEditingCustomer(null)}
+          onSubmit={handleEditCustomer}
+        />
+      ) : null}
+
+      {editingDatabase ? (
+        <EditDatabaseModal
+          database={editingDatabase}
+          loading={loading}
+          onClose={() => setEditingDatabase(null)}
+          onSubmit={handleEditDatabase}
+        />
+      ) : null}
     </section>
   );
 }

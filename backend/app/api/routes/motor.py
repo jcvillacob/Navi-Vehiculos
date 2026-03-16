@@ -1,5 +1,7 @@
+from urllib.parse import quote
+
 from fastapi import APIRouter, File, Form, HTTPException, Path, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 
 from app.schemas.vehicle import MotorAttachmentRecord, MotorCatalogRecord, MotorCatalogUpsertRequest
 from app.services.motor_catalog import (
@@ -9,6 +11,7 @@ from app.services.motor_catalog import (
     get_motor_attachment_file,
     list_motor_attachments,
     list_motors,
+    migrate_local_files_to_minio,
     update_motor_attachment,
 )
 
@@ -92,17 +95,26 @@ def remove_motor_attachment(
 @router.get("/attachments/{attachment_id}/download")
 def download_motor_attachment(
     attachment_id: int = Path(..., ge=1, description="ID del adjunto"),
-) -> FileResponse:
+) -> StreamingResponse:
     try:
-        attachment, file_path = get_motor_attachment_file(attachment_id)
+        attachment, file_stream = get_motor_attachment_file(attachment_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    return FileResponse(
-        path=file_path,
+    encoded_filename = quote(attachment.original_filename)
+    return StreamingResponse(
+        content=file_stream,
         media_type=attachment.content_type,
-        filename=attachment.original_filename,
-        content_disposition_type="inline",
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}",
+        },
     )
+
+
+@router.post("/migrate-attachments", status_code=status.HTTP_200_OK)
+def migrate_attachments_to_minio() -> dict:
+    """Migra archivos locales existentes a MinIO (operacion unica)."""
+    result = migrate_local_files_to_minio()
+    return result

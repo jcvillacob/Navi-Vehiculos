@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 
 from app.clients.geotab_client import (
@@ -23,6 +24,7 @@ from app.services.motor_catalog import (
 )
 
 _VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
+_logger = logging.getLogger(__name__)
 
 
 def _is_vin(value: str) -> bool:
@@ -200,6 +202,41 @@ def lookup_vehicle(identifier: str) -> VehicleLookupResponse:
             )
 
         cummins_details = get_engine_dataplate(engine_number, quickserve_cfg)
+        cummins_vin = str(cummins_details.get("VIN") or "").strip().upper() or None
+        if vin and cummins_vin and cummins_vin != vin:
+            warnings.append(
+                "QuickServe devolvio un VIN distinto al de Fenix/Geotab. No se registraron datos de Cummins para evitar una asignacion incorrecta."
+            )
+            _logger.warning(
+                "VIN mismatch en lookup de vehiculo: plate=%s vin_fenix=%s vin_cummins=%s esn=%s",
+                plate,
+                vin,
+                cummins_vin,
+                engine_number,
+            )
+            geotab_customer_info = get_vehicle_geotab_customer_status(plate)
+            return VehicleLookupResponse(
+                plate=plate,
+                lookup_value=normalized_identifier,
+                lookup_type=lookup_type,
+                vin=vin,
+                geotab_status=geotab_status,
+                geotab_customer_status=geotab_customer_info.get(
+                    "geotab_customer_status", "not_applicable"
+                ),
+                engine_number=engine_number,
+                technical_engine_configuration=None,
+                cpl=None,
+                registered_motor=None,
+                assigned_database=get_vehicle_database_assignment(plate),
+                source_details={
+                    "fenix": fenix_details,
+                    "cummins": cummins_details,
+                },
+                warnings=warnings,
+                status="partial",
+                message="Consulta completada con advertencias: el dataplate de Cummins no coincide con el VIN del vehiculo.",
+            )
         technical_config = extract_technical_engine_configuration(cummins_details)
         cpl = extract_cpl(cummins_details)
         if not technical_config:

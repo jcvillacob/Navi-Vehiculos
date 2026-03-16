@@ -3,7 +3,9 @@ import { useEffect, useState } from "react";
 import {
   createCustomer,
   createCustomerDatabase,
-  listCustomers
+  listCustomers,
+  updateCustomer,
+  updateCustomerDatabase
 } from "../../../api/vehicleApi";
 
 export function useCustomersCatalog() {
@@ -46,6 +48,24 @@ export function useCustomersCatalog() {
     }
   };
 
+  const editCustomer = async (customerId, payload) => {
+    setLoading(true);
+    setError("");
+    try {
+      const updated = await updateCustomer(customerId, payload);
+      setCustomers((prev) =>
+        prev.map((c) => (c.id === customerId ? updated : c)).sort((a, b) => a.name.localeCompare(b.name))
+      );
+      return updated;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible actualizar el cliente";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const registerCustomerDatabase = async (customerId, payload) => {
     setLoading(true);
     setError("");
@@ -75,12 +95,42 @@ export function useCustomersCatalog() {
     }
   };
 
+  const editCustomerDatabase = async (databaseId, customerId, payload) => {
+    setLoading(true);
+    setError("");
+    try {
+      const updated = await updateCustomerDatabase(databaseId, payload);
+      setCustomers((prev) =>
+        prev.map((customer) =>
+          customer.id === customerId
+            ? {
+                ...customer,
+                databases: customer.databases
+                  .map((db) => (db.id === databaseId ? updated : db))
+                  .sort((a, b) => a.database_name.localeCompare(b.database_name))
+              }
+            : customer
+        )
+      );
+      return updated;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "No fue posible actualizar la database";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     loading,
     customers,
     error,
     loadCustomers,
     registerCustomer,
-    registerCustomerDatabase
+    editCustomer,
+    registerCustomerDatabase,
+    editCustomerDatabase
   };
 }

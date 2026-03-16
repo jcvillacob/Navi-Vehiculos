@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicleAssignments";
@@ -34,6 +34,8 @@ export default function VehiclesPage() {
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [refreshingPlates, setRefreshingPlates] = useState(new Set());
+  const [filterClient, setFilterClient] = useState("");
+  const [filterMotor, setFilterMotor] = useState("");
   const { loading, vehicles, error, search, setSearch, loadVehicles } = useVehicleAssignments();
   const { customers, loading: customersLoading } = useCustomersCatalog();
 
@@ -45,16 +47,55 @@ export default function VehiclesPage() {
     }, kind === "error" ? 5000 : 3200);
   };
 
+  const clientOptions = useMemo(() => {
+    const subset = filterMotor ? vehicles.filter((v) => v.engine_name === filterMotor) : vehicles;
+    const names = new Set();
+    for (const v of subset) {
+      if (v.client_name) names.add(v.client_name);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [vehicles, filterMotor]);
+
+  const motorOptions = useMemo(() => {
+    const subset = filterClient ? vehicles.filter((v) => v.client_name === filterClient) : vehicles;
+    const names = new Set();
+    for (const v of subset) {
+      if (v.engine_name) names.add(v.engine_name);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [vehicles, filterClient]);
+
+  useEffect(() => {
+    if (filterClient && !clientOptions.includes(filterClient)) setFilterClient("");
+  }, [clientOptions, filterClient]);
+
+  useEffect(() => {
+    if (filterMotor && !motorOptions.includes(filterMotor)) setFilterMotor("");
+  }, [motorOptions, filterMotor]);
+
+  const filteredVehicles = useMemo(() => {
+    let result = vehicles;
+    if (filterClient) {
+      result = result.filter((v) => v.client_name === filterClient);
+    }
+    if (filterMotor) {
+      result = result.filter((v) => v.engine_name === filterMotor);
+    }
+    return result;
+  }, [vehicles, filterClient, filterMotor]);
+
   const summary = useMemo(() => {
-    const registered = vehicles.filter((vehicle) => vehicle.engine_name).length;
+    const registered = filteredVehicles.filter((vehicle) => vehicle.engine_name).length;
     return {
-      total: vehicles.length,
+      total: filteredVehicles.length,
       registered
     };
-  }, [vehicles]);
+  }, [filteredVehicles]);
 
   const handleClear = () => {
     setSearch("");
+    setFilterClient("");
+    setFilterMotor("");
   };
 
   const handleUpdateVehicle = async (payload) => {
@@ -62,11 +103,9 @@ export default function VehiclesPage() {
       return;
     }
 
-    if (payload.customer_database_id) {
-      await assignVehicleDatabase(selectedVehicle.plate, {
-        customer_database_id: payload.customer_database_id
-      });
-    }
+    await assignVehicleDatabase(selectedVehicle.plate, {
+      customer_database_id: payload.customer_database_id
+    });
     pushToast("success", `Vehiculo ${selectedVehicle.plate} actualizado.`);
     setSelectedVehicle(null);
     await loadVehicles(search);
@@ -158,6 +197,34 @@ export default function VehiclesPage() {
             />
           </div>
 
+          <div className="form-field">
+            <label htmlFor="vehicles-filter-client">Cliente</label>
+            <select
+              id="vehicles-filter-client"
+              value={filterClient}
+              onChange={(event) => setFilterClient(event.target.value)}
+            >
+              <option value="">Todos</option>
+              {clientOptions.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="vehicles-filter-motor">Motor</label>
+            <select
+              id="vehicles-filter-motor"
+              value={filterMotor}
+              onChange={(event) => setFilterMotor(event.target.value)}
+            >
+              <option value="">Todos</option>
+              {motorOptions.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </div>
+
           <div className="actions-row vehicles-filter-actions">
             <button type="button" className="button-secondary button-sm" onClick={handleClear} disabled={loading}>
               Limpiar
@@ -172,7 +239,7 @@ export default function VehiclesPage() {
           </p>
         ) : null}
 
-        {!loading && vehicles.length === 0 ? (
+        {!loading && filteredVehicles.length === 0 ? (
           <article className="card empty-state-card vehicles-empty-state">
             <span className="eyebrow">Sin resultados</span>
             <h3>No hay vehiculos asociados para mostrar.</h3>
@@ -183,7 +250,7 @@ export default function VehiclesPage() {
           </article>
         ) : null}
 
-        {vehicles.length > 0 ? (
+        {filteredVehicles.length > 0 ? (
           <div className="vehicles-table-shell">
             <table className="vehicles-table">
               <thead>
@@ -202,7 +269,7 @@ export default function VehiclesPage() {
                 </tr>
               </thead>
               <tbody>
-                {vehicles.map((vehicle) => (
+                {filteredVehicles.map((vehicle) => (
                   <tr key={vehicle.plate}>
                     <td data-label="Placa">
                       <strong>{vehicle.plate}</strong>
