@@ -813,16 +813,18 @@ function DatabaseDetailModal({
               {ruleGroups.length > 0 ? (
                 <div className="motor-group-list">
                   {ruleGroups.map((group) => (
-                    <div className="motor-group-card" key={group.id}>
-                      <div className="motor-group-card-header">
+                    <details className="motor-group-card" key={group.id}>
+                      <summary className="motor-group-card-header">
                         <div className="motor-group-card-identity">
+                          <span className="motor-group-card-chevron" />
                           <span className="motor-group-card-motor">{group.motor_name}</span>
                           <span className="motor-group-card-tech">{group.technical_number}</span>
                         </div>
                         <div className="motor-group-card-meta">
                           <span className="rule-badge is-match-mode">{formatMatchModeLabel(group.match_mode)}</span>
+                          <span className="rule-badge is-muted">{group.rules.length} {group.rules.length === 1 ? "regla" : "reglas"}</span>
                           {confirmDeleteGroupId === group.id ? (
-                            <div className="motor-group-card-confirm">
+                            <div className="motor-group-card-confirm" onClick={(e) => e.stopPropagation()}>
                               <button
                                 type="button"
                                 className="button-secondary button-sm rule-confirm-delete"
@@ -847,7 +849,7 @@ function DatabaseDetailModal({
                             <button
                               type="button"
                               className="icon-button rule-delete-button"
-                              onClick={() => setConfirmDeleteGroupId(group.id)}
+                              onClick={(e) => { e.stopPropagation(); setConfirmDeleteGroupId(group.id); }}
                               disabled={loading}
                               title="Eliminar grupo"
                             >
@@ -855,7 +857,7 @@ function DatabaseDetailModal({
                             </button>
                           )}
                         </div>
-                      </div>
+                      </summary>
                       <div className="motor-group-card-rules">
                         {group.rules.map((rule) => (
                           <button
@@ -869,7 +871,7 @@ function DatabaseDetailModal({
                           </button>
                         ))}
                       </div>
-                    </div>
+                    </details>
                   ))}
                 </div>
               ) : null}

@@ -154,6 +154,10 @@ class VehicleAssignmentRecord(BaseModel):
         default=False, description="Indica si existe contrasena almacenada"
     )
     access_url: str | None = Field(default=None, description="Enlace de acceso externo")
+    has_motor_rules: bool = Field(
+        default=False,
+        description="Indica si el motor del vehiculo tiene reglas Geotab configuradas en su database (o databases con mismas credenciales)",
+    )
     attachments: list[MotorAttachmentRecord] = Field(
         default_factory=list, description="Adjuntos del motor asociado"
     )

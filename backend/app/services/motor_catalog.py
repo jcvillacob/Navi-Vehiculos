@@ -991,6 +991,18 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     cd.connection_type AS database_connection_type,
                     (cd.password IS NOT NULL AND cd.password <> '') AS has_database_password,
                     COALESCE(a.access_url, cd.access_url) AS access_url,
+                    EXISTS (
+                        SELECT 1
+                        FROM geotab_rule_groups grg
+                        INNER JOIN motor_catalog mc
+                            ON mc.id = grg.motor_id
+                           AND mc.technical_number = a.technical_number
+                        INNER JOIN customer_databases sibling_db
+                            ON sibling_db.id = grg.database_id
+                        WHERE cd.connection_type = 'geotab'
+                          AND sibling_db.database_name = cd.database_name
+                          AND sibling_db.username = cd.username
+                    ) AS has_motor_rules,
                     a.created_at,
                     a.updated_at,
                     a.last_seen_at
@@ -1220,13 +1232,50 @@ def list_customers() -> list[CustomerRecord]:
 
     groups_by_database = _build_rule_group_records(group_rows, group_rule_rows)
 
+    credential_to_db_ids: dict[tuple[str, str], list[int]] = {}
+    geotab_db_ids: set[int] = set()
+    for row in database_rows:
+        if row.get("connection_type") == "geotab":
+            key = (str(row["database_name"]).lower(), str(row["username"]).lower())
+            credential_to_db_ids.setdefault(key, []).append(int(row["id"]))
+            geotab_db_ids.add(int(row["id"]))
+
+    db_id_to_siblings: dict[int, list[int]] = {}
+    for sibling_ids in credential_to_db_ids.values():
+        for db_id in sibling_ids:
+            db_id_to_siblings[db_id] = sibling_ids
+
+    def _merged_rules(db_id: int) -> list[GeotabRuleRecord]:
+        if db_id not in geotab_db_ids:
+            return rules_by_database.get(db_id, [])
+        seen_rule_ids: set[str] = set()
+        merged: list[GeotabRuleRecord] = []
+        for sibling_id in db_id_to_siblings.get(db_id, [db_id]):
+            for rule in rules_by_database.get(sibling_id, []):
+                if rule.rule_id not in seen_rule_ids:
+                    seen_rule_ids.add(rule.rule_id)
+                    merged.append(rule)
+        return sorted(merged, key=lambda r: r.name.lower())
+
+    def _merged_groups(db_id: int) -> list[GeotabRuleGroupRecord]:
+        if db_id not in geotab_db_ids:
+            return groups_by_database.get(db_id, [])
+        seen_group_ids: set[int] = set()
+        merged: list[GeotabRuleGroupRecord] = []
+        for sibling_id in db_id_to_siblings.get(db_id, [db_id]):
+            for group in groups_by_database.get(sibling_id, []):
+                if group.id not in seen_group_ids:
+                    seen_group_ids.add(group.id)
+                    merged.append(group)
+        return sorted(merged, key=lambda g: (g.motor_name.lower(), g.name.lower(), g.id))
+
     databases_by_customer: dict[int, list[CustomerDatabaseRecord]] = {}
     for row in database_rows:
         db_id = int(row["id"])
         record = CustomerDatabaseRecord(
             **row,
-            rules=rules_by_database.get(db_id, []),
-            rule_groups=groups_by_database.get(db_id, []),
+            rules=_merged_rules(db_id),
+            rule_groups=_merged_groups(db_id),
         )
         databases_by_customer.setdefault(record.customer_id, []).append(record)
 
@@ -1444,20 +1493,47 @@ def update_customer_database(
     return CustomerDatabaseRecord(**row, rules=rules, rule_groups=rule_groups)
 
 
+def _sibling_database_ids(conn: psycopg.Connection, database_id: int) -> list[int]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.id
+            FROM customer_databases s
+            INNER JOIN customer_databases origin
+                ON origin.id = %s
+            WHERE s.database_name = origin.database_name
+              AND s.username = origin.username
+              AND s.connection_type = 'geotab'
+              AND origin.connection_type = 'geotab';
+            """,
+            (database_id,),
+        )
+        rows = cur.fetchall()
+    return [int(r["id"]) for r in rows] if rows else [database_id]
+
+
 def _list_rules_for_database(database_id: int) -> list[GeotabRuleRecord]:
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
+        sibling_ids = _sibling_database_ids(conn, database_id)
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, database_id, name, rule_id, created_at FROM geotab_rules WHERE database_id = %s ORDER BY name ASC;",
-                (database_id,),
+                "SELECT id, database_id, name, rule_id, created_at FROM geotab_rules WHERE database_id = ANY(%s) ORDER BY name ASC;",
+                (sibling_ids,),
             )
-            return [GeotabRuleRecord(**r) for r in cur.fetchall()]
+            seen: set[str] = set()
+            results: list[GeotabRuleRecord] = []
+            for r in cur.fetchall():
+                if r["rule_id"] not in seen:
+                    seen.add(r["rule_id"])
+                    results.append(GeotabRuleRecord(**r))
+            return results
 
 
 def _list_rule_groups_for_database(database_id: int) -> list[GeotabRuleGroupRecord]:
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
+        sibling_ids = _sibling_database_ids(conn, database_id)
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1474,10 +1550,10 @@ def _list_rule_groups_for_database(database_id: int) -> list[GeotabRuleGroupReco
                 FROM geotab_rule_groups grg
                 INNER JOIN motor_catalog mc
                     ON mc.id = grg.motor_id
-                WHERE grg.database_id = %s
+                WHERE grg.database_id = ANY(%s)
                 ORDER BY mc.engine_name ASC, grg.name ASC;
                 """,
-                (database_id,),
+                (sibling_ids,),
             )
             group_rows = cur.fetchall()
 
@@ -1503,7 +1579,10 @@ def _list_rule_groups_for_database(database_id: int) -> list[GeotabRuleGroupReco
             group_rule_rows = cur.fetchall()
 
     groups_by_database = _build_rule_group_records(group_rows, group_rule_rows)
-    return groups_by_database.get(database_id, [])
+    merged: list[GeotabRuleGroupRecord] = []
+    for db_id in sibling_ids:
+        merged.extend(groups_by_database.get(db_id, []))
+    return sorted(merged, key=lambda g: (g.motor_name.lower(), g.name.lower(), g.id))
 
 
 def _get_rule_group_record(group_id: int) -> GeotabRuleGroupRecord:
@@ -1686,15 +1765,16 @@ def create_geotab_rule_group(
             if motor_row is None:
                 raise ValueError("El motor seleccionado no existe.")
 
+            sibling_ids_for_rules = _sibling_database_ids(conn, database_id)
             cur.execute(
                 """
                 SELECT id, name, rule_id
                 FROM geotab_rules
-                WHERE database_id = %s
+                WHERE database_id = ANY(%s)
                   AND id = ANY(%s)
                 ORDER BY name ASC;
                 """,
-                (database_id, unique_rule_record_ids),
+                (sibling_ids_for_rules, unique_rule_record_ids),
             )
             rule_rows = cur.fetchall()
             if len(rule_rows) != len(unique_rule_record_ids):
@@ -1721,25 +1801,62 @@ def create_geotab_rule_group(
 
             group_name = normalized_name or str(motor_row["engine_name"]).strip()
 
-        with conn.cursor() as cur:
+            sibling_ids = _sibling_database_ids(conn, database_id)
             cur.execute(
                 """
-                INSERT INTO geotab_rule_groups (database_id, motor_id, name, match_mode)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id;
+                SELECT id
+                FROM geotab_rule_groups
+                WHERE motor_id = %s
+                  AND database_id = ANY(%s)
+                ORDER BY created_at ASC;
                 """,
-                (database_id, payload.motor_id, group_name, normalized_match_mode),
+                (payload.motor_id, sibling_ids),
             )
-            inserted = cur.fetchone()
-            if inserted is None:
-                raise RuntimeError("No se pudo crear el grupo de reglas.")
+            existing_groups = cur.fetchall()
 
-            group_id = int(inserted["id"])
+        with conn.cursor() as cur:
+            if existing_groups:
+                group_id = int(existing_groups[0]["id"])
+                if normalized_match_mode:
+                    cur.execute(
+                        "UPDATE geotab_rule_groups SET match_mode = %s, updated_at = NOW() WHERE id = %s;",
+                        (normalized_match_mode, group_id),
+                    )
+                # Consolidate duplicate groups for same motor into the first one
+                for duplicate in existing_groups[1:]:
+                    dup_id = int(duplicate["id"])
+                    cur.execute(
+                        """
+                        UPDATE geotab_rule_group_rules
+                        SET group_id = %s
+                        WHERE group_id = %s
+                          AND geotab_rule_id NOT IN (
+                              SELECT geotab_rule_id FROM geotab_rule_group_rules WHERE group_id = %s
+                          );
+                        """,
+                        (group_id, dup_id, group_id),
+                    )
+                    cur.execute("DELETE FROM geotab_rule_groups WHERE id = %s;", (dup_id,))
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO geotab_rule_groups (database_id, motor_id, name, match_mode)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id;
+                    """,
+                    (database_id, payload.motor_id, group_name, normalized_match_mode),
+                )
+                inserted = cur.fetchone()
+                if inserted is None:
+                    raise RuntimeError("No se pudo crear el grupo de reglas.")
+                group_id = int(inserted["id"])
+
             for rule_record_id in unique_rule_record_ids:
                 cur.execute(
                     """
                     INSERT INTO geotab_rule_group_rules (group_id, geotab_rule_id)
-                    VALUES (%s, %s);
+                    VALUES (%s, %s)
+                    ON CONFLICT DO NOTHING;
                     """,
                     (group_id, rule_record_id),
                 )

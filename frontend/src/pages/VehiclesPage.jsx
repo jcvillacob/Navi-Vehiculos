@@ -37,6 +37,7 @@ export default function VehiclesPage() {
   const [refreshingPlates, setRefreshingPlates] = useState(new Set());
   const [filterClient, setFilterClient] = useState("");
   const [filterMotor, setFilterMotor] = useState("");
+  const [filterDatabase, setFilterDatabase] = useState("");
   const { loading, vehicles, error, search, setSearch, loadVehicles } = useVehicleAssignments();
   const { customers, loading: customersLoading } = useCustomersCatalog();
   const { toasts, pushToast } = useToasts();
@@ -46,22 +47,37 @@ export default function VehiclesPage() {
   }, [error, pushToast]);
 
   const clientOptions = useMemo(() => {
-    const subset = filterMotor ? vehicles.filter((v) => v.engine_name === filterMotor) : vehicles;
+    let subset = vehicles;
+    if (filterMotor) subset = subset.filter((v) => v.engine_name === filterMotor);
+    if (filterDatabase) subset = subset.filter((v) => v.database_name === filterDatabase);
     const names = new Set();
     for (const v of subset) {
       if (v.client_name) names.add(v.client_name);
     }
     return [...names].sort((a, b) => a.localeCompare(b));
-  }, [vehicles, filterMotor]);
+  }, [vehicles, filterMotor, filterDatabase]);
 
   const motorOptions = useMemo(() => {
-    const subset = filterClient ? vehicles.filter((v) => v.client_name === filterClient) : vehicles;
+    let subset = vehicles;
+    if (filterClient) subset = subset.filter((v) => v.client_name === filterClient);
+    if (filterDatabase) subset = subset.filter((v) => v.database_name === filterDatabase);
     const names = new Set();
     for (const v of subset) {
       if (v.engine_name) names.add(v.engine_name);
     }
     return [...names].sort((a, b) => a.localeCompare(b));
-  }, [vehicles, filterClient]);
+  }, [vehicles, filterClient, filterDatabase]);
+
+  const databaseOptions = useMemo(() => {
+    let subset = vehicles;
+    if (filterClient) subset = subset.filter((v) => v.client_name === filterClient);
+    if (filterMotor) subset = subset.filter((v) => v.engine_name === filterMotor);
+    const names = new Set();
+    for (const v of subset) {
+      if (v.database_name) names.add(v.database_name);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [vehicles, filterClient, filterMotor]);
 
   useEffect(() => {
     if (filterClient && !clientOptions.includes(filterClient)) setFilterClient("");
@@ -71,6 +87,10 @@ export default function VehiclesPage() {
     if (filterMotor && !motorOptions.includes(filterMotor)) setFilterMotor("");
   }, [motorOptions, filterMotor]);
 
+  useEffect(() => {
+    if (filterDatabase && !databaseOptions.includes(filterDatabase)) setFilterDatabase("");
+  }, [databaseOptions, filterDatabase]);
+
   const filteredVehicles = useMemo(() => {
     let result = vehicles;
     if (filterClient) {
@@ -79,14 +99,19 @@ export default function VehiclesPage() {
     if (filterMotor) {
       result = result.filter((v) => v.engine_name === filterMotor);
     }
+    if (filterDatabase) {
+      result = result.filter((v) => v.database_name === filterDatabase);
+    }
     return result;
-  }, [vehicles, filterClient, filterMotor]);
+  }, [vehicles, filterClient, filterMotor, filterDatabase]);
 
   const summary = useMemo(() => {
     const registered = filteredVehicles.filter((vehicle) => vehicle.engine_name).length;
+    const withRules = filteredVehicles.filter((vehicle) => vehicle.has_motor_rules).length;
     return {
       total: filteredVehicles.length,
-      registered
+      registered,
+      withRules
     };
   }, [filteredVehicles]);
 
@@ -94,6 +119,7 @@ export default function VehiclesPage() {
     setSearch("");
     setFilterClient("");
     setFilterMotor("");
+    setFilterDatabase("");
   };
 
   const handleUpdateVehicle = async (payload) => {
@@ -168,6 +194,12 @@ export default function VehiclesPage() {
           <strong>{summary.registered}</strong>
           <p>Placas con un motor visible ya registrado</p>
         </article>
+
+        <article className="card metric-card">
+          <span className="eyebrow">Con reglas</span>
+          <strong>{summary.withRules}</strong>
+          <p>Vehiculos con reglas Geotab configuradas</p>
+        </article>
       </section>
 
       <section className="card vehicles-panel">
@@ -217,6 +249,20 @@ export default function VehiclesPage() {
             </select>
           </div>
 
+          <div className="form-field">
+            <label htmlFor="vehicles-filter-database">Database</label>
+            <select
+              id="vehicles-filter-database"
+              value={filterDatabase}
+              onChange={(event) => setFilterDatabase(event.target.value)}
+            >
+              <option value="">Todas</option>
+              {databaseOptions.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </div>
+
           <div className="actions-row vehicles-filter-actions">
             <button type="button" className="button-secondary button-sm" onClick={handleClear} disabled={loading}>
               Limpiar
@@ -255,6 +301,7 @@ export default function VehiclesPage() {
                   <th>TEC#</th>
                   <th>Cliente</th>
                   <th>Database</th>
+                  <th>Reglas</th>
                   <th>Acciones</th>
                   <th>Adjuntos</th>
                 </tr>
@@ -293,6 +340,12 @@ export default function VehiclesPage() {
                     <td data-label="TEC#">{vehicle.technical_number}</td>
                     <td data-label="Cliente">{vehicle.client_name || "Sin cliente"}</td>
                     <td data-label="Database">{vehicle.database_name || "Sin database"}</td>
+                    <td data-label="Reglas">
+                      <span
+                        className={`rules-dot ${vehicle.has_motor_rules ? "rules-dot-active" : "rules-dot-inactive"}`}
+                        title={vehicle.has_motor_rules ? "Motor con reglas configuradas" : "Sin reglas"}
+                      />
+                    </td>
                     <td data-label="Acciones">
                       <div className="actions-row vehicles-row-actions">
                         <button
