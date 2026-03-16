@@ -1,8 +1,33 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
+
+
+class RecentMotorRecord(BaseModel):
+    id: int
+    engine_name: str
+    technical_number: str
+    created_at: datetime
+
+
+class RecentVehicleRecord(BaseModel):
+    plate: str
+    client_name: str | None = None
+    engine_name: str | None = None
+    updated_at: datetime
+
+
+class DashboardSummary(BaseModel):
+    motors_count: int = 0
+    vehicles_count: int = 0
+    vehicles_without_motor: int = 0
+    customers_count: int = 0
+    databases_count: int = 0
+    recent_motors: list[RecentMotorRecord] = Field(default_factory=list)
+    recent_vehicles: list[RecentVehicleRecord] = Field(default_factory=list)
 
 
 class RegisteredMotorSummary(BaseModel):
@@ -66,6 +91,10 @@ class VehicleLookupResponse(BaseModel):
 class MotorCatalogUpsertRequest(BaseModel):
     technical_number: str = Field(..., min_length=1, description="Numero tecnico de motor")
     engine_name: str = Field(..., min_length=1, description="Nombre del motor")
+
+
+class MotorUpdateRequest(BaseModel):
+    engine_name: str = Field(..., min_length=1, description="Nuevo nombre del motor")
 
 
 class MotorAttachmentRecord(BaseModel):
@@ -175,6 +204,80 @@ class CustomerDatabaseUpdateRequest(BaseModel):
     )
 
 
+class GeotabRuleCreateRequest(BaseModel):
+    rule_id: str = Field(..., min_length=1, description="ID alfanumerico de la regla en Geotab")
+
+
+class GeotabRuleRecord(BaseModel):
+    id: int = Field(..., description="ID del registro")
+    database_id: int = Field(..., description="ID de la database Geotab asociada")
+    name: str = Field(..., description="Nombre descriptivo de la regla")
+    rule_id: str = Field(..., description="ID alfanumerico de la regla en Geotab")
+    created_at: datetime = Field(..., description="Fecha de creacion")
+
+
+class GeotabRuleGroupRuleRecord(BaseModel):
+    rule_record_id: int = Field(..., description="ID del registro local de la regla")
+    name: str = Field(..., description="Nombre visible de la regla")
+    rule_id: str = Field(..., description="ID alfanumerico de la regla en Geotab")
+
+
+class GeotabRuleGroupCreateRequest(BaseModel):
+    motor_id: int = Field(..., gt=0, description="ID del motor asociado al grupo")
+    name: str | None = Field(default=None, description="Nombre opcional del grupo")
+    match_mode: str = Field(
+        default="all",
+        description="Modo de coincidencia: 'all' para todas o 'any' para cualquiera",
+    )
+    rule_record_ids: list[int] = Field(
+        default_factory=list,
+        description="IDs de reglas locales incluidas en el grupo",
+    )
+
+
+class GeotabRuleGroupRecord(BaseModel):
+    id: int = Field(..., description="ID del grupo")
+    database_id: int = Field(..., description="ID de la database Geotab asociada")
+    motor_id: int = Field(..., description="ID del motor asociado")
+    motor_name: str = Field(..., description="Nombre visible del motor")
+    technical_number: str = Field(..., description="Technical Engine Configuration # del motor")
+    name: str = Field(..., description="Nombre visible del grupo")
+    match_mode: str = Field(..., description="Modo de coincidencia: all | any")
+    rules: list[GeotabRuleGroupRuleRecord] = Field(
+        default_factory=list,
+        description="Reglas incluidas en el grupo",
+    )
+    created_at: datetime = Field(..., description="Fecha de creacion")
+    updated_at: datetime = Field(..., description="Fecha de ultima actualizacion")
+
+
+class GeotabRuleConditionNode(BaseModel):
+    kind: str = Field(..., description="Tipo de nodo visual: group | comparison | duration | leaf")
+    label: str = Field(..., description="Texto legible del nodo")
+    children: list["GeotabRuleConditionNode"] = Field(
+        default_factory=list,
+        description="Nodos hijos cuando aplique",
+    )
+
+
+class GeotabRuleInspection(BaseModel):
+    exists: bool = Field(..., description="Indica si la regla existe en Geotab al momento de consultar")
+    rule_id: str = Field(..., description="ID alfanumerico de la regla en Geotab")
+    name: str | None = Field(default=None, description="Nombre resuelto o snapshot guardado")
+    status: str = Field(default="Inexistente", description="Activa | Archivada/Desactivada | Inexistente")
+    type: str | None = Field(default=None, description="Predefinida | Personalizada")
+    groups_count: int = Field(default=0, description="Cantidad de grupos asociados")
+    comment: str | None = Field(default=None, description="Comentario visible de la regla")
+    headline: str = Field(default="", description="Resumen humano corto de la condicion")
+    facts: list[str] = Field(default_factory=list, description="Hechos/chips clave de la regla")
+    tree: GeotabRuleConditionNode | None = Field(
+        default=None,
+        description="Arbol tecnico legible de la condicion",
+    )
+    raw_condition: Any = Field(default=None, description="Condicion cruda devuelta por Geotab")
+    message: str | None = Field(default=None, description="Mensaje auxiliar para errores o fallback")
+
+
 class CustomerDatabaseRecord(BaseModel):
     id: int = Field(..., description="ID de la database del cliente")
     customer_id: int = Field(..., description="ID del cliente")
@@ -187,6 +290,13 @@ class CustomerDatabaseRecord(BaseModel):
     )
     access_url: str | None = Field(
         default=None, description="Enlace de acceso externo (solo para databases no-Geotab)"
+    )
+    rules: list[GeotabRuleRecord] = Field(
+        default_factory=list, description="Reglas Geotab asociadas (solo para tipo geotab)"
+    )
+    rule_groups: list[GeotabRuleGroupRecord] = Field(
+        default_factory=list,
+        description="Grupos de reglas asociados a motores (solo para tipo geotab)",
     )
     created_at: datetime = Field(..., description="Fecha de creacion")
     updated_at: datetime = Field(..., description="Fecha de actualizacion")
@@ -201,3 +311,6 @@ class CustomerRecord(BaseModel):
     )
     created_at: datetime = Field(..., description="Fecha de creacion")
     updated_at: datetime = Field(..., description="Fecha de actualizacion")
+
+
+GeotabRuleConditionNode.model_rebuild()

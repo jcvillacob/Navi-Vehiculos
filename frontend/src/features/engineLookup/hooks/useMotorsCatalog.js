@@ -4,6 +4,7 @@ import {
   createMotor,
   deleteMotorAttachment,
   listMotors,
+  updateMotor,
   updateMotorAttachment,
   uploadMotorAttachment
 } from "../../../api/vehicleApi";
@@ -54,12 +55,31 @@ export function useMotorsCatalog() {
     }
   };
 
+  const editMotor = async (motorId, payload) => {
+    setLoading(true);
+    setError("");
+    try {
+      const updated = await updateMotor(motorId, payload);
+      setMotors((prev) =>
+        prev.map((m) => (m.id === motorId ? updated : m))
+      );
+      return updated;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible actualizar el motor";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     loading,
     motors,
     error,
     loadMotors,
     registerMotor,
+    editMotor,
     uploadAttachment: async (motorId, payload) => {
       setLoading(true);
       setError("");

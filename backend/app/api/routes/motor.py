@@ -3,7 +3,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, HTTPException, Path, UploadFile, status
 from fastapi.responses import StreamingResponse
 
-from app.schemas.vehicle import MotorAttachmentRecord, MotorCatalogRecord, MotorCatalogUpsertRequest
+from app.schemas.vehicle import MotorAttachmentRecord, MotorCatalogRecord, MotorCatalogUpsertRequest, MotorUpdateRequest
 from app.services.motor_catalog import (
     create_motor,
     create_motor_attachment,
@@ -12,6 +12,7 @@ from app.services.motor_catalog import (
     list_motor_attachments,
     list_motors,
     migrate_local_files_to_minio,
+    update_motor,
     update_motor_attachment,
 )
 
@@ -29,6 +30,17 @@ def create_motor_record(payload: MotorCatalogUpsertRequest) -> MotorCatalogRecor
         return create_motor(payload)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/{motor_id}", response_model=MotorCatalogRecord)
+def update_motor_record(
+    payload: MotorUpdateRequest,
+    motor_id: int = Path(..., ge=1, description="ID del motor"),
+) -> MotorCatalogRecord:
+    try:
+        return update_motor(motor_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/{motor_id}/attachments", response_model=list[MotorAttachmentRecord])

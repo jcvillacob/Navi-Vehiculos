@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import re
+from typing import Any
 
 import mygeotab
 
@@ -19,6 +21,13 @@ def build_client(cfg: GeotabConfig):
     return client
 
 
+def _normalize_rule_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
 def _normalize_plate(value: str | None) -> str | None:
     if not value:
         return None
@@ -35,9 +44,21 @@ def _normalize_vin(value: str | None) -> str | None:
     return normalized or None
 
 
-def _search_devices(client, search: dict | None = None) -> list[dict]:
-    response = client.call("Get", typeName="Device", search=search or {})
+def _search_entities(client, type_name: str, search: dict | None = None) -> list[dict]:
+    response = client.call("Get", typeName=type_name, search=search or {})
     return response or []
+
+
+def _search_devices(client, search: dict | None = None) -> list[dict]:
+    return _search_entities(client, "Device", search)
+
+
+def _search_rules(client, search: dict | None = None) -> list[dict]:
+    return _search_entities(client, "Rule", search)
+
+
+def _search_diagnostics(client, search: dict | None = None) -> list[dict]:
+    return _search_entities(client, "Diagnostic", search)
 
 
 def _device_matches_plate(device: dict, plate: str) -> bool:
@@ -112,6 +133,309 @@ def extract_vin(device: dict) -> str | None:
         if value:
             return str(value).strip()
     return None
+
+
+def get_rule_by_id_with_client(client, rule_id: str) -> dict | None:
+    normalized_rule_id = _normalize_rule_id(rule_id)
+    if not normalized_rule_id:
+        return None
+    rules = _search_rules(client, {"id": normalized_rule_id})
+    if not rules:
+        return None
+    return rules[0]
+
+
+def get_rule_by_id(cfg: GeotabConfig, rule_id: str) -> dict | None:
+    client = build_client(cfg)
+    return get_rule_by_id_with_client(client, rule_id)
+
+
+def _parse_geotab_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            parsed = datetime.strptime(normalized[:19], "%Y-%m-%dT%H:%M:%S")
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    return datetime(2050, 1, 1, tzinfo=timezone.utc)
+
+
+def _rule_status(rule: dict[str, Any]) -> str:
+    active_to = _parse_geotab_datetime(rule.get("activeTo"))
+    return "Activa" if active_to > datetime.now(timezone.utc) else "Archivada/Desactivada"
+
+
+def _humanize_token(token: str | None) -> str:
+    if not token:
+        return "Condicion"
+    cleaned = str(token).replace("_", " ").strip()
+    spaced = re.sub(r"(?<!^)(?=[A-Z])", " ", cleaned).strip()
+    normalized = re.sub(r"\bUnit Of Measure\b", "", spaced, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bId\b", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip(" -/")
+    if not normalized:
+        return "Condicion"
+    lowered = normalized.lower()
+    if lowered == "revolutions per minute":
+        return "RPM"
+    if lowered == "km h":
+        return "km/h"
+    return normalized[:1].upper() + normalized[1:]
+
+
+def _friendly_unit(unit: str | None) -> str | None:
+    if not unit:
+        return None
+    normalized = str(unit).strip()
+    if not normalized:
+        return None
+    if normalized == "km/h":
+        return normalized
+    return _humanize_token(normalized)
+
+
+def _comparison_symbol(condition_type: str | None) -> str | None:
+    return {
+        "IsValueMoreThan": ">",
+        "IsValueLessThan": "<",
+        "IsValueEqualTo": "=",
+        "IsValueMoreThanOrEqualTo": ">=",
+        "IsValueLessThanOrEqualTo": "<=",
+        "IsValueNotEqualTo": "!=",
+    }.get(condition_type or "")
+
+
+def _diagnostic_label(
+    client,
+    diagnostic_payload: dict[str, Any] | None,
+    diagnostic_cache: dict[str, str],
+) -> str:
+    if not isinstance(diagnostic_payload, dict):
+        return "Diagnostico"
+
+    diagnostic_id = _normalize_rule_id(diagnostic_payload.get("id"))
+    if diagnostic_id and diagnostic_id in diagnostic_cache:
+        return diagnostic_cache[diagnostic_id]
+
+    label: str | None = None
+    if diagnostic_id:
+        diagnostics = _search_diagnostics(client, {"id": diagnostic_id})
+        diagnostic = diagnostics[0] if diagnostics else None
+        if diagnostic:
+            for key in ("name", "title", "description"):
+                value = diagnostic.get(key)
+                if value:
+                    label = str(value).strip()
+                    break
+
+    if not label:
+        unit_of_measure = diagnostic_payload.get("unitOfMeasure")
+        if unit_of_measure:
+            label = _humanize_token(str(unit_of_measure).replace("UnitOfMeasure", ""))
+        elif diagnostic_id:
+            label = f"Diagnostico {diagnostic_id}"
+        else:
+            label = "Diagnostico"
+
+    if diagnostic_id:
+        diagnostic_cache[diagnostic_id] = label
+    return label
+
+
+def _condition_subject_label(
+    condition: dict[str, Any] | None,
+    client,
+    diagnostic_cache: dict[str, str],
+) -> str:
+    if not isinstance(condition, dict):
+        return "Condicion"
+
+    condition_type = condition.get("conditionType")
+    if condition_type == "Speed":
+        return "Velocidad"
+    if condition_type == "IsDriving":
+        return "Conduccion"
+    if condition_type == "FilterStatusDataByDiagnostic":
+        return _diagnostic_label(client, condition.get("diagnostic"), diagnostic_cache)
+    if condition_type in {"And", "Or"}:
+        return " / ".join(
+            _condition_subject_label(child, client, diagnostic_cache)
+            for child in condition.get("children", []) or []
+            if isinstance(child, dict)
+        ) or _humanize_token(condition_type)
+    return _humanize_token(condition_type)
+
+
+def _format_threshold(
+    subject_label: str,
+    symbol: str,
+    value: Any,
+    unit: str | None,
+) -> str:
+    if subject_label == "Conduccion" and symbol == ">" and value == 0:
+        return "Vehiculo conduciendo"
+
+    unit_suffix = f" {unit}" if unit else ""
+    return f"{subject_label} {symbol} {value}{unit_suffix}".strip()
+
+
+def _append_unique(target: list[str], value: str | None) -> None:
+    if not value:
+        return
+    if value not in target:
+        target.append(value)
+
+
+def _build_condition_node(
+    condition: dict[str, Any] | None,
+    *,
+    client,
+    diagnostic_cache: dict[str, str],
+) -> tuple[dict[str, Any] | None, list[str]]:
+    if not isinstance(condition, dict):
+        return None, []
+
+    condition_type = str(condition.get("conditionType") or "").strip()
+    raw_children = condition.get("children", []) or []
+    parsed_children: list[dict[str, Any]] = []
+    collected_facts: list[str] = []
+
+    for child in raw_children:
+        child_node, child_facts = _build_condition_node(
+            child,
+            client=client,
+            diagnostic_cache=diagnostic_cache,
+        )
+        if child_node is not None:
+            parsed_children.append(child_node)
+        for fact in child_facts:
+            _append_unique(collected_facts, fact)
+
+    if condition_type == "And":
+        return {
+            "kind": "group",
+            "label": "Todas las condiciones",
+            "children": parsed_children,
+        }, collected_facts
+
+    if condition_type == "Or":
+        return {
+            "kind": "group",
+            "label": "Cualquiera de estas condiciones",
+            "children": parsed_children,
+        }, collected_facts
+
+    symbol = _comparison_symbol(condition_type)
+    if symbol:
+        subject_condition = raw_children[0] if raw_children else None
+        subject_label = _condition_subject_label(subject_condition, client, diagnostic_cache)
+        unit = _friendly_unit(condition.get("unit"))
+        fact = _format_threshold(subject_label, symbol, condition.get("value"), unit)
+        _append_unique(collected_facts, fact)
+        return {
+            "kind": "comparison",
+            "label": fact,
+            "children": parsed_children,
+        }, collected_facts
+
+    if condition_type == "DurationLongerThan":
+        unit = _friendly_unit(condition.get("unit"))
+        label = f"Durante mas de {condition.get('value')}" + (f" {unit}" if unit else "")
+        _append_unique(collected_facts, label)
+        return {
+            "kind": "duration",
+            "label": label,
+            "children": parsed_children,
+        }, collected_facts
+
+    label = _condition_subject_label(condition, client, diagnostic_cache)
+    return {
+        "kind": "leaf",
+        "label": label,
+        "children": parsed_children,
+    }, collected_facts
+
+
+def _build_rule_headline(condition: dict[str, Any] | None, facts: list[str]) -> str:
+    if not facts:
+        return "Sin condicion visible para resumir."
+
+    if isinstance(condition, dict) and condition.get("conditionType") == "Or":
+        if len(facts) == 1:
+            return f"Se activa cuando se cumple {facts[0]}."
+        return "Se activa cuando se cumple cualquiera de estas condiciones: " + ", ".join(facts) + "."
+
+    if len(facts) == 1:
+        return f"Se activa cuando {facts[0]}."
+
+    if len(facts) == 2:
+        return f"Se activa cuando {facts[0]} y {facts[1]}."
+
+    return "Se activa cuando se cumplen estas condiciones: " + ", ".join(facts) + "."
+
+
+def build_rule_inspection_with_client(
+    client,
+    rule_id: str,
+    *,
+    fallback_name: str | None = None,
+    missing_message: str | None = None,
+) -> dict[str, Any]:
+    normalized_rule_id = _normalize_rule_id(rule_id) or ""
+    rule = get_rule_by_id_with_client(client, normalized_rule_id)
+    if not rule:
+        return {
+            "exists": False,
+            "rule_id": normalized_rule_id,
+            "name": fallback_name,
+            "status": "Inexistente",
+            "type": None,
+            "groups_count": 0,
+            "comment": None,
+            "headline": "No se encontro la regla en Geotab.",
+            "facts": [],
+            "tree": None,
+            "raw_condition": None,
+            "message": missing_message or "La regla no existe o ya no esta disponible en Geotab.",
+        }
+
+    diagnostic_cache: dict[str, str] = {}
+    raw_condition = rule.get("condition")
+    tree, facts = _build_condition_node(
+        raw_condition,
+        client=client,
+        diagnostic_cache=diagnostic_cache,
+    )
+    return {
+        "exists": True,
+        "rule_id": normalized_rule_id,
+        "name": rule.get("name"),
+        "status": _rule_status(rule),
+        "type": "Predefinida" if rule.get("baseType") == "Stock" else "Personalizada",
+        "groups_count": len(rule.get("groups", []) or []),
+        "comment": (rule.get("comment") or "").strip() or None,
+        "headline": _build_rule_headline(raw_condition, facts),
+        "facts": facts,
+        "tree": tree,
+        "raw_condition": raw_condition,
+        "message": None,
+    }
+
+
+def build_rule_inspection(cfg: GeotabConfig, rule_id: str, *, fallback_name: str | None = None) -> dict[str, Any]:
+    client = build_client(cfg)
+    return build_rule_inspection_with_client(client, rule_id, fallback_name=fallback_name)
 
 
 def get_vin_from_plate(plate: str, cfg: GeotabConfig) -> str | None:

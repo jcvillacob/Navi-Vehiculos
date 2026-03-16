@@ -3,6 +3,10 @@ import { useEffect, useState } from "react";
 import {
   createCustomer,
   createCustomerDatabase,
+  createGeotabRule,
+  createGeotabRuleGroup,
+  deleteGeotabRule,
+  deleteGeotabRuleGroup,
   listCustomers,
   updateCustomer,
   updateCustomerDatabase
@@ -123,6 +127,137 @@ export function useCustomersCatalog() {
     }
   };
 
+  const addGeotabRule = async (databaseId, customerId, payload) => {
+    setLoading(true);
+    setError("");
+    try {
+      const created = await createGeotabRule(databaseId, payload);
+      setCustomers((prev) =>
+        prev.map((customer) =>
+          customer.id === customerId
+            ? {
+                ...customer,
+                databases: customer.databases.map((db) =>
+                  db.id === databaseId
+                    ? { ...db, rules: [...db.rules, created].sort((a, b) => a.name.localeCompare(b.name)) }
+                    : db
+                )
+              }
+            : customer
+        )
+      );
+      return created;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible crear la regla";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addGeotabRuleGroup = async (databaseId, customerId, payload) => {
+    setLoading(true);
+    setError("");
+    try {
+      const created = await createGeotabRuleGroup(databaseId, payload);
+      setCustomers((prev) =>
+        prev.map((customer) =>
+          customer.id === customerId
+            ? {
+                ...customer,
+                databases: customer.databases.map((db) =>
+                  db.id === databaseId
+                    ? {
+                        ...db,
+                        rule_groups: [...(db.rule_groups || []), created].sort((a, b) =>
+                          a.motor_name.localeCompare(b.motor_name) || a.name.localeCompare(b.name)
+                        )
+                      }
+                    : db
+                )
+              }
+            : customer
+        )
+      );
+      return created;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible crear el grupo de reglas";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const removeGeotabRule = async (ruleId, databaseId, customerId) => {
+    setLoading(true);
+    setError("");
+    try {
+      await deleteGeotabRule(ruleId);
+      setCustomers((prev) =>
+        prev.map((customer) =>
+          customer.id === customerId
+            ? {
+                ...customer,
+                databases: customer.databases.map((db) =>
+                  db.id === databaseId
+                    ? {
+                        ...db,
+                        rules: db.rules.filter((r) => r.id !== ruleId),
+                        rule_groups: (db.rule_groups || [])
+                          .map((group) => ({
+                            ...group,
+                            rules: (group.rules || []).filter((rule) => rule.rule_record_id !== ruleId)
+                          }))
+                          .filter((group) => (group.rules || []).length > 0)
+                      }
+                    : db
+                )
+              }
+            : customer
+        )
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible eliminar la regla";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const removeGeotabRuleGroup = async (groupId, databaseId, customerId) => {
+    setLoading(true);
+    setError("");
+    try {
+      await deleteGeotabRuleGroup(groupId);
+      setCustomers((prev) =>
+        prev.map((customer) =>
+          customer.id === customerId
+            ? {
+                ...customer,
+                databases: customer.databases.map((db) =>
+                  db.id === databaseId
+                    ? {
+                        ...db,
+                        rule_groups: (db.rule_groups || []).filter((group) => group.id !== groupId)
+                      }
+                    : db
+                )
+              }
+            : customer
+        )
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible eliminar el grupo de reglas";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     loading,
     customers,
@@ -131,6 +266,10 @@ export function useCustomersCatalog() {
     registerCustomer,
     editCustomer,
     registerCustomerDatabase,
-    editCustomerDatabase
+    editCustomerDatabase,
+    addGeotabRule,
+    addGeotabRuleGroup,
+    removeGeotabRule,
+    removeGeotabRuleGroup
   };
 }

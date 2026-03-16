@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 function DataItem({ label, value }) {
   return (
@@ -38,12 +38,14 @@ function GeotabBadge({ label, status }) {
   );
 }
 
-export default function LookupDetails({ result }) {
-  const [showFullInfo, setShowFullInfo] = useState(false);
-
-  useEffect(() => {
-    setShowFullInfo(false);
-  }, [result?.lookup_value]);
+export default function LookupDetails({
+  result,
+  loading,
+  canRegister,
+  canConfigure,
+  onAction
+}) {
+  const [showSources, setShowSources] = useState(false);
 
   if (!result) {
     return null;
@@ -52,53 +54,112 @@ export default function LookupDetails({ result }) {
   const fenixEntries = Object.entries(result.source_details?.fenix || {});
   const cumminsEntries = Object.entries(result.source_details?.cummins || {});
 
-  return (
-    <section className="card detail-card">
-      <header className="section-heading">
-        <div>
-          <span className="eyebrow">Resultado</span>
-          <h3>Datos de la consulta</h3>
-        </div>
+  const isOk = result.status === "ok";
+  const hasMotor = Boolean(result.registered_motor);
+  const statusClass = isOk
+    ? hasMotor
+      ? "status-ok"
+      : "status-partial"
+    : `status-${result.status}`;
+  const statusLabel = isOk
+    ? hasMotor
+      ? "Registrado"
+      : "Sin catalogar"
+    : result.status;
 
+  const actionLabel = !isOk
+    ? null
+    : !hasMotor
+      ? "Registrar y asignar"
+      : result.assigned_database?.client_name
+        ? "Editar asignacion"
+        : "Asignar cliente";
+
+  return (
+    <section className="card lookup-result-card">
+      {/* ── Header: badges + status ── */}
+      <header className="lookup-result-header">
         <div className="detail-status-group">
           <GeotabBadge label="Navitrans" status={result.geotab_status} />
           <GeotabBadge
             label="Cliente"
             status={result.geotab_customer_status || "not_applicable"}
           />
-          <span className={`status status-${result.status}`}>{result.status}</span>
+          <span className={`status ${statusClass}`}>{statusLabel}</span>
         </div>
       </header>
 
-      <div className="data-grid">
-        <DataItem label="Tipo de busqueda" value={result.lookup_type === "vin" ? "VIN" : "Placa"} />
-        <DataItem label="Valor consultado" value={result.lookup_value} />
-        <DataItem label="Placa" value={result.plate} />
-        <DataItem label="VIN" value={result.vin} />
-        <DataItem label="Numero de motor" value={result.engine_number} />
-        <DataItem
-          label="Technical Engine Configuration #"
-          value={result.technical_engine_configuration}
-        />
-        <DataItem label="N.o CPL" value={result.cpl} />
-        <DataItem
-          label="Motor registrado"
-          value={result.registered_motor?.engine_name || "No registrado"}
-        />
-        <DataItem
-          label="Cliente"
-          value={result.assigned_database?.client_name || "Sin cliente"}
-        />
-        <DataItem
-          label="Database"
-          value={result.assigned_database?.database_name || "Sin database"}
-        />
-        <DataItem
-          label="Usuario DB"
-          value={result.assigned_database?.database_username || "Sin usuario"}
-        />
-      </div>
+      {/* ── Identificacion ── */}
+      <section className="lookup-result-section">
+        <span className="lookup-section-label">Identificacion</span>
+        <div className="data-grid">
+          <DataItem label="Placa" value={result.plate} />
+          <DataItem label="VIN" value={result.vin} />
+          <DataItem label="ESN" value={result.engine_number} />
+          <DataItem label="Busqueda" value={`${result.lookup_type === "vin" ? "VIN" : "Placa"}: ${result.lookup_value}`} />
+        </div>
+      </section>
 
+      {/* ── Motor ── */}
+      <section className="lookup-result-section">
+        <span className="lookup-section-label">Motor</span>
+        <div className="data-grid">
+          <DataItem label="TEC#" value={result.technical_engine_configuration} />
+          <DataItem label="CPL" value={result.cpl} />
+          <DataItem
+            label="Motor registrado"
+            value={result.registered_motor?.engine_name || "No registrado"}
+          />
+        </div>
+      </section>
+
+      {/* ── Asignacion ── */}
+      <section className="lookup-result-section">
+        <span className="lookup-section-label">Asignacion</span>
+        <div className="data-grid">
+          <DataItem
+            label="Cliente"
+            value={result.assigned_database?.client_name || "Sin cliente"}
+          />
+          <DataItem
+            label="Database"
+            value={result.assigned_database?.database_name || "Sin database"}
+          />
+          <DataItem
+            label="Usuario DB"
+            value={result.assigned_database?.database_username || "Sin usuario"}
+          />
+        </div>
+      </section>
+
+      {/* ── Action ── */}
+      {isOk && actionLabel ? (
+        <div className="lookup-result-action">
+          {hasMotor ? (
+            <div className="motor-chip">
+              <strong>{result.registered_motor.engine_name}</strong>
+              <span>{result.registered_motor.technical_number}</span>
+            </div>
+          ) : (
+            <p className="support-copy">
+              No existe motor registrado para este TEC#.
+            </p>
+          )}
+          <button
+            type="button"
+            disabled={(!canRegister && !canConfigure) || loading}
+            onClick={onAction}
+          >
+            {actionLabel}
+          </button>
+        </div>
+      ) : !isOk ? (
+        <p className="support-copy">
+          No se encontraron datos suficientes para clasificar este vehiculo.
+        </p>
+      ) : null}
+
+      {/* ── Message + warnings ── */}
       <p className="support-copy">{result.message}</p>
 
       {result.warnings?.length ? (
@@ -111,15 +172,16 @@ export default function LookupDetails({ result }) {
         </div>
       ) : null}
 
+      {/* ── Expandable sources ── */}
       <button
         type="button"
         className="button-secondary button-sm expand-button"
-        onClick={() => setShowFullInfo((current) => !current)}
+        onClick={() => setShowSources((current) => !current)}
       >
-        {showFullInfo ? "Ocultar info completa" : "Ver info completa"}
+        {showSources ? "Ocultar fuentes" : "Ver fuentes"}
       </button>
 
-      {showFullInfo ? (
+      {showSources ? (
         <section className="source-panels-grid">
           <article className="source-panel">
             <header className="source-panel-header">

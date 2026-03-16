@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+import FileDropzone from "../../../components/FileDropzone";
+
 function DataItem({ label, value }) {
   return (
     <div className="data-item">
@@ -117,7 +119,7 @@ export default function VehicleAssignmentModal({
   };
 
   return (
-    <div className="modal-overlay" role="presentation">
+    <div className="modal-overlay" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <section className="card modal-card" role="dialog" aria-modal="true" aria-label={title}>
         <header className="modal-header">
           <div className="modal-heading">
@@ -205,29 +207,18 @@ export default function VehicleAssignmentModal({
                 />
               </div>
 
-              <label className="attachment-dropzone" htmlFor="assign-motor-attachment">
-                <span className="attachment-dropzone-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 16V4" />
-                    <path d="m7 9 5-5 5 5" />
-                    <path d="M4 20h16" />
-                  </svg>
-                </span>
-                <strong>{attachmentFile ? attachmentFile.name : "Selecciona una imagen o PDF"}</strong>
-                <span>Curvas de torque, potencia o respaldo tecnico. Opcional.</span>
-                <input
-                  id="assign-motor-attachment"
-                  type="file"
-                  accept="application/pdf,image/png,image/jpeg,image/webp"
-                  onChange={(event) => {
-                    const nextFile = event.target.files?.[0] || null;
-                    setAttachmentFile(nextFile);
-                    if (!nextFile) {
-                      setAttachmentCpl(vehicle?.cpl || "");
-                    }
-                  }}
-                />
-              </label>
+              <FileDropzone
+                id="assign-motor-attachment"
+                file={attachmentFile}
+                onChange={(nextFile) => {
+                  setAttachmentFile(nextFile);
+                  if (!nextFile) {
+                    setAttachmentCpl(vehicle?.cpl || "");
+                  }
+                }}
+                label="Arrastra o selecciona una imagen o PDF"
+                hint="Curvas de torque, potencia o respaldo tecnico. Opcional."
+              />
 
               {attachmentFile ? (
                 <div className="form-field">

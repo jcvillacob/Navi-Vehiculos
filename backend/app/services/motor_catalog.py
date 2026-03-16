@@ -8,6 +8,8 @@ import psycopg
 from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 
+from app.clients.geotab_client import build_rule_inspection
+from app.core.config import GeotabConfig
 from app.schemas.vehicle import (
     AssignedDatabaseSummary,
     CustomerCreateRequest,
@@ -16,9 +18,19 @@ from app.schemas.vehicle import (
     CustomerDatabaseUpdateRequest,
     CustomerRecord,
     CustomerUpdateRequest,
+    DashboardSummary,
+    GeotabRuleGroupCreateRequest,
+    GeotabRuleGroupRecord,
+    GeotabRuleGroupRuleRecord,
+    GeotabRuleCreateRequest,
+    GeotabRuleInspection,
+    GeotabRuleRecord,
     MotorAttachmentRecord,
     MotorCatalogRecord,
     MotorCatalogUpsertRequest,
+    MotorUpdateRequest,
+    RecentMotorRecord,
+    RecentVehicleRecord,
     RegisteredMotorSummary,
     VehicleDatabaseAssignmentRequest,
     VehicleAssignmentRecord,
@@ -28,7 +40,6 @@ from app.services.storage import (
     download_file,
     upload_file,
 )
-
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -52,6 +63,13 @@ def _normalize_cpl(value: str | None) -> str | None:
     return _normalize_optional_text(value)
 
 
+def _normalize_match_mode(value: str | None) -> str:
+    normalized = (value or "all").strip().lower()
+    if normalized not in ("all", "any"):
+        raise ValueError("El modo de coincidencia debe ser 'all' o 'any'.")
+    return normalized
+
+
 def _normalize_motor_payload(payload: MotorCatalogUpsertRequest) -> dict[str, Any]:
     return {
         "technical_number": payload.technical_number.strip(),
@@ -67,6 +85,47 @@ def _build_attachment_record(row: dict[str, Any]) -> MotorAttachmentRecord:
     payload = dict(row)
     payload["download_url"] = _attachment_download_url(int(payload["id"]))
     return MotorAttachmentRecord(**payload)
+
+
+def _build_rule_group_records(
+    group_rows: list[dict[str, Any]],
+    group_rule_rows: list[dict[str, Any]],
+) -> dict[int, list[GeotabRuleGroupRecord]]:
+    rules_by_group_id: dict[int, list[GeotabRuleGroupRuleRecord]] = {}
+    for row in group_rule_rows:
+        group_id = int(row["group_id"])
+        rules_by_group_id.setdefault(group_id, []).append(
+            GeotabRuleGroupRuleRecord(
+                rule_record_id=int(row["rule_record_id"]),
+                name=str(row["name"]),
+                rule_id=str(row["rule_id"]),
+            )
+        )
+
+    groups_by_database_id: dict[int, list[GeotabRuleGroupRecord]] = {}
+    for row in group_rows:
+        group_id = int(row["id"])
+        record = GeotabRuleGroupRecord(
+            id=group_id,
+            database_id=int(row["database_id"]),
+            motor_id=int(row["motor_id"]),
+            motor_name=str(row["motor_name"]),
+            technical_number=str(row["technical_number"]),
+            name=str(row["name"]),
+            match_mode=str(row["match_mode"]),
+            rules=rules_by_group_id.get(group_id, []),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        groups_by_database_id.setdefault(record.database_id, []).append(record)
+
+    for database_id, records in groups_by_database_id.items():
+        groups_by_database_id[database_id] = sorted(
+            records,
+            key=lambda record: (record.motor_name.lower(), record.name.lower(), record.id),
+        )
+
+    return groups_by_database_id
 
 
 def _list_attachments_by_motor_ids(
@@ -329,6 +388,55 @@ def _ensure_motor_tables(conn: psycopg.Connection) -> None:
             ADD COLUMN IF NOT EXISTS access_url TEXT NULL;
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS geotab_rules (
+                id BIGSERIAL PRIMARY KEY,
+                database_id BIGINT NOT NULL REFERENCES customer_databases(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                rule_id TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (database_id, rule_id)
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS geotab_rule_groups (
+                id BIGSERIAL PRIMARY KEY,
+                database_id BIGINT NOT NULL REFERENCES customer_databases(id) ON DELETE CASCADE,
+                motor_id BIGINT NOT NULL REFERENCES motor_catalog(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                match_mode TEXT NOT NULL DEFAULT 'all',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS geotab_rule_group_rules (
+                group_id BIGINT NOT NULL REFERENCES geotab_rule_groups(id) ON DELETE CASCADE,
+                geotab_rule_id BIGINT NOT NULL REFERENCES geotab_rules(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (group_id, geotab_rule_id)
+            );
+            """
+        )
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'uq_rule_one_group'
+                ) THEN
+                    ALTER TABLE geotab_rule_group_rules
+                    ADD CONSTRAINT uq_rule_one_group UNIQUE (geotab_rule_id);
+                END IF;
+            END $$;
+            """
+        )
 
 
 def list_motors() -> list[MotorCatalogRecord]:
@@ -411,6 +519,35 @@ def create_motor(payload: MotorCatalogUpsertRequest) -> MotorCatalogRecord:
     if row is None:
         raise RuntimeError("No se pudo crear el motor.")
     return MotorCatalogRecord(**row)
+
+
+def update_motor(motor_id: int, payload: MotorUpdateRequest) -> MotorCatalogRecord:
+    normalized_name = payload.engine_name.strip()
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM motor_catalog WHERE id = %s;", (motor_id,))
+            if cur.fetchone() is None:
+                raise ValueError("El motor no existe.")
+            cur.execute(
+                """
+                UPDATE motor_catalog
+                SET engine_name = %s, updated_at = NOW()
+                WHERE id = %s
+                RETURNING id, technical_number, engine_name,
+                          created_at, updated_at;
+                """,
+                (normalized_name, motor_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if row is None:
+        raise RuntimeError("No se pudo actualizar el motor.")
+
+    # Reload with full data (vehicle_count, attachments, cpls)
+    motors = list_motors()
+    return next(m for m in motors if m.id == motor_id)
 
 
 def list_motor_attachments(motor_id: int) -> list[MotorAttachmentRecord]:
@@ -1032,9 +1169,65 @@ def list_customers() -> list[CustomerRecord]:
             )
             database_rows = cur.fetchall()
 
+            cur.execute(
+                """
+                SELECT id, database_id, name, rule_id, created_at
+                FROM geotab_rules
+                ORDER BY database_id ASC, name ASC;
+                """
+            )
+            rule_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    grg.id,
+                    grg.database_id,
+                    grg.motor_id,
+                    mc.engine_name AS motor_name,
+                    mc.technical_number,
+                    grg.name,
+                    grg.match_mode,
+                    grg.created_at,
+                    grg.updated_at
+                FROM geotab_rule_groups grg
+                INNER JOIN motor_catalog mc
+                    ON mc.id = grg.motor_id
+                ORDER BY grg.database_id ASC, mc.engine_name ASC, grg.name ASC;
+                """
+            )
+            group_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    grgr.group_id,
+                    gr.id AS rule_record_id,
+                    gr.name,
+                    gr.rule_id
+                FROM geotab_rule_group_rules grgr
+                INNER JOIN geotab_rules gr
+                    ON gr.id = grgr.geotab_rule_id
+                ORDER BY grgr.group_id ASC, gr.name ASC;
+                """
+            )
+            group_rule_rows = cur.fetchall()
+
+    rules_by_database: dict[int, list[GeotabRuleRecord]] = {}
+    for row in rule_rows:
+        record = GeotabRuleRecord(**row)
+        rules_by_database.setdefault(record.database_id, []).append(record)
+
+    groups_by_database = _build_rule_group_records(group_rows, group_rule_rows)
+
     databases_by_customer: dict[int, list[CustomerDatabaseRecord]] = {}
     for row in database_rows:
-        record = CustomerDatabaseRecord(**row)
+        db_id = int(row["id"])
+        record = CustomerDatabaseRecord(
+            **row,
+            rules=rules_by_database.get(db_id, []),
+            rule_groups=groups_by_database.get(db_id, []),
+        )
         databases_by_customer.setdefault(record.customer_id, []).append(record)
 
     return [
@@ -1133,7 +1326,7 @@ def create_customer_database(
 
     if row is None:
         raise RuntimeError("No se pudo crear la database del cliente.")
-    return CustomerDatabaseRecord(**row)
+    return CustomerDatabaseRecord(**row, rules=[], rule_groups=[])
 
 
 def update_customer(customer_id: int, payload: CustomerUpdateRequest) -> CustomerRecord:
@@ -1246,7 +1439,416 @@ def update_customer_database(
 
     if row is None:
         raise RuntimeError("No se pudo actualizar la database.")
-    return CustomerDatabaseRecord(**row)
+    rules = _list_rules_for_database(database_id)
+    rule_groups = _list_rule_groups_for_database(database_id)
+    return CustomerDatabaseRecord(**row, rules=rules, rule_groups=rule_groups)
+
+
+def _list_rules_for_database(database_id: int) -> list[GeotabRuleRecord]:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, database_id, name, rule_id, created_at FROM geotab_rules WHERE database_id = %s ORDER BY name ASC;",
+                (database_id,),
+            )
+            return [GeotabRuleRecord(**r) for r in cur.fetchall()]
+
+
+def _list_rule_groups_for_database(database_id: int) -> list[GeotabRuleGroupRecord]:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    grg.id,
+                    grg.database_id,
+                    grg.motor_id,
+                    mc.engine_name AS motor_name,
+                    mc.technical_number,
+                    grg.name,
+                    grg.match_mode,
+                    grg.created_at,
+                    grg.updated_at
+                FROM geotab_rule_groups grg
+                INNER JOIN motor_catalog mc
+                    ON mc.id = grg.motor_id
+                WHERE grg.database_id = %s
+                ORDER BY mc.engine_name ASC, grg.name ASC;
+                """,
+                (database_id,),
+            )
+            group_rows = cur.fetchall()
+
+            group_ids = [int(row["id"]) for row in group_rows]
+            if not group_ids:
+                return []
+
+            cur.execute(
+                """
+                SELECT
+                    grgr.group_id,
+                    gr.id AS rule_record_id,
+                    gr.name,
+                    gr.rule_id
+                FROM geotab_rule_group_rules grgr
+                INNER JOIN geotab_rules gr
+                    ON gr.id = grgr.geotab_rule_id
+                WHERE grgr.group_id = ANY(%s)
+                ORDER BY grgr.group_id ASC, gr.name ASC;
+                """,
+                (group_ids,),
+            )
+            group_rule_rows = cur.fetchall()
+
+    groups_by_database = _build_rule_group_records(group_rows, group_rule_rows)
+    return groups_by_database.get(database_id, [])
+
+
+def _get_rule_group_record(group_id: int) -> GeotabRuleGroupRecord:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    grg.id,
+                    grg.database_id,
+                    grg.motor_id,
+                    mc.engine_name AS motor_name,
+                    mc.technical_number,
+                    grg.name,
+                    grg.match_mode,
+                    grg.created_at,
+                    grg.updated_at
+                FROM geotab_rule_groups grg
+                INNER JOIN motor_catalog mc
+                    ON mc.id = grg.motor_id
+                WHERE grg.id = %s;
+                """,
+                (group_id,),
+            )
+            group_row = cur.fetchone()
+
+            if group_row is None:
+                raise ValueError("El grupo de reglas no existe.")
+
+            cur.execute(
+                """
+                SELECT
+                    grgr.group_id,
+                    gr.id AS rule_record_id,
+                    gr.name,
+                    gr.rule_id
+                FROM geotab_rule_group_rules grgr
+                INNER JOIN geotab_rules gr
+                    ON gr.id = grgr.geotab_rule_id
+                WHERE grgr.group_id = %s
+                ORDER BY gr.name ASC;
+                """,
+                (group_id,),
+            )
+            group_rule_rows = cur.fetchall()
+
+    groups_by_database = _build_rule_group_records([group_row], group_rule_rows)
+    return groups_by_database[int(group_row["database_id"])][0]
+
+
+def _get_geotab_database_config(database_id: int) -> GeotabConfig:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, database_name, username, password, connection_type
+                FROM customer_databases
+                WHERE id = %s;
+                """,
+                (database_id,),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise ValueError("La database no existe.")
+    if row["connection_type"] != "geotab":
+        raise ValueError("Solo se pueden administrar reglas en databases de tipo Geotab.")
+
+    password = str(row.get("password") or "").strip()
+    if not password:
+        raise ValueError("La database Geotab no tiene contrasena configurada.")
+
+    return GeotabConfig(
+        username=str(row["username"]).strip(),
+        password=password,
+        database=str(row["database_name"]).strip(),
+    )
+
+
+def resolve_geotab_rule(database_id: int, rule_id: str) -> GeotabRuleInspection:
+    normalized_rule_id = rule_id.strip()
+    if not normalized_rule_id:
+        raise ValueError("El ID de la regla es obligatorio.")
+
+    cfg = _get_geotab_database_config(database_id)
+    try:
+        inspection = build_rule_inspection(cfg, normalized_rule_id)
+    except Exception as exc:
+        _logger.warning(
+            "No se pudo resolver la regla %s en Geotab (db=%s, user=%s)",
+            normalized_rule_id,
+            cfg.database,
+            cfg.username,
+            exc_info=True,
+        )
+        raise RuntimeError("No fue posible consultar la regla en Geotab.") from exc
+
+    return GeotabRuleInspection(**inspection)
+
+
+def create_geotab_rule(
+    database_id: int, payload: GeotabRuleCreateRequest
+) -> GeotabRuleRecord:
+    normalized_rule_id = payload.rule_id.strip()
+    inspection = resolve_geotab_rule(database_id, normalized_rule_id)
+    if not inspection.exists or not inspection.name:
+        raise ValueError("La regla no existe en Geotab.")
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO geotab_rules (database_id, name, rule_id)
+                    VALUES (%s, %s, %s)
+                    RETURNING id, database_id, name, rule_id, created_at;
+                    """,
+                    (database_id, inspection.name, normalized_rule_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        except UniqueViolation:
+            conn.rollback()
+            raise ValueError("Ya existe una regla con ese ID para esta database.") from None
+
+    if row is None:
+        raise RuntimeError("No se pudo crear la regla.")
+    return GeotabRuleRecord(**row)
+
+
+def create_geotab_rule_group(
+    database_id: int, payload: GeotabRuleGroupCreateRequest
+) -> GeotabRuleGroupRecord:
+    normalized_match_mode = _normalize_match_mode(payload.match_mode)
+    normalized_name = (payload.name or "").strip()
+
+    unique_rule_record_ids: list[int] = []
+    seen_rule_record_ids: set[int] = set()
+    for raw_rule_record_id in payload.rule_record_ids:
+        rule_record_id = int(raw_rule_record_id)
+        if rule_record_id <= 0:
+            continue
+        if rule_record_id in seen_rule_record_ids:
+            continue
+        unique_rule_record_ids.append(rule_record_id)
+        seen_rule_record_ids.add(rule_record_id)
+
+    if not unique_rule_record_ids:
+        raise ValueError("Debes seleccionar al menos una regla para el grupo.")
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, connection_type
+                FROM customer_databases
+                WHERE id = %s;
+                """,
+                (database_id,),
+            )
+            database_row = cur.fetchone()
+            if database_row is None:
+                raise ValueError("La database no existe.")
+            if database_row["connection_type"] != "geotab":
+                raise ValueError("Solo se pueden crear grupos en databases de tipo Geotab.")
+
+            cur.execute(
+                """
+                SELECT id, engine_name, technical_number
+                FROM motor_catalog
+                WHERE id = %s;
+                """,
+                (payload.motor_id,),
+            )
+            motor_row = cur.fetchone()
+            if motor_row is None:
+                raise ValueError("El motor seleccionado no existe.")
+
+            cur.execute(
+                """
+                SELECT id, name, rule_id
+                FROM geotab_rules
+                WHERE database_id = %s
+                  AND id = ANY(%s)
+                ORDER BY name ASC;
+                """,
+                (database_id, unique_rule_record_ids),
+            )
+            rule_rows = cur.fetchall()
+            if len(rule_rows) != len(unique_rule_record_ids):
+                raise ValueError("Todas las reglas del grupo deben pertenecer a esa database.")
+
+            cur.execute(
+                """
+                SELECT grr.geotab_rule_id, gr.name AS group_name
+                FROM geotab_rule_group_rules grr
+                JOIN geotab_rule_groups gr ON gr.id = grr.group_id
+                WHERE grr.geotab_rule_id = ANY(%s);
+                """,
+                (unique_rule_record_ids,),
+            )
+            already_assigned = cur.fetchall()
+            if already_assigned:
+                names = ", ".join(
+                    row["group_name"] for row in already_assigned
+                )
+                raise ValueError(
+                    f"Algunas reglas ya estan asignadas a otro grupo: {names}. "
+                    "Una regla solo puede pertenecer a un motor."
+                )
+
+            group_name = normalized_name or str(motor_row["engine_name"]).strip()
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO geotab_rule_groups (database_id, motor_id, name, match_mode)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id;
+                """,
+                (database_id, payload.motor_id, group_name, normalized_match_mode),
+            )
+            inserted = cur.fetchone()
+            if inserted is None:
+                raise RuntimeError("No se pudo crear el grupo de reglas.")
+
+            group_id = int(inserted["id"])
+            for rule_record_id in unique_rule_record_ids:
+                cur.execute(
+                    """
+                    INSERT INTO geotab_rule_group_rules (group_id, geotab_rule_id)
+                    VALUES (%s, %s);
+                    """,
+                    (group_id, rule_record_id),
+                )
+        conn.commit()
+
+    return _get_rule_group_record(group_id)
+
+
+def inspect_geotab_rule_record(rule_record_id: int) -> GeotabRuleInspection:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    gr.id,
+                    gr.name,
+                    gr.rule_id,
+                    cd.database_name,
+                    cd.username,
+                    cd.password,
+                    cd.connection_type
+                FROM geotab_rules gr
+                INNER JOIN customer_databases cd
+                    ON cd.id = gr.database_id
+                WHERE gr.id = %s;
+                """,
+                (rule_record_id,),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise ValueError("La regla no existe.")
+    if row["connection_type"] != "geotab":
+        raise ValueError("La regla no pertenece a una database Geotab.")
+
+    cfg = GeotabConfig(
+        username=str(row["username"]).strip(),
+        password=str(row["password"]).strip(),
+        database=str(row["database_name"]).strip(),
+    )
+    try:
+        inspection = build_rule_inspection(
+            cfg,
+            str(row["rule_id"]).strip(),
+            fallback_name=str(row["name"]).strip(),
+        )
+        if not inspection.get("exists") and not inspection.get("message"):
+            inspection["message"] = "La regla ya no existe en Geotab; se muestra el nombre guardado."
+        return GeotabRuleInspection(**inspection)
+    except Exception:
+        _logger.warning(
+            "No se pudo inspeccionar la regla %s en Geotab (db=%s, user=%s)",
+            row["rule_id"],
+            cfg.database,
+            cfg.username,
+            exc_info=True,
+        )
+        return GeotabRuleInspection(
+            exists=False,
+            rule_id=str(row["rule_id"]).strip(),
+            name=str(row["name"]).strip(),
+            status="Inexistente",
+            type=None,
+            groups_count=0,
+            comment=None,
+            headline="No se pudo validar la regla en Geotab.",
+            facts=[],
+            tree=None,
+            raw_condition=None,
+            message="Se muestra el nombre guardado como referencia mientras se recupera la conexion.",
+        )
+
+
+def delete_geotab_rule(rule_id: int) -> None:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM geotab_rules WHERE id = %s RETURNING id;", (rule_id,))
+            row = cur.fetchone()
+            if row is not None:
+                cur.execute(
+                    """
+                    DELETE FROM geotab_rule_groups grg
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM geotab_rule_group_rules grgr
+                        WHERE grgr.group_id = grg.id
+                    );
+                    """
+                )
+        conn.commit()
+    if row is None:
+        raise ValueError("La regla no existe.")
+
+
+def delete_geotab_rule_group(group_id: int) -> None:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM geotab_rule_groups WHERE id = %s RETURNING id;",
+                (group_id,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if row is None:
+        raise ValueError("El grupo de reglas no existe.")
 
 
 def _get_or_create_customer(
@@ -1567,3 +2169,58 @@ def assign_vehicle_database(
             )
 
     return result
+
+
+def get_dashboard_summary() -> DashboardSummary:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM motor_catalog) AS motors_count,
+                    (SELECT COUNT(*) FROM vehicle_motor_assignments) AS vehicles_count,
+                    (SELECT COUNT(*) FROM vehicle_motor_assignments
+                     WHERE technical_number NOT IN (SELECT technical_number FROM motor_catalog)
+                    ) AS vehicles_without_motor,
+                    (SELECT COUNT(*) FROM customers) AS customers_count,
+                    (SELECT COUNT(*) FROM customer_databases) AS databases_count;
+                """
+            )
+            counts = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT id, engine_name, technical_number, created_at
+                FROM motor_catalog
+                ORDER BY created_at DESC
+                LIMIT 5;
+                """
+            )
+            recent_motors = [RecentMotorRecord(**row) for row in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT
+                    v.plate,
+                    c.name AS client_name,
+                    mc.engine_name,
+                    v.updated_at
+                FROM vehicle_motor_assignments v
+                LEFT JOIN customers c ON c.id = v.customer_id
+                LEFT JOIN motor_catalog mc ON mc.technical_number = v.technical_number
+                ORDER BY v.updated_at DESC
+                LIMIT 5;
+                """
+            )
+            recent_vehicles = [RecentVehicleRecord(**row) for row in cur.fetchall()]
+
+    return DashboardSummary(
+        motors_count=counts["motors_count"],
+        vehicles_count=counts["vehicles_count"],
+        vehicles_without_motor=counts["vehicles_without_motor"],
+        customers_count=counts["customers_count"],
+        databases_count=counts["databases_count"],
+        recent_motors=recent_motors,
+        recent_vehicles=recent_vehicles,
+    )

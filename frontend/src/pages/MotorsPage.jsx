@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import ToastStack from "../components/ToastStack";
+import { useToasts } from "../components/useToasts";
 import MotorAttachmentModal from "../features/engineLookup/components/MotorAttachmentModal";
 import RegisterMotorModal from "../features/engineLookup/components/RegisterMotorModal";
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
@@ -31,7 +33,7 @@ function AttachmentIcon({ contentType }) {
 
 function formatLastSeen(value) {
   if (!value) {
-    return "Sin consultas todavia";
+    return "Sin consultas";
   }
   return new Date(value).toLocaleString("es-CO", {
     dateStyle: "medium",
@@ -39,23 +41,104 @@ function formatLastSeen(value) {
   });
 }
 
+/* ── Edit Motor Modal ──────────────────────────────────────────────── */
+function EditMotorModal({ motor, loading, onClose, onSubmit }) {
+  const [engineName, setEngineName] = useState(motor.engine_name);
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    await onSubmit({ engine_name: engineName.trim() });
+  };
+
+  return (
+    <div className="modal-overlay" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Editar motor">
+        <header className="modal-header">
+          <div className="modal-heading">
+            <span className="eyebrow">Editar</span>
+            <h3>{motor.technical_number}</h3>
+          </div>
+          <button type="button" className="icon-button modal-close-button" onClick={onClose}>
+            &#10005;
+          </button>
+        </header>
+
+        <form className="register-form" onSubmit={handleSubmit}>
+          <div className="form-field">
+            <label htmlFor="edit-motor-name">Nombre del motor</label>
+            <input
+              id="edit-motor-name"
+              value={engineName}
+              onChange={(event) => setEngineName(event.target.value)}
+              required
+              autoFocus
+            />
+          </div>
+
+          <div className="form-field">
+            <label>Technical Engine Configuration #</label>
+            <input value={motor.technical_number} readOnly />
+          </div>
+
+          <div className="actions-row modal-actions">
+            <button type="submit" disabled={loading || !engineName.trim()}>
+              {loading ? "Guardando..." : "Guardar cambios"}
+            </button>
+            <button type="button" className="button-secondary" onClick={onClose}>
+              Cancelar
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+/* ── Main Page ─────────────────────────────────────────────────────── */
 export default function MotorsPage() {
   const [isRegisterOpen, setIsRegisterOpen] = useState(false);
   const [selectedMotorForUpload, setSelectedMotorForUpload] = useState(null);
-  const [message, setMessage] = useState("");
-  const { loading, motors, error, registerMotor, uploadAttachment, updateAttachment, deleteAttachment } =
-    useMotorsCatalog();
+  const [editingMotor, setEditingMotor] = useState(null);
+  const [search, setSearch] = useState("");
+  const { toasts, pushToast } = useToasts();
+
+  const {
+    loading,
+    motors,
+    error,
+    registerMotor,
+    editMotor,
+    uploadAttachment,
+    updateAttachment,
+    deleteAttachment
+  } = useMotorsCatalog();
+
+  useEffect(() => {
+    if (error) pushToast("error", error);
+  }, [error, pushToast]);
 
   const totals = useMemo(() => {
     return motors.reduce(
       (acc, motor) => {
         acc.motors += 1;
         acc.vehicles += motor.vehicle_count || 0;
+        acc.attachments += motor.attachments?.length || 0;
         return acc;
       },
-      { motors: 0, vehicles: 0 }
+      { motors: 0, vehicles: 0, attachments: 0 }
     );
   }, [motors]);
+
+  const filteredMotors = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return motors;
+    return motors.filter(
+      (motor) =>
+        motor.engine_name.toLowerCase().includes(query) ||
+        motor.technical_number.toLowerCase().includes(query) ||
+        (motor.available_cpls || []).some((cpl) => cpl.toLowerCase().includes(query))
+    );
+  }, [motors, search]);
 
   const activeMotorForAttachments = useMemo(() => {
     if (!selectedMotorForUpload) {
@@ -67,37 +150,47 @@ export default function MotorsPage() {
   const handleSubmit = async (payload) => {
     try {
       await registerMotor(payload);
-      setMessage("Motor registrado en el catalogo.");
+      pushToast("success", "Motor registrado en el catalogo.");
       setIsRegisterOpen(false);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "No fue posible registrar el motor");
+      pushToast("error", err instanceof Error ? err.message : "No fue posible registrar el motor");
+    }
+  };
+
+  const handleEditMotor = async (payload) => {
+    try {
+      await editMotor(editingMotor.id, payload);
+      setEditingMotor(null);
+      pushToast("success", "Motor actualizado.");
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "No fue posible actualizar el motor");
     }
   };
 
   const handleCreateAttachment = async (motorId, payload) => {
     try {
       await uploadAttachment(motorId, payload);
-      setMessage("Adjunto cargado.");
+      pushToast("success", "Adjunto cargado.");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "No fue posible subir el adjunto");
+      pushToast("error", err instanceof Error ? err.message : "No fue posible subir el adjunto");
     }
   };
 
   const handleUpdateAttachment = async (attachmentId, payload) => {
     try {
       await updateAttachment(attachmentId, payload);
-      setMessage("Adjunto actualizado.");
+      pushToast("success", "Adjunto actualizado.");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "No fue posible actualizar el adjunto");
+      pushToast("error", err instanceof Error ? err.message : "No fue posible actualizar el adjunto");
     }
   };
 
   const handleDeleteAttachment = async (attachmentId) => {
     try {
       await deleteAttachment(attachmentId);
-      setMessage("Adjunto eliminado.");
+      pushToast("success", "Adjunto eliminado.");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "No fue posible eliminar el adjunto");
+      pushToast("error", err instanceof Error ? err.message : "No fue posible eliminar el adjunto");
     }
   };
 
@@ -108,13 +201,12 @@ export default function MotorsPage() {
           <span className="eyebrow">Catalogo tecnico</span>
           <h2>Motores</h2>
           <p>
-            Una vista limpia de todas las familias de motor registradas, con contexto operativo y
-            cobertura real sobre la flota consultada.
+            Familias de motor registradas con cobertura real sobre la flota consultada.
           </p>
         </div>
 
         <button type="button" onClick={() => setIsRegisterOpen(true)}>
-          Registrar nuevo motor
+          + Motor
         </button>
       </header>
 
@@ -132,14 +224,32 @@ export default function MotorsPage() {
         </article>
 
         <article className="card metric-card">
-          <span className="eyebrow">Operacion</span>
-          <strong>Catalogo vivo</strong>
-          <p>Cada lookup exitoso alimenta el conteo por motor sin friccion manual.</p>
+          <span className="eyebrow">Adjuntos</span>
+          <strong>{totals.attachments}</strong>
+          <p>Archivos cargados en el catalogo</p>
         </article>
       </section>
 
-      {error ? <p className="notice-banner notice-error">{error}</p> : null}
-      {message ? <p className="notice-banner notice-info">{message}</p> : null}
+      <div className="motors-search-bar">
+        <input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Buscar por nombre, TEC# o CPL..."
+          className="motors-search-input"
+        />
+        {search ? (
+          <button
+            type="button"
+            className="button-secondary button-sm"
+            onClick={() => setSearch("")}
+          >
+            Limpiar
+          </button>
+        ) : null}
+      </div>
+
+      <ToastStack toasts={toasts} />
 
       <section className="motor-cards-grid">
         {loading && motors.length === 0 ? <p className="notice-banner notice-soft">Cargando motores...</p> : null}
@@ -155,17 +265,41 @@ export default function MotorsPage() {
           </article>
         ) : null}
 
-        {motors.map((motor) => (
+        {!loading && motors.length > 0 && filteredMotors.length === 0 ? (
+          <p className="support-copy">Sin resultados para "{search}".</p>
+        ) : null}
+
+        {filteredMotors.map((motor) => (
           <article className="card motor-card" key={motor.id}>
             <div className="motor-card-top">
-              <span className="motor-count">{motor.vehicle_count} vehiculos unicos</span>
+              <span className="motor-count">{motor.vehicle_count} vehiculos</span>
               <span className="status status-ok">activo</span>
             </div>
 
             <div className="motor-card-heading">
               <h3>{motor.engine_name}</h3>
-              <p className="motor-technical-number">{motor.technical_number}</p>
+              <div className="motor-card-heading-row">
+                <p className="motor-technical-number">{motor.technical_number}</p>
+                <div className="motor-card-heading-actions">
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => setEditingMotor(motor)}
+                    title="Editar motor"
+                  >
+                    &#9998;
+                  </button>
+                </div>
+              </div>
             </div>
+
+            {(motor.available_cpls || []).length > 0 ? (
+              <div className="motor-cpls">
+                {motor.available_cpls.map((cpl) => (
+                  <span className="cpl-chip" key={cpl}>CPL {cpl}</span>
+                ))}
+              </div>
+            ) : null}
 
             <div className="motor-card-meta">
               <div>
@@ -180,13 +314,14 @@ export default function MotorsPage() {
 
             <div className="motor-card-attachments">
               <div className="motor-attachments-header">
-                <span>Adjuntos</span>
+                <span>Adjuntos ({motor.attachments?.length || 0})</span>
                 <button
                   type="button"
-                  className="button-secondary button-sm"
+                  className="icon-button"
                   onClick={() => setSelectedMotorForUpload(motor)}
+                  title="Gestionar adjuntos"
                 >
-                  Gestionar
+                  &#8943;
                 </button>
               </div>
 
@@ -199,15 +334,16 @@ export default function MotorsPage() {
                       href={`${API_BASE}${attachment.download_url}`}
                       target="_blank"
                       rel="noreferrer"
-                      title={`${attachment.original_filename} | CPL ${attachment.cpl || "Sin CPL"}`}
-                      aria-label={`Abrir adjunto ${attachment.original_filename} del CPL ${attachment.cpl || "sin cpl"} en otra pestana`}
+                      title={attachment.original_filename}
+                      aria-label={`Abrir ${attachment.original_filename}`}
                     >
                       <AttachmentIcon contentType={attachment.content_type} />
+                      <span className="attachment-chip-cpl">{attachment.cpl || "—"}</span>
                     </a>
                   ))}
                 </div>
               ) : (
-                <p className="support-copy">Sin adjuntos todavia.</p>
+                <p className="support-copy">Sin adjuntos.</p>
               )}
             </div>
           </article>
@@ -231,6 +367,15 @@ export default function MotorsPage() {
         onUpdate={handleUpdateAttachment}
         onDelete={handleDeleteAttachment}
       />
+
+      {editingMotor ? (
+        <EditMotorModal
+          motor={editingMotor}
+          loading={loading}
+          onClose={() => setEditingMotor(null)}
+          onSubmit={handleEditMotor}
+        />
+      ) : null}
     </section>
   );
 }

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+import FileDropzone from "../../../components/FileDropzone";
+
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
 function AttachmentIcon({ contentType }) {
@@ -118,7 +120,7 @@ export default function MotorAttachmentModal({
   };
 
   return (
-    <div className="modal-overlay" role="presentation">
+    <div className="modal-overlay" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <section className="card modal-card attachment-manager-modal" role="dialog" aria-modal="true" aria-label="Gestionar adjuntos del motor">
         <header className="modal-header">
           <div className="modal-heading">
@@ -167,23 +169,13 @@ export default function MotorAttachmentModal({
               </div>
             ) : null}
 
-            <label className="attachment-dropzone" htmlFor="motor-existing-attachment">
-              <span className="attachment-dropzone-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 16V4" />
-                  <path d="m7 9 5-5 5 5" />
-                  <path d="M4 20h16" />
-                </svg>
-              </span>
-              <strong>{attachmentFile ? attachmentFile.name : editingAttachment ? "Selecciona un archivo si quieres reemplazar el actual" : "Selecciona una imagen o PDF"}</strong>
-              <span>{editingAttachment ? "Si no eliges archivo, solo se actualiza el CPL." : "Curvas de torque, potencia o respaldo tecnico."}</span>
-              <input
-                id="motor-existing-attachment"
-                type="file"
-                accept="application/pdf,image/png,image/jpeg,image/webp"
-                onChange={(event) => setAttachmentFile(event.target.files?.[0] || null)}
-              />
-            </label>
+            <FileDropzone
+              id="motor-existing-attachment"
+              file={attachmentFile}
+              onChange={(nextFile) => setAttachmentFile(nextFile)}
+              label={editingAttachment ? "Arrastra o selecciona para reemplazar" : "Arrastra o selecciona una imagen o PDF"}
+              hint={editingAttachment ? "Si no eliges archivo, solo se actualiza el CPL." : "Curvas de torque, potencia o respaldo tecnico."}
+            />
 
             <div className="actions-row modal-actions">
               <button

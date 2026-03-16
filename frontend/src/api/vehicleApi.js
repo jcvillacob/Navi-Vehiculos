@@ -14,6 +14,11 @@ async function parseJsonOrThrow(response, fallbackMessage) {
   return response.json();
 }
 
+export async function fetchDashboardSummary() {
+  const response = await fetch(`${API_BASE}/api/v1/dashboard/summary`);
+  return parseJsonOrThrow(response, "Error obteniendo resumen del dashboard");
+}
+
 export async function lookupVehicle(identifier) {
   const query = new URLSearchParams({ identifier: identifier.trim().toUpperCase() });
   const response = await fetch(`${API_BASE}/api/v1/vehicle/lookup?${query.toString()}`);
@@ -44,6 +49,15 @@ export async function createMotor(payload) {
     body: JSON.stringify(payload)
   });
   return parseJsonOrThrow(response, "Error creando motor");
+}
+
+export async function updateMotor(motorId, payload) {
+  const response = await fetch(`${API_BASE}/api/v1/motors/${motorId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonOrThrow(response, "Error actualizando motor");
 }
 
 export async function uploadMotorAttachment(motorId, payload) {
@@ -138,6 +152,55 @@ export async function updateCustomerDatabase(databaseId, payload) {
     body: JSON.stringify(payload)
   });
   return parseJsonOrThrow(response, "Error actualizando database del cliente");
+}
+
+export async function createGeotabRule(databaseId, payload) {
+  const response = await fetch(`${API_BASE}/api/v1/customers/databases/${databaseId}/rules`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonOrThrow(response, "Error creando regla Geotab");
+}
+
+export async function createGeotabRuleGroup(databaseId, payload) {
+  const response = await fetch(`${API_BASE}/api/v1/customers/databases/${databaseId}/rule-groups`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonOrThrow(response, "Error creando grupo de reglas");
+}
+
+export async function resolveGeotabRule(databaseId, ruleId) {
+  const query = new URLSearchParams({ rule_id: ruleId.trim() });
+  const response = await fetch(
+    `${API_BASE}/api/v1/customers/databases/${databaseId}/rules/resolve?${query.toString()}`
+  );
+  return parseJsonOrThrow(response, "Error resolviendo regla Geotab");
+}
+
+export async function inspectGeotabRule(ruleRecordId) {
+  const response = await fetch(`${API_BASE}/api/v1/customers/rules/${ruleRecordId}/inspection`);
+  return parseJsonOrThrow(response, "Error inspeccionando regla Geotab");
+}
+
+export async function deleteGeotabRule(ruleId) {
+  const response = await fetch(`${API_BASE}/api/v1/customers/rules/${ruleId}`, {
+    method: "DELETE"
+  });
+  if (!response.ok) {
+    throw new Error(`Error eliminando regla Geotab (${response.status})`);
+  }
+}
+
+export async function deleteGeotabRuleGroup(groupId) {
+  const response = await fetch(`${API_BASE}/api/v1/customers/rule-groups/${groupId}`, {
+    method: "DELETE"
+  });
+  if (!response.ok) {
+    throw new Error(`Error eliminando grupo de reglas (${response.status})`);
+  }
 }
 
 export async function revalidateCustomerGeotab(plate) {

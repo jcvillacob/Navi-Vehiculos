@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import FileDropzone from "../../../components/FileDropzone";
+
 export default function RegisterMotorModal({
   open,
   loading,
@@ -40,7 +42,7 @@ export default function RegisterMotorModal({
   };
 
   return (
-    <div className="modal-overlay" role="presentation">
+    <div className="modal-overlay" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <section className="card modal-card" role="dialog" aria-modal="true" aria-label={title}>
         <header className="modal-header">
           <div className="modal-heading">
@@ -81,21 +83,16 @@ export default function RegisterMotorModal({
             />
           </div>
 
-          <div className="form-field">
-            <label htmlFor="motor-attachment">Adjunto (imagen o PDF)</label>
-            <input
-              id="motor-attachment"
-              type="file"
-              accept="application/pdf,image/png,image/jpeg,image/webp"
-              onChange={(event) => {
-                const nextFile = event.target.files?.[0] || null;
-                setAttachmentFile(nextFile);
-                if (!nextFile) {
-                  setAttachmentCpl("");
-                }
-              }}
-            />
-          </div>
+          <FileDropzone
+            id="motor-attachment"
+            file={attachmentFile}
+            onChange={(nextFile) => {
+              setAttachmentFile(nextFile);
+              if (!nextFile) setAttachmentCpl("");
+            }}
+            label="Arrastra o selecciona una imagen o PDF"
+            hint="Curvas de torque, potencia o respaldo tecnico. Opcional."
+          />
 
           {attachmentFile ? (
             <div className="form-field">

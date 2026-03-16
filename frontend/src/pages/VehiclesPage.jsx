@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+import ToastStack from "../components/ToastStack";
+import { useToasts } from "../components/useToasts";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicleAssignments";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
@@ -32,20 +34,16 @@ function AttachmentIcon({ contentType }) {
 
 export default function VehiclesPage() {
   const [selectedVehicle, setSelectedVehicle] = useState(null);
-  const [toasts, setToasts] = useState([]);
   const [refreshingPlates, setRefreshingPlates] = useState(new Set());
   const [filterClient, setFilterClient] = useState("");
   const [filterMotor, setFilterMotor] = useState("");
   const { loading, vehicles, error, search, setSearch, loadVehicles } = useVehicleAssignments();
   const { customers, loading: customersLoading } = useCustomersCatalog();
+  const { toasts, pushToast } = useToasts();
 
-  const pushToast = (kind, text) => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    setToasts((current) => [...current, { id, kind, text }]);
-    window.setTimeout(() => {
-      setToasts((current) => current.filter((toast) => toast.id !== id));
-    }, kind === "error" ? 5000 : 3200);
-  };
+  useEffect(() => {
+    if (error) pushToast("error", error);
+  }, [error, pushToast]);
 
   const clientOptions = useMemo(() => {
     const subset = filterMotor ? vehicles.filter((v) => v.engine_name === filterMotor) : vehicles;
@@ -147,13 +145,7 @@ export default function VehiclesPage() {
 
   return (
     <section className="panel">
-      <div className="toast-stack" aria-live="polite" aria-atomic="true">
-        {toasts.map((toast) => (
-          <div key={toast.id} className={`toast-banner toast-${toast.kind}`}>
-            {toast.text}
-          </div>
-        ))}
-      </div>
+      <ToastStack toasts={toasts} />
 
       <header className="page-header">
         <span className="eyebrow">Relacion vehiculo-motor</span>
@@ -232,7 +224,6 @@ export default function VehiclesPage() {
           </div>
         </div>
 
-        {error ? <p className="notice-banner notice-error">{error}</p> : null}
         {!customersLoading && customers.length === 0 ? (
           <p className="notice-banner notice-soft">
             No hay clientes ni databases creados. Usa la vista de Clientes para poblar los selectores.
