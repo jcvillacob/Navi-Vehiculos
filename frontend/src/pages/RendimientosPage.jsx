@@ -117,14 +117,10 @@ export default function RendimientosPage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const loadRecords = useCallback(async (from, to, customerIds) => {
+  const loadRecords = useCallback(async (from, to) => {
     setLoading(true);
     try {
-      const response = await fetchMonthlyPerformance({
-        month_from: from,
-        month_to: to,
-        customer_ids: customerIds
-      });
+      const response = await fetchMonthlyPerformance({ month_from: from, month_to: to });
       setPayload(response);
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message : "No fue posible cargar rendimientos");
@@ -144,7 +140,8 @@ export default function RendimientosPage() {
 
         const readyByCustomerId = new Map();
         for (const vehicle of vehicles) {
-          if (vehicle.database_connection_type !== "artimo" || !vehicle.customer_id || !vehicle.plate) {
+          const providerType = vehicle.database_connection_type;
+          if ((providerType !== "artimo" && providerType !== "geotab") || !vehicle.customer_id || !vehicle.plate) {
             continue;
           }
           if (!readyByCustomerId.has(vehicle.customer_id)) {
@@ -158,7 +155,7 @@ export default function RendimientosPage() {
             id: customer.id,
             name: customer.name,
             readyVehicles: readyByCustomerId.get(customer.id)?.size || 0,
-            hasArtimoDatabase: (customer.databases || []).some((database) => database.connection_type === "artimo")
+            hasPerformanceDatabase: (customer.databases || []).some((database) => database.connection_type === "artimo" || database.connection_type === "geotab")
           }))
           .filter(Boolean)
           .sort((a, b) => a.name.localeCompare(b.name));
@@ -183,10 +180,10 @@ export default function RendimientosPage() {
     );
   }, [eligibleClients]);
 
-  // Auto-load table when range or customer selection changes
+  // Auto-load table when range changes
   useEffect(() => {
-    loadRecords(monthFrom, monthTo, selectedCustomerIds).catch(() => {});
-  }, [monthFrom, monthTo, selectedCustomerIds, loadRecords]);
+    loadRecords(monthFrom, monthTo).catch(() => {});
+  }, [monthFrom, monthTo, loadRecords]);
 
   const clientOptions = useMemo(() => {
     const subset = filterRows(payload.rows, filters, "client");
@@ -262,7 +259,7 @@ export default function RendimientosPage() {
       pushToast("success", `Rendimientos calculados para ${formatMonthLabel(calcMonth)}.`);
       // Reload the table if the calculated month falls within the visible range
       if (calcMonth >= monthFrom && calcMonth <= monthTo) {
-        await loadRecords(monthFrom, monthTo, selectedCustomerIds);
+        await loadRecords(monthFrom, monthTo);
       }
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message : "No fue posible calcular rendimientos");
@@ -310,7 +307,7 @@ export default function RendimientosPage() {
                 <span>
                   Todos los clientes
                   <small>
-                    {eligibleClients.reduce((total, client) => total + client.readyVehicles, 0)} placas listas en Artimo
+                    {eligibleClients.reduce((total, client) => total + client.readyVehicles, 0)} placas listas
                   </small>
                 </span>
               </label>
@@ -339,10 +336,10 @@ export default function RendimientosPage() {
                         {client.name}
                         <small>
                           {client.readyVehicles > 0
-                            ? `${client.readyVehicles} placas listas en Artimo`
-                            : client.hasArtimoDatabase
-                              ? "Sin placas listas en Artimo"
-                              : "Sin database Artimo activa"}
+                            ? `${client.readyVehicles} placas listas`
+                            : client.hasPerformanceDatabase
+                              ? "Sin placas listas"
+                              : "Sin database activa"}
                         </small>
                       </span>
                     </label>
@@ -364,37 +361,31 @@ export default function RendimientosPage() {
         <article className="card metric-card">
           <span className="eyebrow">Placas visibles</span>
           <strong>{visibleSummary.vehicles}</strong>
-          <p>{isRange ? "Acumulado del rango con filtros aplicados" : "Registros del mes con filtros aplicados"}</p>
         </article>
 
         <article className="card metric-card">
           <span className="eyebrow">Kms ECM</span>
           <strong>{formatMetric(visibleSummary.kms, 0)}</strong>
-          <p>Distancia consolidada del conjunto visible</p>
         </article>
 
         <article className="card metric-card">
           <span className="eyebrow">Horas ECM</span>
           <strong>{formatMetric(visibleSummary.hours, 0)}</strong>
-          <p>Horas consolidadas del conjunto visible</p>
         </article>
 
         <article className="card metric-card">
           <span className="eyebrow">Galones</span>
           <strong>{formatMetric(visibleSummary.gallons, 0)}</strong>
-          <p>Combustible consumido del conjunto visible</p>
         </article>
 
         <article className="card metric-card feature-card-accent">
           <span className="eyebrow">KPG</span>
           <strong>{formatMetric(visibleSummary.kpg, 2)}</strong>
-          <p>Calculado en vista, no persistido</p>
         </article>
 
         <article className="card metric-card">
           <span className="eyebrow">GPH</span>
           <strong>{formatMetric(visibleSummary.gph, 2)}</strong>
-          <p>Calculado en vista, no persistido</p>
         </article>
       </section>
 
@@ -483,7 +474,7 @@ export default function RendimientosPage() {
             <button
               type="button"
               className="button-secondary button-sm"
-              onClick={() => loadRecords(monthFrom, monthTo, selectedCustomerIds)}
+              onClick={() => loadRecords(monthFrom, monthTo)}
             >
               {loading ? "Cargando..." : "Recargar"}
             </button>

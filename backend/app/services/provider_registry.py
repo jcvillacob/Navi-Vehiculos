@@ -26,7 +26,7 @@ _PROVIDERS: dict[str, ProviderDefinition] = {
         key="geotab",
         label="Geotab",
         description="Telematica Geotab con reglas por motor.",
-        supports_monthly_performance=False,
+        supports_monthly_performance=True,
         uses_access_url=False,
     ),
     "artimo": ProviderDefinition(

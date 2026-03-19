@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
+import threading
+import time as _time
 from typing import Any
 
 import mygeotab
@@ -458,3 +460,158 @@ def get_device_from_vin(vin: str, cfg: GeotabConfig) -> dict | None:
 
 def vehicle_exists_for_plate(plate: str, cfg: GeotabConfig) -> bool:
     return get_device_from_plate(plate, cfg) is not None
+
+
+# ==============================================================================
+# SESSION CACHE (per-process, thread-safe)
+# ==============================================================================
+
+_SESSION_CACHE: dict[str, mygeotab.API] = {}
+_SESSION_LOCK = threading.Lock()
+
+
+def get_authenticated_client(username: str, password: str, database: str) -> mygeotab.API:
+    """
+    Returns a cached, authenticated mygeotab.API client for the given database.
+    Authenticates on first call; re-authenticates if the cached session is stale.
+    """
+    cache_key = f"{database}:{username}"
+    with _SESSION_LOCK:
+        cached = _SESSION_CACHE.get(cache_key)
+
+    if cached is not None:
+        return cached
+
+    api = mygeotab.API(username=username, password=password, database=database)
+    try:
+        api.authenticate()
+    except Exception:
+        with _SESSION_LOCK:
+            _SESSION_CACHE.pop(cache_key, None)
+        raise
+
+    with _SESSION_LOCK:
+        _SESSION_CACHE[cache_key] = api
+    return api
+
+
+def _invalidate_session(username: str, database: str) -> None:
+    """Remove a stale cached session so the next call re-authenticates."""
+    with _SESSION_LOCK:
+        _SESSION_CACHE.pop(f"{database}:{username}", None)
+
+
+# ==============================================================================
+# NETWORK RETRY WRAPPER
+# ==============================================================================
+
+_NETWORK_ERROR_FRAGMENTS = (
+    "SSL",
+    "EOF",
+    "Max retries",
+    "ConnectionError",
+    "timeout",
+    "RemoteDisconnected",
+    "BrokenPipe",
+    "timed out",
+    "Connection reset",
+    "ConnectTimeout",
+    "ReadTimeout",
+    "Service Unavailable",
+    "Bad Gateway",
+    "Gateway Timeout",
+)
+NET_MAX_RETRIES = 3
+NET_RETRY_WAITS = (10, 20, 30)
+
+
+def _is_network_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return any(fragment in msg for fragment in _NETWORK_ERROR_FRAGMENTS)
+
+
+def _api_call_with_retry(api: mygeotab.API, method: str, **kwargs) -> list[dict]:
+    """
+    Calls api.call(method, **kwargs) with retries on transient network errors.
+    Logic errors (auth, permissions, bad data) propagate immediately.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(NET_MAX_RETRIES):
+        try:
+            result = api.call(method, **kwargs)
+            return result or []
+        except Exception as exc:
+            if _is_network_error(exc) and attempt < NET_MAX_RETRIES - 1:
+                last_exc = exc
+                _time.sleep(NET_RETRY_WAITS[attempt])
+                continue
+            raise
+    raise last_exc  # type: ignore[misc]
+
+
+# ==============================================================================
+# MONTH RANGE (Colombia UTC-5)
+# ==============================================================================
+
+def get_geotab_month_range(year: int, month_number: int) -> tuple[str, str]:
+    """
+    Returns (from_date, to_date) in UTC ISO format for a calendar month
+    bounded by Colombia midnight (UTC-5 = 05:00 UTC).
+    """
+    from_dt = datetime(year, month_number, 1, 5, 0, 0, tzinfo=timezone.utc)
+    if month_number == 12:
+        to_dt = datetime(year + 1, 1, 1, 5, 0, 0, tzinfo=timezone.utc)
+    else:
+        to_dt = datetime(year, month_number + 1, 1, 5, 0, 0, tzinfo=timezone.utc)
+    fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+    return from_dt.strftime(fmt), to_dt.strftime(fmt)
+
+
+# ==============================================================================
+# PERFORMANCE DATA QUERIES
+# ==============================================================================
+
+def get_status_data_for_month(
+    api: mygeotab.API,
+    device_id: str,
+    diagnostic_id: str,
+    from_date: str,
+    to_date: str,
+) -> list[dict]:
+    """
+    Fetches StatusData for a specific diagnostic and device over a date range.
+    Returns records sorted chronologically by dateTime.
+    """
+    results = _api_call_with_retry(
+        api,
+        "Get",
+        typeName="StatusData",
+        search={
+            "deviceSearch": {"id": device_id},
+            "diagnosticSearch": {"id": diagnostic_id},
+            "fromDate": from_date,
+            "toDate": to_date,
+        },
+    )
+    return sorted(results, key=lambda r: str(r.get("dateTime") or ""))
+
+
+def get_trips_for_month(
+    api: mygeotab.API,
+    device_id: str,
+    from_date: str,
+    to_date: str,
+) -> list[dict]:
+    """
+    Fetches all Trip records for a device over a date range.
+    """
+    return _api_call_with_retry(
+        api,
+        "Get",
+        typeName="Trip",
+        search={
+            "deviceSearch": {"id": device_id},
+            "fromDate": from_date,
+            "toDate": to_date,
+        },
+    )

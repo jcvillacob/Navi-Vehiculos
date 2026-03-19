@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import time as dt_time, timedelta
 from typing import Protocol
 
 from app.clients.artimo_client import (
@@ -16,6 +17,13 @@ from app.clients.artimo_client import (
     sort_rows_by_timestamp,
 )
 from app.schemas.vehicle import MonthlyPerformanceRecord
+from app.clients.geotab_client import (
+    find_device_by_plate,
+    get_authenticated_client,
+    get_geotab_month_range,
+    get_status_data_for_month,
+    get_trips_for_month,
+)
 from app.services.legacy_provider_bootstrap import get_legacy_provider_vehicle_id
 from app.services.performance_types import (
     BindingSnapshot,
@@ -338,8 +346,273 @@ class ArtimoMonthlyPerformanceProvider:
         return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 
 
+# ==============================================================================
+# GEOTAB MONTHLY PERFORMANCE PROVIDER
+# ==============================================================================
+
+_DIAG_ODOMETER = "DiagnosticOdometerId"
+_DIAG_ENGINE_HOURS = "DiagnosticEngineHoursId"
+_DIAG_TOTAL_FUEL = "DiagnosticTotalFuelUsedId"
+_DIAG_DEVICE_FUEL = "DiagnosticDeviceTotalFuelId"
+_LITERS_PER_GALLON = 3.7854118
+
+
+def _geotab_first_value(readings: list[dict]) -> float | None:
+    if not readings:
+        return None
+    value = readings[0].get("data")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _geotab_last_value(readings: list[dict]) -> float | None:
+    if not readings:
+        return None
+    value = readings[-1].get("data")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _td_to_hours(value) -> float:
+    """Convert a timedelta, datetime.time, string duration, or None to hours."""
+    if value is None:
+        return 0.0
+    if isinstance(value, timedelta):
+        return value.total_seconds() / 3600.0
+    if isinstance(value, dt_time):
+        return (value.hour * 3600 + value.minute * 60 + value.second + value.microsecond / 1e6) / 3600.0
+    if hasattr(value, "total_seconds"):
+        return value.total_seconds() / 3600.0
+    if isinstance(value, str):
+        # Handle "D.HH:MM:SS" or "HH:MM:SS" format from Geotab
+        try:
+            days = 0
+            time_part = value
+            if "." in value:
+                parts = value.split(".", 1)
+                days = int(parts[0])
+                time_part = parts[1]
+            h, m, s = map(int, time_part.split(":"))
+            return (days * 86400 + h * 3600 + m * 60 + s) / 3600.0
+        except (ValueError, IndexError):
+            pass
+    try:
+        return float(value) / 3600.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _calculate_geotab_vehicle_record(
+    *,
+    target: PerformanceTarget,
+    month: str,
+    device_id: str,
+    api,
+    from_date: str,
+    to_date: str,
+    previous_record: MonthlyPerformanceRecord | None,
+) -> MonthlyPerformanceRecord:
+    warnings: list[str] = []
+
+    odo_readings = get_status_data_for_month(api, device_id, _DIAG_ODOMETER, from_date, to_date)
+    hours_readings = get_status_data_for_month(api, device_id, _DIAG_ENGINE_HOURS, from_date, to_date)
+    fuel_readings = get_status_data_for_month(api, device_id, _DIAG_TOTAL_FUEL, from_date, to_date)
+    trips = get_trips_for_month(api, device_id, from_date, to_date)
+
+    if not odo_readings and not hours_readings:
+        return _build_status_record(
+            target=target,
+            month=month,
+            status="no_data",
+            warnings=["No se encontraron datos de odometro ni horas de motor en Geotab para el mes solicitado."],
+            provider_vehicle_id=device_id,
+        )
+
+    # Odometer (meters → km)
+    odo_end_raw = _geotab_last_value(odo_readings)
+    odo_end = odo_end_raw / 1000.0 if odo_end_raw is not None else None
+
+    if previous_record and previous_record.odo_end is not None:
+        odo_start = previous_record.odo_end
+    else:
+        odo_start_raw = _geotab_first_value(odo_readings)
+        odo_start = odo_start_raw / 1000.0 if odo_start_raw is not None else None
+        if odo_start is not None:
+            warnings.append("Odometro inicial tomado de la primera lectura del mes (sin registro previo).")
+
+    kms_ecm = max(0.0, odo_end - odo_start) if odo_start is not None and odo_end is not None else None
+
+    # Engine hours (seconds → hours)
+    horo_end_raw = _geotab_last_value(hours_readings)
+    horo_end = horo_end_raw / 3600.0 if horo_end_raw is not None else None
+
+    if previous_record and previous_record.horo_end is not None:
+        horo_start = previous_record.horo_end
+    else:
+        horo_start_raw = _geotab_first_value(hours_readings)
+        horo_start = horo_start_raw / 3600.0 if horo_start_raw is not None else None
+        if horo_start is not None:
+            warnings.append("Horometro inicial tomado de la primera lectura del mes (sin registro previo).")
+
+    hours_ecm = max(0.0, horo_end - horo_start) if horo_start is not None and horo_end is not None else None
+
+    # Fuel (liters → gallons), fallback to DeviceTotalFuel
+    fuel_gallons: float | None = None
+    fuel_first = _geotab_first_value(fuel_readings)
+    fuel_last = _geotab_last_value(fuel_readings)
+    if fuel_first is not None and fuel_last is not None and (fuel_last - fuel_first) > 0:
+        fuel_gallons = max(0.0, fuel_last - fuel_first) / _LITERS_PER_GALLON
+    else:
+        device_fuel_readings = get_status_data_for_month(api, device_id, _DIAG_DEVICE_FUEL, from_date, to_date)
+        dv_first = _geotab_first_value(device_fuel_readings)
+        dv_last = _geotab_last_value(device_fuel_readings)
+        if dv_first is not None and dv_last is not None and (dv_last - dv_first) > 0:
+            fuel_gallons = max(0.0, dv_last - dv_first) / _LITERS_PER_GALLON
+            warnings.append("Combustible calculado usando DiagnosticDeviceTotalFuelId (fuente alternativa).")
+        else:
+            warnings.append("No se pudo determinar el consumo de combustible para el mes.")
+
+    # GPS data from Trips
+    kms_gps: float | None = None
+    hours_gps: float | None = None
+    if trips:
+        kms_gps = sum(float(t.get("distance") or 0) for t in trips)
+        total_hours = sum(
+            _td_to_hours(t.get("drivingDuration")) + _td_to_hours(t.get("idlingDuration"))
+            for t in trips
+        )
+        hours_gps = total_hours if total_hours > 0 else None
+
+    all_present = all(v is not None for v in (odo_start, odo_end, horo_start, horo_end, fuel_gallons, kms_gps, hours_gps))
+    status = "calculated" if all_present else "partial"
+
+    return MonthlyPerformanceRecord(
+        customer_id=target.customer_id,
+        customer_database_id=target.customer_database_id,
+        client_name=target.client_name,
+        database_name=target.database_name,
+        source_provider=target.provider_key,
+        plate=target.plate,
+        provider_vehicle_id=device_id,
+        technical_number=target.technical_number,
+        engine_name=target.engine_name,
+        period_month=month,
+        odo_start=odo_start,
+        odo_end=odo_end,
+        horo_start=horo_start,
+        horo_end=horo_end,
+        kms_ecm=kms_ecm,
+        kms_gps=kms_gps,
+        hours_ecm=hours_ecm,
+        hours_gps=hours_gps,
+        fuel_gallons=fuel_gallons,
+        calculation_status=status,
+        warnings=warnings,
+    )
+
+
+class GeotabMonthlyPerformanceProvider:
+    key = "geotab"
+
+    def calculate_database_rows(
+        self,
+        *,
+        month: str,
+        year: int,
+        month_number: int,
+        previous_month: str,
+        targets: list[PerformanceTarget],
+        previous_records: dict[tuple[int, str], MonthlyPerformanceRecord],
+        bindings: dict[tuple[str, int, str], BindingSnapshot],
+    ) -> ProviderCalculationResult:
+        if not targets:
+            return ProviderCalculationResult(records=[], binding_updates=[])
+
+        sample = targets[0]
+        if not sample.username or not sample.password:
+            raise ValueError(
+                f"La database {sample.database_name or sample.customer_database_id} no tiene credenciales Geotab completas."
+            )
+
+        api = get_authenticated_client(sample.username, sample.password, sample.database_name or "")
+        from_date, to_date = get_geotab_month_range(year, month_number)
+
+        rows: list[MonthlyPerformanceRecord] = []
+        binding_updates: list[BindingUpsert] = []
+
+        for target in targets:
+            binding_key = ("geotab", target.customer_database_id, target.plate)
+            existing_binding = bindings.get(binding_key)
+            device_id = existing_binding.provider_vehicle_id if existing_binding else None
+
+            if not device_id:
+                device = find_device_by_plate(api, target.plate)
+                device_id = str(device.get("id") or "").strip() if device else None
+
+            if not device_id:
+                binding_updates.append(
+                    BindingUpsert(
+                        target=target,
+                        provider_vehicle_id=None,
+                        binding_status="unbound",
+                        last_error="No fue posible resolver el dispositivo en Geotab para esta placa.",
+                    )
+                )
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="unbound",
+                        warnings=["No fue posible resolver el dispositivo en Geotab para esta placa."],
+                    )
+                )
+                continue
+
+            binding_updates.append(
+                BindingUpsert(
+                    target=target,
+                    provider_vehicle_id=device_id,
+                    binding_status="resolved",
+                    last_error=None,
+                )
+            )
+
+            try:
+                record = _calculate_geotab_vehicle_record(
+                    target=target,
+                    month=month,
+                    device_id=device_id,
+                    api=api,
+                    from_date=from_date,
+                    to_date=to_date,
+                    previous_record=previous_records.get((target.customer_database_id, target.plate)),
+                )
+                rows.append(record)
+            except Exception as exc:
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="error",
+                        provider_vehicle_id=device_id,
+                        warnings=[f"Error calculando la placa en Geotab: {exc}"],
+                    )
+                )
+
+        return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
+
+
 _MONTHLY_PERFORMANCE_PROVIDERS: dict[str, MonthlyPerformanceProvider] = {
     "artimo": ArtimoMonthlyPerformanceProvider(),
+    "geotab": GeotabMonthlyPerformanceProvider(),
 }
 
 
