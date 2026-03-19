@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
+from app.core.dependencies import get_current_user, require_role
 from app.schemas.vehicle import (
     AssignedDatabaseSummary,
     VehicleAssignmentRecord,
@@ -18,7 +19,8 @@ router = APIRouter(prefix="/vehicle", tags=["vehicle"])
 
 @router.get("/lookup", response_model=VehicleLookupResponse)
 def lookup_vehicle(
-    identifier: str = Query(..., min_length=3, max_length=32, description="Placa o VIN del vehiculo")
+    identifier: str = Query(..., min_length=3, max_length=32, description="Placa o VIN del vehiculo"),
+    _user: dict = Depends(get_current_user),
 ) -> VehicleLookupResponse:
     return lookup_vehicle_service(identifier)
 
@@ -30,7 +32,8 @@ def get_vehicle_assignments(
         min_length=1,
         max_length=64,
         description="Texto para filtrar por placa, VIN, TEC# o nombre del motor",
-    )
+    ),
+    _user: dict = Depends(get_current_user),
 ) -> list[VehicleAssignmentRecord]:
     return list_vehicle_assignments(search)
 
@@ -39,6 +42,7 @@ def get_vehicle_assignments(
 def assign_database_to_vehicle(
     payload: VehicleDatabaseAssignmentRequest,
     plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
+    _user: dict = Depends(require_role("admin", "editor")),
 ) -> AssignedDatabaseSummary:
     try:
         return assign_vehicle_database(plate, payload)
@@ -50,6 +54,7 @@ def assign_database_to_vehicle(
 @router.post("/{plate}/refresh", response_model=VehicleLookupResponse)
 def refresh_vehicle_assignment(
     plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
+    _user: dict = Depends(require_role("admin", "editor")),
 ) -> VehicleLookupResponse:
     return lookup_vehicle_service(plate)
 
@@ -57,6 +62,7 @@ def refresh_vehicle_assignment(
 @router.post("/{plate}/revalidate-customer-geotab")
 def revalidate_customer_geotab(
     plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
+    _user: dict = Depends(require_role("admin", "editor")),
 ) -> dict:
     try:
         return revalidate_vehicle_customer_geotab(plate)

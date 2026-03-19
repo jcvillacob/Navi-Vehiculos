@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
+from app.core.dependencies import get_current_user, require_role
 from app.schemas.vehicle import (
     CustomerCreateRequest,
     CustomerDatabaseCreateRequest,
@@ -31,12 +32,15 @@ router = APIRouter(prefix="/customers", tags=["customers"])
 
 
 @router.get("", response_model=list[CustomerRecord])
-def get_customers() -> list[CustomerRecord]:
+def get_customers(_user: dict = Depends(get_current_user)) -> list[CustomerRecord]:
     return list_customers()
 
 
 @router.post("", response_model=CustomerRecord, status_code=status.HTTP_201_CREATED)
-def create_customer_record(payload: CustomerCreateRequest) -> CustomerRecord:
+def create_customer_record(
+    payload: CustomerCreateRequest,
+    _user: dict = Depends(require_role("admin", "editor")),
+) -> CustomerRecord:
     try:
         return create_customer(payload)
     except ValueError as exc:
@@ -47,6 +51,7 @@ def create_customer_record(payload: CustomerCreateRequest) -> CustomerRecord:
 def create_database_record(
     payload: CustomerDatabaseCreateRequest,
     customer_id: int = Path(..., gt=0, description="ID del cliente"),
+    _user: dict = Depends(require_role("admin", "editor")),
 ) -> CustomerDatabaseRecord:
     try:
         return create_customer_database(customer_id, payload)
@@ -59,6 +64,7 @@ def create_database_record(
 def update_customer_record(
     payload: CustomerUpdateRequest,
     customer_id: int = Path(..., gt=0, description="ID del cliente"),
+    _user: dict = Depends(require_role("admin", "editor")),
 ) -> CustomerRecord:
     try:
         return update_customer(customer_id, payload)
@@ -71,6 +77,7 @@ def update_customer_record(
 def update_database_record(
     payload: CustomerDatabaseUpdateRequest,
     database_id: int = Path(..., gt=0, description="ID de la database"),
+    _user: dict = Depends(require_role("admin", "editor")),
 ) -> CustomerDatabaseRecord:
     try:
         return update_customer_database(database_id, payload)
@@ -87,6 +94,7 @@ def update_database_record(
 def create_rule_record(
     payload: GeotabRuleCreateRequest,
     database_id: int = Path(..., gt=0, description="ID de la database Geotab"),
+    _user: dict = Depends(require_role("admin", "editor")),
 ) -> GeotabRuleRecord:
     try:
         return create_geotab_rule(database_id, payload)
@@ -105,6 +113,7 @@ def create_rule_record(
 def create_rule_group_record(
     payload: GeotabRuleGroupCreateRequest,
     database_id: int = Path(..., gt=0, description="ID de la database Geotab"),
+    _user: dict = Depends(require_role("admin", "editor")),
 ) -> GeotabRuleGroupRecord:
     try:
         return create_geotab_rule_group(database_id, payload)
@@ -120,6 +129,7 @@ def create_rule_group_record(
 def resolve_rule_record(
     database_id: int = Path(..., gt=0, description="ID de la database Geotab"),
     rule_id: str = Query(..., min_length=1, description="ID alfanumerico de la regla en Geotab"),
+    _user: dict = Depends(get_current_user),
 ) -> GeotabRuleInspection:
     try:
         return resolve_geotab_rule(database_id, rule_id)
@@ -133,6 +143,7 @@ def resolve_rule_record(
 @router.get("/rules/{rule_id}/inspection", response_model=GeotabRuleInspection)
 def inspect_rule_record(
     rule_id: int = Path(..., gt=0, description="ID del registro local de la regla"),
+    _user: dict = Depends(get_current_user),
 ) -> GeotabRuleInspection:
     try:
         return inspect_geotab_rule_record(rule_id)
@@ -143,6 +154,7 @@ def inspect_rule_record(
 @router.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_rule_record(
     rule_id: int = Path(..., gt=0, description="ID de la regla"),
+    _user: dict = Depends(require_role("admin", "editor")),
 ) -> None:
     try:
         delete_geotab_rule(rule_id)
@@ -153,6 +165,7 @@ def delete_rule_record(
 @router.delete("/rule-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_rule_group_record(
     group_id: int = Path(..., gt=0, description="ID del grupo de reglas"),
+    _user: dict = Depends(require_role("admin", "editor")),
 ) -> None:
     try:
         delete_geotab_rule_group(group_id)

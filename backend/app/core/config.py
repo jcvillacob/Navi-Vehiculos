@@ -21,6 +21,10 @@ class Settings:
         for origin in os.getenv("CORS_ORIGINS", "http://localhost:8090").split(",")
         if origin.strip()
     )
+    jwt_secret: str = _required_env("JWT_SECRET")
+    jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
+    jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))
+    redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 
 @dataclass(frozen=True)

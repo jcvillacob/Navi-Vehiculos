@@ -1,12 +1,36 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
+import { useAuth } from "./context/AuthContext";
+import ProtectedRoute from "./components/ProtectedRoute";
+import LoginPage from "./pages/LoginPage";
+import AuditPage from "./pages/AuditPage";
+import UsersPage from "./pages/UsersPage";
 import HomePage from "./pages/HomePage";
+import RendimientosPage from "./pages/RendimientosPage";
 import CustomersPage from "./pages/CustomersPage";
 import EngineLookupPage from "./pages/EngineLookupPage";
 import MotorsPage from "./pages/MotorsPage";
 import VehiclesPage from "./pages/VehiclesPage";
 
 export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/*"
+        element={
+          <ProtectedRoute>
+            <AppShell />
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
+  );
+}
+
+function AppShell() {
+  const { user, logout } = useAuth();
+
   return (
     <div className="app-shell">
       <div className="app-orb app-orb-one" aria-hidden="true" />
@@ -33,6 +57,10 @@ export default function App() {
                 <span>Vehiculos</span>
                 <small>Placas asociadas</small>
               </NavLink>
+              <NavLink to="/rendimientos">
+                <span>Rendimientos</span>
+                <small>Kms, horas y consumo</small>
+              </NavLink>
               <NavLink to="/motores">
                 <span>Motores</span>
                 <small>Catalogo tecnico</small>
@@ -41,6 +69,18 @@ export default function App() {
                 <span>Clientes</span>
                 <small>Databases y accesos</small>
               </NavLink>
+              {user?.role === "admin" && (
+                <>
+                  <NavLink to="/usuarios">
+                    <span>Usuarios</span>
+                    <small>Roles y accesos</small>
+                  </NavLink>
+                  <NavLink to="/auditoria">
+                    <span>Auditoria</span>
+                    <small>Logs del sistema</small>
+                  </NavLink>
+                </>
+              )}
             </nav>
 
             <section className="sidebar-note">
@@ -49,6 +89,19 @@ export default function App() {
                 Registra motores una sola vez y deja que la consulta los clasifique automaticamente.
               </p>
             </section>
+
+            <div className="sidebar-user">
+              <div className="sidebar-user-info">
+                <span className="sidebar-user-name">{user?.username}</span>
+                <span className="sidebar-user-role">{user?.role}</span>
+              </div>
+              <button
+                className="button-secondary button-sm sidebar-logout"
+                onClick={logout}
+              >
+                Cerrar sesion
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -60,6 +113,23 @@ export default function App() {
               <Route path="/motores" element={<MotorsPage />} />
               <Route path="/clientes" element={<CustomersPage />} />
               <Route path="/vehiculos" element={<VehiclesPage />} />
+              <Route path="/rendimientos" element={<RendimientosPage />} />
+              <Route
+                path="/usuarios"
+                element={
+                  <ProtectedRoute roles={["admin"]}>
+                    <UsersPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/auditoria"
+                element={
+                  <ProtectedRoute roles={["admin"]}>
+                    <AuditPage />
+                  </ProtectedRoute>
+                }
+              />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </div>

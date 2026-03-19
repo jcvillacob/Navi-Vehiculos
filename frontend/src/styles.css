@@ -885,7 +885,8 @@ input[readonly] {
 .empty-lookup-grid,
 .motor-overview-grid,
 .motor-cards-grid,
-.vehicles-summary-grid {
+.vehicles-summary-grid,
+.rendimientos-summary-grid {
   display: grid;
   gap: 16px;
 }
@@ -905,6 +906,10 @@ input[readonly] {
 
 .vehicles-summary-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rendimientos-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .motor-cards-grid {
@@ -2512,6 +2517,86 @@ input[readonly] {
 }
 
 /* ─────────────────────────────
+   PERFORMANCE TABLE
+───────────────────────────── */
+
+.rendimientos-panel {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+
+.rendimientos-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) repeat(5, minmax(150px, 180px)) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.rendimientos-search-field {
+  min-width: 0;
+}
+
+.rendimientos-filter-actions {
+  flex-wrap: nowrap;
+}
+
+.rendimientos-table-shell {
+  overflow: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.rendimientos-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1100px;
+}
+
+.rendimientos-table thead th {
+  padding: 10px 14px;
+  text-align: left;
+  font-family: "Poppins", sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+
+.rendimientos-table tbody td {
+  padding: 12px 14px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.rendimientos-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.rendimientos-table tbody tr:hover td {
+  background: var(--bg);
+}
+
+.rendimientos-table td strong {
+  font-family: "Montserrat", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.rendimientos-empty-state {
+  gap: 8px;
+}
+
+/* ─────────────────────────────
    MODAL
 ───────────────────────────── */
 
@@ -2618,7 +2703,8 @@ input[readonly] {
   .dash-recent-grid,
   .empty-lookup-grid,
   .motor-overview-grid,
-  .vehicles-summary-grid {
+  .vehicles-summary-grid,
+  .rendimientos-summary-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -2675,7 +2761,8 @@ input[readonly] {
 
   .page-header-row,
   .lookup-layout,
-  .vehicles-filter-bar {
+  .vehicles-filter-bar,
+  .rendimientos-filter-bar {
     grid-template-columns: 1fr;
   }
 
@@ -2806,4 +2893,134 @@ input[readonly] {
   .vehicles-filter-actions {
     flex-wrap: wrap;
   }
+}
+
+/* ── Auth / Login ──────────────────────────────────────────────────────────── */
+
+.auth-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  font-family: 'Poppins', sans-serif;
+  font-size: 14px;
+  color: var(--text-muted);
+  background: var(--bg);
+}
+
+.login-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 40px 40px 36px;
+}
+
+.login-title {
+  font-family: 'Montserrat', sans-serif;
+  font-weight: 800;
+  font-size: 24px;
+  color: var(--text-primary);
+  margin: 6px 0 24px;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.login-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: 'Poppins', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.login-input {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: 'Poppins', sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--surface);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.login-input:focus {
+  border-color: var(--red);
+}
+
+.login-submit {
+  margin-top: 8px;
+  width: 100%;
+}
+
+/* ── Sidebar user block ────────────────────────────────────────────────────── */
+
+.sidebar-user {
+  margin-top: auto;
+  padding: 14px 16px;
+  border-top: 1px solid rgba(195, 202, 200, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-user-name {
+  font-family: 'Poppins', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--surface);
+}
+
+.sidebar-user-role {
+  font-family: 'Poppins', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--clear-gray);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sidebar-logout {
+  width: 100%;
+}
+
+/* ── Audit page ────────────────────────────────────────────────────────────── */
+
+.audit-path {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
 }
