@@ -4,6 +4,15 @@ import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import { inspectGeotabRule, listMotors, resolveGeotabRule } from "../api/vehicleApi";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
+import {
+  DATABASE_PROVIDERS,
+  buildProviderConfigPayload,
+  getDatabaseTypeLabel,
+  getInitialProviderConfig,
+  getProviderDefinition,
+  getProviderDetailRows,
+  providerUsesAccessUrl
+} from "../features/customers/providerCatalog";
 
 function formatMatchModeLabel(value) {
   return value === "any" ? "Cualquiera" : "Todas";
@@ -113,8 +122,11 @@ function CreateDatabaseModal({ customers, loading, preselectedCustomerId, onClos
   const [password, setPassword] = useState("");
   const [connectionType, setConnectionType] = useState("database");
   const [accessUrl, setAccessUrl] = useState("");
+  const [providerConfigState, setProviderConfigState] = useState(() => getInitialProviderConfig("database"));
 
-  const showAccessUrl = connectionType !== "geotab";
+  const providerDefinition = getProviderDefinition(connectionType);
+  const showAccessUrl = providerUsesAccessUrl(connectionType);
+  const showArtimoFields = connectionType === "artimo";
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -123,7 +135,8 @@ function CreateDatabaseModal({ customers, loading, preselectedCustomerId, onClos
       username: username.trim(),
       password: password.trim(),
       connection_type: connectionType,
-      access_url: showAccessUrl ? accessUrl.trim() || null : null
+      access_url: showAccessUrl ? accessUrl.trim() || null : null,
+      provider_config: buildProviderConfigPayload(connectionType, providerConfigState)
     });
   };
 
@@ -197,12 +210,112 @@ function CreateDatabaseModal({ customers, loading, preselectedCustomerId, onClos
             <select
               id="create-db-connection-type"
               value={connectionType}
-              onChange={(event) => setConnectionType(event.target.value)}
+              onChange={(event) => {
+                const nextType = event.target.value;
+                setConnectionType(nextType);
+                setProviderConfigState(getInitialProviderConfig(nextType));
+                if (!providerUsesAccessUrl(nextType)) {
+                  setAccessUrl("");
+                }
+              }}
             >
-              <option value="database">Database</option>
-              <option value="geotab">Geotab</option>
+              {DATABASE_PROVIDERS.map((provider) => (
+                <option key={provider.key} value={provider.key}>
+                  {provider.label}
+                </option>
+              ))}
             </select>
+            <small className="support-copy">{providerDefinition.description}</small>
           </div>
+
+          {showArtimoFields ? (
+            <>
+              <div className="form-field">
+                <label htmlFor="create-db-artimo-customer-id">Artimo customer_id</label>
+                <input
+                  id="create-db-artimo-customer-id"
+                  value={providerConfigState.customerId || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, customerId: event.target.value }))
+                  }
+                  placeholder="Ej: 939b02d6-074c-4416-87ca-877c443be9f9"
+                  required
+                />
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="create-db-artimo-group-name">Artimo group_name</label>
+                <input
+                  id="create-db-artimo-group-name"
+                  value={providerConfigState.groupName || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, groupName: event.target.value }))
+                  }
+                  placeholder="Ej: NAVITRANS"
+                  required
+                />
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="create-db-artimo-api-base">API base URL</label>
+                <input
+                  id="create-db-artimo-api-base"
+                  type="url"
+                  value={providerConfigState.apiBaseUrl || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, apiBaseUrl: event.target.value }))
+                  }
+                  placeholder="https://api.artimo.com.co"
+                  required
+                />
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="create-db-artimo-auth-base">Auth base URL</label>
+                <input
+                  id="create-db-artimo-auth-base"
+                  type="url"
+                  value={providerConfigState.authBaseUrl || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, authBaseUrl: event.target.value }))
+                  }
+                  placeholder="https://apifront.artimo.com.co"
+                  required
+                />
+              </div>
+
+              <div className="rule-assign-form-row">
+                <div className="form-field">
+                  <label htmlFor="create-db-artimo-start-hour">Hora inicio UTC</label>
+                  <input
+                    id="create-db-artimo-start-hour"
+                    type="number"
+                    min="0"
+                    max="23"
+                    value={providerConfigState.monthStartHourUtc || ""}
+                    onChange={(event) =>
+                      setProviderConfigState((current) => ({ ...current, monthStartHourUtc: event.target.value }))
+                    }
+                    required
+                  />
+                </div>
+                <div className="form-field">
+                  <label htmlFor="create-db-artimo-end-hour">Hora fin UTC</label>
+                  <input
+                    id="create-db-artimo-end-hour"
+                    type="number"
+                    min="0"
+                    max="23"
+                    value={providerConfigState.monthEndHourUtc || ""}
+                    onChange={(event) =>
+                      setProviderConfigState((current) => ({ ...current, monthEndHourUtc: event.target.value }))
+                    }
+                    required
+                  />
+                </div>
+              </div>
+            </>
+          ) : null}
 
           {showAccessUrl ? (
             <div className="form-field">
@@ -222,7 +335,15 @@ function CreateDatabaseModal({ customers, loading, preselectedCustomerId, onClos
           <div className="actions-row modal-actions">
             <button
               type="submit"
-              disabled={loading || !selectedCustomerId || !databaseName.trim() || !username.trim() || !password.trim()}
+              disabled={
+                loading ||
+                !selectedCustomerId ||
+                !databaseName.trim() ||
+                !username.trim() ||
+                !password.trim() ||
+                (showArtimoFields &&
+                  (!(providerConfigState.customerId || "").trim() || !(providerConfigState.groupName || "").trim()))
+              }
             >
               {loading ? "Guardando..." : "Crear database"}
             </button>
@@ -243,8 +364,13 @@ function EditDatabaseModal({ database, loading, onClose, onSubmit }) {
   const [password, setPassword] = useState("");
   const [connectionType, setConnectionType] = useState(database.connection_type || "database");
   const [accessUrl, setAccessUrl] = useState(database.access_url || "");
+  const [providerConfigState, setProviderConfigState] = useState(() =>
+    getInitialProviderConfig(database.connection_type || "database", database.provider_config)
+  );
 
-  const showAccessUrl = connectionType !== "geotab";
+  const providerDefinition = getProviderDefinition(connectionType);
+  const showAccessUrl = providerUsesAccessUrl(connectionType);
+  const showArtimoFields = connectionType === "artimo";
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -252,7 +378,8 @@ function EditDatabaseModal({ database, loading, onClose, onSubmit }) {
       database_name: databaseName.trim(),
       username: username.trim(),
       connection_type: connectionType,
-      access_url: showAccessUrl ? accessUrl.trim() || null : null
+      access_url: showAccessUrl ? accessUrl.trim() || null : null,
+      provider_config: buildProviderConfigPayload(connectionType, providerConfigState)
     };
     if (password.trim()) {
       payload.password = password.trim();
@@ -312,12 +439,108 @@ function EditDatabaseModal({ database, loading, onClose, onSubmit }) {
             <select
               id="edit-db-connection-type"
               value={connectionType}
-              onChange={(event) => setConnectionType(event.target.value)}
+              onChange={(event) => {
+                const nextType = event.target.value;
+                setConnectionType(nextType);
+                setProviderConfigState(getInitialProviderConfig(nextType, database.provider_config));
+                if (!providerUsesAccessUrl(nextType)) {
+                  setAccessUrl("");
+                }
+              }}
             >
-              <option value="database">Database</option>
-              <option value="geotab">Geotab</option>
+              {DATABASE_PROVIDERS.map((provider) => (
+                <option key={provider.key} value={provider.key}>
+                  {provider.label}
+                </option>
+              ))}
             </select>
+            <small className="support-copy">{providerDefinition.description}</small>
           </div>
+
+          {showArtimoFields ? (
+            <>
+              <div className="form-field">
+                <label htmlFor="edit-db-artimo-customer-id">Artimo customer_id</label>
+                <input
+                  id="edit-db-artimo-customer-id"
+                  value={providerConfigState.customerId || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, customerId: event.target.value }))
+                  }
+                  required
+                />
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="edit-db-artimo-group-name">Artimo group_name</label>
+                <input
+                  id="edit-db-artimo-group-name"
+                  value={providerConfigState.groupName || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, groupName: event.target.value }))
+                  }
+                  required
+                />
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="edit-db-artimo-api-base">API base URL</label>
+                <input
+                  id="edit-db-artimo-api-base"
+                  type="url"
+                  value={providerConfigState.apiBaseUrl || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, apiBaseUrl: event.target.value }))
+                  }
+                  required
+                />
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="edit-db-artimo-auth-base">Auth base URL</label>
+                <input
+                  id="edit-db-artimo-auth-base"
+                  type="url"
+                  value={providerConfigState.authBaseUrl || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, authBaseUrl: event.target.value }))
+                  }
+                  required
+                />
+              </div>
+
+              <div className="rule-assign-form-row">
+                <div className="form-field">
+                  <label htmlFor="edit-db-artimo-start-hour">Hora inicio UTC</label>
+                  <input
+                    id="edit-db-artimo-start-hour"
+                    type="number"
+                    min="0"
+                    max="23"
+                    value={providerConfigState.monthStartHourUtc || ""}
+                    onChange={(event) =>
+                      setProviderConfigState((current) => ({ ...current, monthStartHourUtc: event.target.value }))
+                    }
+                    required
+                  />
+                </div>
+                <div className="form-field">
+                  <label htmlFor="edit-db-artimo-end-hour">Hora fin UTC</label>
+                  <input
+                    id="edit-db-artimo-end-hour"
+                    type="number"
+                    min="0"
+                    max="23"
+                    value={providerConfigState.monthEndHourUtc || ""}
+                    onChange={(event) =>
+                      setProviderConfigState((current) => ({ ...current, monthEndHourUtc: event.target.value }))
+                    }
+                    required
+                  />
+                </div>
+              </div>
+            </>
+          ) : null}
 
           {showAccessUrl ? (
             <div className="form-field">
@@ -335,7 +558,17 @@ function EditDatabaseModal({ database, loading, onClose, onSubmit }) {
           ) : null}
 
           <div className="actions-row modal-actions">
-            <button type="submit" disabled={loading || !databaseName.trim() || !username.trim()}>
+            <button
+              type="submit"
+              disabled={
+                loading ||
+                !databaseName.trim() ||
+                !username.trim() ||
+                (showArtimoFields &&
+                  (!(providerConfigState.customerId || "").trim() ||
+                    !(providerConfigState.groupName || "").trim()))
+              }
+            >
               {loading ? "Guardando..." : "Guardar cambios"}
             </button>
             <button type="button" className="button-secondary" onClick={onClose}>
@@ -491,6 +724,7 @@ function DatabaseDetailModal({
   const rules = database.rules || [];
   const ruleGroups = database.rule_groups || [];
   const isGeotab = database.connection_type === "geotab";
+  const providerDetailRows = getProviderDetailRows(database.connection_type, database.provider_config);
   const selectedRule = rules.find((rule) => rule.id === selectedRuleId) || null;
 
   const assignedRuleIds = useMemo(() => {
@@ -647,7 +881,7 @@ function DatabaseDetailModal({
         <header className="modal-header">
           <div className="modal-heading">
             <span className="eyebrow">
-              {isGeotab ? "Geotab" : "Database"}
+              {getDatabaseTypeLabel(database.connection_type)}
             </span>
             <h3>{database.database_name}</h3>
           </div>
@@ -673,8 +907,14 @@ function DatabaseDetailModal({
           </div>
           <div className="db-detail-row">
             <span className="db-detail-label">Tipo</span>
-            <span>{isGeotab ? "Geotab" : "Database"}</span>
+            <span>{getDatabaseTypeLabel(database.connection_type)}</span>
           </div>
+          {providerDetailRows.map((row) => (
+            <div className="db-detail-row" key={row.label}>
+              <span className="db-detail-label">{row.label}</span>
+              <strong>{row.value}</strong>
+            </div>
+          ))}
           {database.access_url ? (
             <div className="db-detail-row">
               <span className="db-detail-label">Enlace</span>
@@ -1134,7 +1374,7 @@ export default function CustomersPage() {
           <span className="eyebrow">Administracion</span>
           <h2>Clientes y databases</h2>
           <p>
-            Gestiona clientes, databases y reglas Geotab.
+            Gestiona clientes, databases y proveedores como Geotab o Artimo.
           </p>
         </div>
         <div className="page-header-actions">
@@ -1212,8 +1452,10 @@ export default function CustomersPage() {
                     <div className="source-field-row">
                       <span>
                         {database.database_name}
-                        {database.connection_type === "geotab" ? (
-                          <span className="status geotab-badge geotab-type-label">Geotab</span>
+                        {database.connection_type !== "database" ? (
+                          <span className="status geotab-badge geotab-type-label">
+                            {getDatabaseTypeLabel(database.connection_type)}
+                          </span>
                         ) : null}
                       </span>
                       <div className="source-field-actions">
@@ -1228,6 +1470,11 @@ export default function CustomersPage() {
                       </div>
                     </div>
                     <strong>{database.username}</strong>
+                    {database.connection_type === "artimo" ? (
+                      <span className="db-rule-count">
+                        Grupo: {database.provider_config?.group_name || "Sin group_name"}
+                      </span>
+                    ) : null}
                     {database.connection_type === "geotab" && (database.rules || []).length > 0 ? (
                       <span className="db-rule-count">{(database.rules || []).length} reglas</span>
                     ) : null}

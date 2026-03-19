@@ -7,6 +7,7 @@ from typing import Any
 import psycopg
 from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from app.clients.geotab_client import build_rule_inspection
 from app.core.config import GeotabConfig
@@ -40,6 +41,13 @@ from app.services.storage import (
     download_file,
     upload_file,
 )
+from app.services.provider_registry import (
+    infer_provider_key,
+    normalize_provider_config,
+    normalize_provider_key,
+    public_provider_config,
+    uses_access_url,
+)
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -70,6 +78,10 @@ def _normalize_match_mode(value: str | None) -> str:
     return normalized
 
 
+def _normalize_connection_type(value: str | None) -> str:
+    return normalize_provider_key(value)
+
+
 def _normalize_motor_payload(payload: MotorCatalogUpsertRequest) -> dict[str, Any]:
     return {
         "technical_number": payload.technical_number.strip(),
@@ -79,6 +91,63 @@ def _normalize_motor_payload(payload: MotorCatalogUpsertRequest) -> dict[str, An
 
 def _attachment_download_url(attachment_id: int) -> str:
     return f"/api/v1/motors/attachments/{attachment_id}/download"
+
+
+def _sync_inferred_provider_types(conn: psycopg.Connection) -> None:
+    with conn.cursor() as cur:
+        cur.execute("SAVEPOINT provider_inference_sync;")
+
+    try:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, database_name, username, password, connection_type, access_url, provider_config
+                FROM customer_databases;
+                """
+            )
+            rows = cur.fetchall()
+
+        for row in rows:
+            current_provider = normalize_provider_key(row.get("connection_type"))
+            inferred_provider = infer_provider_key(
+                connection_type=row.get("connection_type"),
+                database_name=row.get("database_name"),
+                access_url=row.get("access_url"),
+                provider_config=row.get("provider_config"),
+            )
+            if inferred_provider == current_provider or inferred_provider == "database":
+                continue
+
+            normalized_provider_config = normalize_provider_config(
+                inferred_provider,
+                row.get("provider_config"),
+                username=row.get("username"),
+                password=row.get("password"),
+                existing_provider_config=row.get("provider_config"),
+            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE customer_databases
+                    SET connection_type = %s,
+                        provider_config = %s,
+                        updated_at = NOW()
+                    WHERE id = %s;
+                    """,
+                    (
+                        inferred_provider,
+                        Jsonb(normalized_provider_config),
+                        row["id"],
+                    ),
+                )
+
+        with conn.cursor() as cur:
+            cur.execute("RELEASE SAVEPOINT provider_inference_sync;")
+    except Exception:
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK TO SAVEPOINT provider_inference_sync;")
+            cur.execute("RELEASE SAVEPOINT provider_inference_sync;")
+        _logger.exception("No fue posible sincronizar automaticamente los providers legacy.")
 
 
 def _build_attachment_record(row: dict[str, Any]) -> MotorAttachmentRecord:
@@ -281,6 +350,7 @@ def _ensure_motor_tables(conn: psycopg.Connection) -> None:
                 username TEXT NOT NULL,
                 password TEXT NOT NULL,
                 connection_type TEXT NOT NULL DEFAULT 'database',
+                provider_config JSONB NOT NULL DEFAULT '{}'::jsonb,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 UNIQUE (customer_id, database_name, username)
@@ -334,6 +404,12 @@ def _ensure_motor_tables(conn: psycopg.Connection) -> None:
             """
             ALTER TABLE customer_databases
             ADD COLUMN IF NOT EXISTS connection_type TEXT NOT NULL DEFAULT 'database';
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE customer_databases
+            ADD COLUMN IF NOT EXISTS provider_config JSONB NOT NULL DEFAULT '{}'::jsonb;
             """
         )
         cur.execute(
@@ -437,6 +513,7 @@ def _ensure_motor_tables(conn: psycopg.Connection) -> None:
             END $$;
             """
         )
+    _sync_inferred_provider_types(conn)
 
 
 def list_motors() -> list[MotorCatalogRecord]:
@@ -977,6 +1054,8 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                 f"""
                 SELECT
                     a.plate,
+                    a.customer_id,
+                    a.customer_database_id,
                     a.vin,
                     a.geotab_status,
                     a.geotab_customer_status,
@@ -1026,13 +1105,20 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
     records: list[VehicleAssignmentRecord] = []
     for row in rows:
         row_cpl = _normalize_cpl(row.get("cpl"))
+        effective_provider = infer_provider_key(
+            connection_type=row.get("database_connection_type"),
+            database_name=row.get("database_name"),
+            access_url=row.get("access_url"),
+        )
         candidate_attachments = attachments_by_technical_number.get(str(row["technical_number"]), [])
         matching_attachments = [
             attachment for attachment in candidate_attachments if attachment.cpl == row_cpl
         ]
+        payload = dict(row)
+        payload["database_connection_type"] = effective_provider if payload.get("database_name") else None
         records.append(
             VehicleAssignmentRecord(
-                **row,
+                **payload,
                 attachments=matching_attachments,
             )
         )
@@ -1173,6 +1259,7 @@ def list_customers() -> list[CustomerRecord]:
                     (password IS NOT NULL AND password <> '') AS has_password,
                     connection_type,
                     access_url,
+                    provider_config,
                     created_at,
                     updated_at
                 FROM customer_databases
@@ -1235,7 +1322,13 @@ def list_customers() -> list[CustomerRecord]:
     credential_to_db_ids: dict[tuple[str, str], list[int]] = {}
     geotab_db_ids: set[int] = set()
     for row in database_rows:
-        if row.get("connection_type") == "geotab":
+        effective_provider = infer_provider_key(
+            connection_type=row.get("connection_type"),
+            database_name=row.get("database_name"),
+            access_url=row.get("access_url"),
+            provider_config=row.get("provider_config"),
+        )
+        if effective_provider == "geotab":
             key = (str(row["database_name"]).lower(), str(row["username"]).lower())
             credential_to_db_ids.setdefault(key, []).append(int(row["id"]))
             geotab_db_ids.add(int(row["id"]))
@@ -1272,8 +1365,19 @@ def list_customers() -> list[CustomerRecord]:
     databases_by_customer: dict[int, list[CustomerDatabaseRecord]] = {}
     for row in database_rows:
         db_id = int(row["id"])
+        payload = dict(row)
+        payload["connection_type"] = infer_provider_key(
+            connection_type=payload.get("connection_type"),
+            database_name=payload.get("database_name"),
+            access_url=payload.get("access_url"),
+            provider_config=payload.get("provider_config"),
+        )
+        payload["provider_config"] = public_provider_config(
+            str(payload.get("connection_type") or "database"),
+            payload.get("provider_config"),
+        )
         record = CustomerDatabaseRecord(
-            **row,
+            **payload,
             rules=_merged_rules(db_id),
             rule_groups=_merged_groups(db_id),
         )
@@ -1319,12 +1423,16 @@ def create_customer_database(
     normalized_database_name = payload.database_name.strip()
     normalized_username = payload.username.strip()
     normalized_password = payload.password.strip()
-    normalized_connection_type = (payload.connection_type or "database").strip().lower()
-    if normalized_connection_type not in ("database", "geotab"):
-        normalized_connection_type = "database"
+    normalized_connection_type = _normalize_connection_type(payload.connection_type)
     normalized_access_url = (payload.access_url or "").strip() or None
-    if normalized_connection_type == "geotab":
+    if not uses_access_url(normalized_connection_type):
         normalized_access_url = None
+    normalized_provider_config = normalize_provider_config(
+        normalized_connection_type,
+        payload.provider_config,
+        username=normalized_username,
+        password=normalized_password,
+    )
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
@@ -1344,9 +1452,10 @@ def create_customer_database(
                         username,
                         password,
                         connection_type,
-                        access_url
+                        access_url,
+                        provider_config
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     RETURNING
                         id,
                         customer_id,
@@ -1355,6 +1464,7 @@ def create_customer_database(
                         (password IS NOT NULL AND password <> '') AS has_password,
                         connection_type,
                         access_url,
+                        provider_config,
                         created_at,
                         updated_at;
                     """,
@@ -1365,6 +1475,7 @@ def create_customer_database(
                         normalized_password,
                         normalized_connection_type,
                         normalized_access_url,
+                        Jsonb(normalized_provider_config),
                     ),
                 )
                 row = cur.fetchone()
@@ -1375,7 +1486,12 @@ def create_customer_database(
 
     if row is None:
         raise RuntimeError("No se pudo crear la database del cliente.")
-    return CustomerDatabaseRecord(**row, rules=[], rule_groups=[])
+    payload = dict(row)
+    payload["provider_config"] = public_provider_config(
+        str(payload.get("connection_type") or "database"),
+        payload.get("provider_config"),
+    )
+    return CustomerDatabaseRecord(**payload, rules=[], rule_groups=[])
 
 
 def update_customer(customer_id: int, payload: CustomerUpdateRequest) -> CustomerRecord:
@@ -1416,19 +1532,36 @@ def update_customer_database(
 ) -> CustomerDatabaseRecord:
     normalized_database_name = payload.database_name.strip()
     normalized_username = payload.username.strip()
-    normalized_connection_type = (payload.connection_type or "database").strip().lower()
-    if normalized_connection_type not in ("database", "geotab"):
-        normalized_connection_type = "database"
+    normalized_connection_type = _normalize_connection_type(payload.connection_type)
     normalized_access_url = (payload.access_url or "").strip() or None
-    if normalized_connection_type == "geotab":
+    if not uses_access_url(normalized_connection_type):
         normalized_access_url = None
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM customer_databases WHERE id = %s;", (database_id,))
-            if cur.fetchone() is None:
+            cur.execute(
+                """
+                SELECT id, provider_config, password
+                FROM customer_databases
+                WHERE id = %s;
+                """,
+                (database_id,),
+            )
+            existing_row = cur.fetchone()
+            if existing_row is None:
                 raise ValueError("La database no existe.")
+
+        effective_password = payload.password.strip() if payload.password is not None else str(
+            existing_row.get("password") or ""
+        ).strip()
+        normalized_provider_config = normalize_provider_config(
+            normalized_connection_type,
+            payload.provider_config,
+            username=normalized_username,
+            password=effective_password,
+            existing_provider_config=existing_row.get("provider_config"),
+        )
 
         try:
             with conn.cursor() as cur:
@@ -1441,18 +1574,20 @@ def update_customer_database(
                             password = %s,
                             connection_type = %s,
                             access_url = %s,
+                            provider_config = %s,
                             updated_at = NOW()
                         WHERE id = %s
                         RETURNING id, customer_id, database_name, username,
                                   (password IS NOT NULL AND password <> '') AS has_password,
-                                  connection_type, access_url, created_at, updated_at;
+                                  connection_type, access_url, provider_config, created_at, updated_at;
                         """,
                         (
                             normalized_database_name,
                             normalized_username,
-                            payload.password.strip(),
+                            effective_password,
                             normalized_connection_type,
                             normalized_access_url,
+                            Jsonb(normalized_provider_config),
                             database_id,
                         ),
                     )
@@ -1464,17 +1599,19 @@ def update_customer_database(
                             username = %s,
                             connection_type = %s,
                             access_url = %s,
+                            provider_config = %s,
                             updated_at = NOW()
                         WHERE id = %s
                         RETURNING id, customer_id, database_name, username,
                                   (password IS NOT NULL AND password <> '') AS has_password,
-                                  connection_type, access_url, created_at, updated_at;
+                                  connection_type, access_url, provider_config, created_at, updated_at;
                         """,
                         (
                             normalized_database_name,
                             normalized_username,
                             normalized_connection_type,
                             normalized_access_url,
+                            Jsonb(normalized_provider_config),
                             database_id,
                         ),
                     )
@@ -1490,7 +1627,12 @@ def update_customer_database(
         raise RuntimeError("No se pudo actualizar la database.")
     rules = _list_rules_for_database(database_id)
     rule_groups = _list_rule_groups_for_database(database_id)
-    return CustomerDatabaseRecord(**row, rules=rules, rule_groups=rule_groups)
+    result_payload = dict(row)
+    result_payload["provider_config"] = public_provider_config(
+        str(result_payload.get("connection_type") or "database"),
+        result_payload.get("provider_config"),
+    )
+    return CustomerDatabaseRecord(**result_payload, rules=rules, rule_groups=rule_groups)
 
 
 def _sibling_database_ids(conn: psycopg.Connection, database_id: int) -> list[int]:
@@ -1997,9 +2139,16 @@ def _get_or_create_customer_database(
     payload: CustomerDatabaseCreateRequest,
 ) -> int:
     normalized_password = payload.password.strip()
-    normalized_connection_type = (payload.connection_type or "database").strip().lower()
-    if normalized_connection_type not in ("database", "geotab"):
-        normalized_connection_type = "database"
+    normalized_connection_type = _normalize_connection_type(payload.connection_type)
+    normalized_access_url = (payload.access_url or "").strip() or None
+    if not uses_access_url(normalized_connection_type):
+        normalized_access_url = None
+    normalized_provider_config = normalize_provider_config(
+        normalized_connection_type,
+        payload.provider_config,
+        username=payload.username.strip(),
+        password=normalized_password,
+    )
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -2008,13 +2157,17 @@ def _get_or_create_customer_database(
                 database_name,
                 username,
                 password,
-                connection_type
+                connection_type,
+                access_url,
+                provider_config
             )
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (customer_id, database_name, username)
             DO UPDATE SET
                 password = EXCLUDED.password,
                 connection_type = EXCLUDED.connection_type,
+                access_url = EXCLUDED.access_url,
+                provider_config = EXCLUDED.provider_config,
                 updated_at = NOW()
             RETURNING id;
             """,
@@ -2024,6 +2177,8 @@ def _get_or_create_customer_database(
                 payload.username.strip(),
                 normalized_password,
                 normalized_connection_type,
+                normalized_access_url,
+                Jsonb(normalized_provider_config),
             ),
         )
         row = cur.fetchone()

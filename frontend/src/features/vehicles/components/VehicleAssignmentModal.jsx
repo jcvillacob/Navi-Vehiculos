@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import FileDropzone from "../../../components/FileDropzone";
+import { getDatabaseTypeLabel } from "../../customers/providerCatalog";
 
 function DataItem({ label, value }) {
   return (
@@ -272,7 +273,9 @@ export default function VehicleAssignmentModal({
               {availableDatabases.map((database) => (
                 <option key={database.id} value={database.id}>
                   {database.database_name} | {database.username}
-                  {database.connection_type === "geotab" ? " [Geotab]" : ""}
+                  {database.connection_type && database.connection_type !== "database"
+                    ? ` [${getDatabaseTypeLabel(database.connection_type)}]`
+                    : ""}
                 </option>
               ))}
             </select>

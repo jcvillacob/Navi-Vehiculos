@@ -2526,9 +2526,161 @@ input[readonly] {
   padding: 20px;
 }
 
+.rendimientos-month-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+
+.rendimientos-month-actions .form-field,
+.rendimientos-month-actions .client-picker {
+  min-width: 180px;
+}
+
+.client-picker {
+  position: relative;
+}
+
+.client-picker-summary {
+  display: grid;
+  gap: 3px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.client-picker-summary::-webkit-details-marker {
+  display: none;
+}
+
+.client-picker-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.client-picker-value {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: "Poppins", sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  transition: border-color 130ms ease, box-shadow 130ms ease;
+}
+
+.client-picker-summary:hover .client-picker-value {
+  border-color: var(--border-focus);
+}
+
+.client-picker[open] .client-picker-value {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--red-soft);
+}
+
+.client-picker-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 5;
+  width: min(300px, calc(100vw - 40px));
+  display: grid;
+  gap: 2px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.client-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.client-picker-option:hover {
+  background: var(--bg);
+}
+
+.client-picker-option span {
+  display: grid;
+  gap: 1px;
+}
+
+.client-picker-option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--red);
+}
+
+.client-picker-option small {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.rendimientos-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.status-chip.is-calculated {
+  background: rgba(31, 143, 95, 0.12);
+  color: var(--green, #1f8f5f);
+}
+
+.status-chip.is-partial,
+.status-chip.is-no-data,
+.status-chip.is-unbound {
+  background: rgba(212, 160, 23, 0.12);
+  color: #8a6500;
+}
+
+.status-chip.is-error {
+  background: rgba(238, 46, 47, 0.1);
+  color: var(--red);
+}
+
+.rendimientos-range-bar {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.rendimientos-range-bar .form-field {
+  min-width: 160px;
+}
+
 .rendimientos-filter-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) repeat(5, minmax(150px, 180px)) auto;
+  grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(150px, 180px)) auto;
   gap: 10px;
   align-items: end;
 }
@@ -2592,8 +2744,60 @@ input[readonly] {
   color: var(--text);
 }
 
+.table-subcopy {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.warning-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.warning-chip {
+  display: inline-flex;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(196, 140, 56, 0.12);
+  color: #8a6500;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .rendimientos-empty-state {
   gap: 8px;
+}
+
+/* Status dot (color-only indicator) */
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.status-dot.status-ok {
+  background: var(--status-ok-text);
+  box-shadow: 0 0 0 3px var(--status-ok-bg);
+}
+
+.status-dot.status-partial {
+  background: var(--status-partial-text);
+  box-shadow: 0 0 0 3px var(--status-partial-bg);
+}
+
+.status-dot.status-soft {
+  background: var(--status-soft-text);
+  box-shadow: 0 0 0 3px var(--status-soft-bg);
+}
+
+.status-dot.status-error {
+  background: var(--status-error-text);
+  box-shadow: 0 0 0 3px var(--status-error-bg);
 }
 
 /* ─────────────────────────────
@@ -2764,6 +2968,14 @@ input[readonly] {
   .vehicles-filter-bar,
   .rendimientos-filter-bar {
     grid-template-columns: 1fr;
+  }
+
+  .rendimientos-range-bar {
+    flex-wrap: wrap;
+  }
+
+  .rendimientos-month-actions {
+    width: 100%;
   }
 
   .page-header-row > button {

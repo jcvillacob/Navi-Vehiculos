@@ -89,6 +89,50 @@ export async function fetchDashboardSummary() {
   return parseJsonOrThrow(response, "Error obteniendo resumen del dashboard");
 }
 
+// ── Rendimientos ─────────────────────────────────────────────────────────────
+
+export async function fetchMonthlyPerformance(params) {
+  const query = new URLSearchParams();
+  if (params.month_from) {
+    query.set("month_from", params.month_from);
+    query.set("month_to", params.month_to || params.month_from);
+  } else if (params.month) {
+    query.set("month", params.month);
+  }
+  if (params.customer_id) {
+    query.set("customer_id", String(params.customer_id));
+  }
+  if (Array.isArray(params.customer_ids)) {
+    for (const customerId of params.customer_ids) {
+      query.append("customer_ids", String(customerId));
+    }
+  }
+  if (params.customer_database_id) {
+    query.set("customer_database_id", String(params.customer_database_id));
+  }
+  if (params.plate_search) {
+    query.set("plate_search", params.plate_search.trim().toUpperCase());
+  }
+  if (params.motor_group) {
+    query.set("motor_group", params.motor_group);
+  }
+
+  const response = await fetch(`${API_BASE}/api/v1/rendimientos?${query.toString()}`, {
+    credentials: "include",
+  });
+  return parseJsonOrThrow(response, "Error cargando rendimientos mensuales");
+}
+
+export async function calculateMonthlyPerformance(payload) {
+  const response = await fetch(`${API_BASE}/api/v1/rendimientos/calculate`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error calculando rendimientos mensuales");
+}
+
 // ── Vehicle ───────────────────────────────────────────────────────────────────
 
 export async function lookupVehicle(identifier) {

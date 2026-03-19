@@ -129,6 +129,8 @@ class MotorCatalogRecord(BaseModel):
 
 class VehicleAssignmentRecord(BaseModel):
     plate: str = Field(..., description="Placa del vehiculo")
+    customer_id: int | None = Field(default=None, description="ID local del cliente")
+    customer_database_id: int | None = Field(default=None, description="ID local de la database")
     vin: str | None = Field(default=None, description="VIN asociado")
     geotab_status: str = Field(default="unknown", description="Estado en Geotab global Navitrans")
     geotab_customer_status: str = Field(
@@ -177,10 +179,14 @@ class CustomerDatabaseCreateRequest(BaseModel):
     password: str = Field(..., min_length=1, description="Contrasena no hasheada de la database")
     connection_type: str = Field(
         default="database",
-        description="Tipo de conexion: 'database' o 'geotab'",
+        description="Tipo de conexion: 'database', 'geotab' o 'artimo'",
     )
     access_url: str | None = Field(
         default=None, description="Enlace de acceso externo (solo para databases no-Geotab)"
+    )
+    provider_config: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Configuracion especifica del proveedor, por ejemplo Artimo",
     )
 
 
@@ -201,10 +207,14 @@ class CustomerDatabaseUpdateRequest(BaseModel):
     )
     connection_type: str = Field(
         default="database",
-        description="Tipo de conexion: 'database' o 'geotab'",
+        description="Tipo de conexion: 'database', 'geotab' o 'artimo'",
     )
     access_url: str | None = Field(
         default=None, description="Enlace de acceso externo (solo para databases no-Geotab)"
+    )
+    provider_config: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Configuracion especifica del proveedor, por ejemplo Artimo",
     )
 
 
@@ -290,10 +300,14 @@ class CustomerDatabaseRecord(BaseModel):
     has_password: bool = Field(..., description="Indica si tiene contrasena almacenada")
     connection_type: str = Field(
         default="database",
-        description="Tipo de conexion: 'database' o 'geotab'",
+        description="Tipo de conexion: 'database', 'geotab' o 'artimo'",
     )
     access_url: str | None = Field(
         default=None, description="Enlace de acceso externo (solo para databases no-Geotab)"
+    )
+    provider_config: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Configuracion publica del proveedor, sin secretos",
     )
     rules: list[GeotabRuleRecord] = Field(
         default_factory=list, description="Reglas Geotab asociadas (solo para tipo geotab)"
@@ -315,6 +329,76 @@ class CustomerRecord(BaseModel):
     )
     created_at: datetime = Field(..., description="Fecha de creacion")
     updated_at: datetime = Field(..., description="Fecha de actualizacion")
+
+
+class MonthlyPerformanceCalculateRequest(BaseModel):
+    month: str = Field(..., pattern=r"^\d{4}-\d{2}$", description="Mes a calcular en formato YYYY-MM")
+    customer_id: int | None = Field(default=None, gt=0, description="Filtro opcional por cliente")
+    customer_ids: list[int] = Field(
+        default_factory=list,
+        description="Lista opcional de clientes a calcular; vacio = todos los clientes Artimo elegibles",
+    )
+    customer_database_id: int | None = Field(
+        default=None, gt=0, description="Filtro opcional por database del cliente"
+    )
+    force_recalculate: bool = Field(
+        default=False,
+        description="Si es true, recalcula aunque ya exista un corte mensual persistido",
+    )
+
+
+class MonthlyPerformanceRecord(BaseModel):
+    customer_id: int | None = Field(default=None, description="ID local del cliente")
+    customer_database_id: int = Field(..., description="ID local de la database")
+    client_name: str | None = Field(default=None, description="Nombre del cliente")
+    database_name: str | None = Field(default=None, description="Nombre de la database")
+    source_provider: str = Field(..., description="Proveedor origen del calculo")
+    plate: str = Field(..., description="Placa del vehiculo")
+    provider_vehicle_id: str | None = Field(
+        default=None,
+        description="ID externo del vehiculo en el proveedor GPS",
+    )
+    technical_number: str | None = Field(default=None, description="TEC# del motor")
+    engine_name: str | None = Field(default=None, description="Nombre del motor")
+    period_month: str = Field(..., description="Mes del corte en formato YYYY-MM")
+    odo_start: float | None = Field(default=None, description="Odometro inicial")
+    odo_end: float | None = Field(default=None, description="Odometro final")
+    horo_start: float | None = Field(default=None, description="Horometro inicial")
+    horo_end: float | None = Field(default=None, description="Horometro final")
+    kms_ecm: float | None = Field(default=None, description="Kilometros ECM")
+    kms_gps: float | None = Field(default=None, description="Kilometros GPS")
+    hours_ecm: float | None = Field(default=None, description="Horas ECM")
+    hours_gps: float | None = Field(default=None, description="Horas GPS")
+    fuel_gallons: float | None = Field(default=None, description="Combustible consumido en galones")
+    calculation_status: str = Field(
+        ...,
+        description="Estado del calculo: calculated | partial | unbound | no_data | error",
+    )
+    warnings: list[str] = Field(default_factory=list, description="Advertencias del calculo")
+    calculated_at: datetime | None = Field(default=None, description="Fecha del ultimo calculo")
+
+
+class MonthlyPerformanceSummary(BaseModel):
+    total: int = Field(default=0, description="Total de placas retornadas")
+    calculated: int = Field(default=0, description="Cantidad de placas calculadas")
+    partial: int = Field(default=0, description="Cantidad de placas parciales")
+    unbound: int = Field(default=0, description="Cantidad de placas sin binding")
+    no_data: int = Field(default=0, description="Cantidad de placas sin datos")
+    error: int = Field(default=0, description="Cantidad de placas con error")
+
+
+class MonthlyPerformanceResponse(BaseModel):
+    month: str = Field(..., description="Mes consultado o calculado en formato YYYY-MM")
+    month_from: str | None = Field(default=None, description="Inicio del rango cuando es consulta por rango")
+    month_to: str | None = Field(default=None, description="Fin del rango cuando es consulta por rango")
+    summary: MonthlyPerformanceSummary = Field(
+        default_factory=MonthlyPerformanceSummary,
+        description="Resumen del lote retornado",
+    )
+    rows: list[MonthlyPerformanceRecord] = Field(
+        default_factory=list,
+        description="Cortes mensuales por placa",
+    )
 
 
 GeotabRuleConditionNode.model_rebuild()
