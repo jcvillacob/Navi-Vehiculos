@@ -63,6 +63,10 @@ class VehicleLookupResponse(BaseModel):
         default="not_applicable",
         description="Geotab cliente: found | not_found | unknown | not_applicable",
     )
+    marca: str | None = Field(default=None, description="Marca del vehiculo (Fenix)")
+    linea: str | None = Field(default=None, description="Linea del vehiculo (Fenix)")
+    ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo (Fenix)")
+    tipo_combustible: str | None = Field(default=None, description="Tipo de combustible del vehiculo (Fenix)")
     engine_number: str | None = Field(
         default=None, description="Numero de motor (ESN) obtenido desde inventario"
     )
@@ -86,6 +90,7 @@ class VehicleLookupResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list, description="Advertencias no bloqueantes")
     status: str = Field(..., description="ok | partial | not_found | error")
     message: str = Field(..., description="Descripcion del resultado")
+    cached: bool = Field(default=False, description="True si los datos provienen del cache local")
 
 
 class MotorCatalogUpsertRequest(BaseModel):
@@ -95,6 +100,7 @@ class MotorCatalogUpsertRequest(BaseModel):
 
 class MotorUpdateRequest(BaseModel):
     engine_name: str = Field(..., min_length=1, description="Nuevo nombre del motor")
+    technical_number: str | None = Field(default=None, min_length=1, description="Nuevo numero tecnico (opcional)")
 
 
 class MotorAttachmentRecord(BaseModel):
@@ -143,6 +149,10 @@ class VehicleAssignmentRecord(BaseModel):
     engine_number: str | None = Field(default=None, description="Numero de motor")
     technical_number: str = Field(..., description="Numero tecnico de motor")
     cpl: str | None = Field(default=None, description="CPL del motor consultado")
+    marca: str | None = Field(default=None, description="Marca del vehiculo (Fenix)")
+    linea: str | None = Field(default=None, description="Linea del vehiculo (Fenix)")
+    ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo (Fenix)")
+    tipo_combustible: str | None = Field(default=None, description="Tipo de combustible (Fenix)")
     engine_name: str | None = Field(default=None, description="Nombre visible del motor")
     client_name: str | None = Field(default=None, description="Cliente asociado al vehiculo")
     database_name: str | None = Field(default=None, description="Database asociada al vehiculo")
@@ -171,6 +181,18 @@ class VehicleAssignmentRecord(BaseModel):
 class VehicleDatabaseAssignmentRequest(BaseModel):
     customer_database_id: int | None = Field(default=None, description="ID de la database seleccionada")
     access_url: str | None = Field(default=None, description="Enlace de acceso externo (para databases no-Geotab)")
+
+
+class ManualVehicleAssignmentRequest(BaseModel):
+    technical_number: str = Field(..., min_length=1, description="Technical Engine Configuration #")
+    cpl: str | None = Field(default=None, description="CPL del motor")
+    vin: str | None = Field(default=None, description="VIN del vehiculo")
+    engine_number: str | None = Field(default=None, description="Numero de motor (ESN)")
+    marca: str | None = Field(default=None, description="Marca del vehiculo")
+    linea: str | None = Field(default=None, description="Linea del vehiculo")
+    ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo")
+    tipo_combustible: str | None = Field(default=None, description="Tipo de combustible")
+    geotab_status: str = Field(default="unknown", description="Estado Geotab Navitrans")
 
 
 class CustomerDatabaseCreateRequest(BaseModel):

@@ -43,7 +43,9 @@ export default function LookupDetails({
   loading,
   canRegister,
   canConfigure,
-  onAction
+  isManualAssignment,
+  onAction,
+  onForceSearch
 }) {
   const [showSources, setShowSources] = useState(false);
 
@@ -56,24 +58,31 @@ export default function LookupDetails({
 
   const isOk = result.status === "ok";
   const hasMotor = Boolean(result.registered_motor);
+  const canAct = isOk || isManualAssignment;
   const statusClass = isOk
     ? hasMotor
       ? "status-ok"
       : "status-partial"
-    : `status-${result.status}`;
+    : isManualAssignment
+      ? "status-partial"
+      : `status-${result.status}`;
   const statusLabel = isOk
     ? hasMotor
       ? "Registrado"
       : "Sin catalogar"
-    : result.status;
+    : isManualAssignment
+      ? "Asignacion manual"
+      : result.status;
 
-  const actionLabel = !isOk
+  const actionLabel = !canAct
     ? null
-    : !hasMotor
-      ? "Registrar y asignar"
-      : result.assigned_database?.client_name
-        ? "Editar asignacion"
-        : "Asignar cliente";
+    : isManualAssignment
+      ? "Asignar motor manualmente"
+      : !hasMotor
+        ? "Registrar y asignar"
+        : result.assigned_database?.client_name
+          ? "Editar asignacion"
+          : "Asignar cliente";
 
   return (
     <section className="card lookup-result-card">
@@ -89,11 +98,31 @@ export default function LookupDetails({
         </div>
       </header>
 
+      {/* ── Cache banner ── */}
+      {result.cached && onForceSearch ? (
+        <div className="notice-banner notice-info">
+          Datos cargados desde cache local.
+          <button
+            type="button"
+            className="button-secondary button-sm"
+            style={{ marginLeft: 12 }}
+            onClick={onForceSearch}
+            disabled={loading}
+          >
+            {loading ? "Buscando..." : "Buscar de nuevo"}
+          </button>
+        </div>
+      ) : null}
+
       {/* ── Identificacion ── */}
       <section className="lookup-result-section">
         <span className="lookup-section-label">Identificacion</span>
         <div className="data-grid">
           <DataItem label="Placa" value={result.plate} />
+          <DataItem label="Marca" value={result.marca} />
+          <DataItem label="Linea" value={result.linea} />
+          <DataItem label="Año Modelo" value={result.ano_modelo} />
+          <DataItem label="Tipo de Combustible" value={result.tipo_combustible} />
           <DataItem label="VIN" value={result.vin} />
           <DataItem label="ESN" value={result.engine_number} />
           <DataItem label="Busqueda" value={`${result.lookup_type === "vin" ? "VIN" : "Placa"}: ${result.lookup_value}`} />
@@ -133,13 +162,17 @@ export default function LookupDetails({
       </section>
 
       {/* ── Action ── */}
-      {isOk && actionLabel ? (
+      {canAct && actionLabel ? (
         <div className="lookup-result-action">
           {hasMotor ? (
             <div className="motor-chip">
               <strong>{result.registered_motor.engine_name}</strong>
               <span>{result.registered_motor.technical_number}</span>
             </div>
+          ) : isManualAssignment ? (
+            <p className="support-copy">
+              Motor no encontrado en Cummins. Selecciona o crea un motor para asignar a este vehiculo.
+            </p>
           ) : (
             <p className="support-copy">
               No existe motor registrado para este TEC#.
@@ -147,13 +180,13 @@ export default function LookupDetails({
           )}
           <button
             type="button"
-            disabled={(!canRegister && !canConfigure) || loading}
+            disabled={(!canRegister && !canConfigure && !isManualAssignment) || loading}
             onClick={onAction}
           >
             {actionLabel}
           </button>
         </div>
-      ) : !isOk ? (
+      ) : !canAct ? (
         <p className="support-copy">
           No se encontraron datos suficientes para clasificar este vehiculo.
         </p>

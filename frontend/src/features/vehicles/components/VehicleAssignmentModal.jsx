@@ -38,6 +38,7 @@ export default function VehicleAssignmentModal({
   title = "Detalles del vehiculo",
   vehicle = null,
   customers = [],
+  motors = [],
   registeredMotor = null,
   requiresMotorRegistration = false,
   initialTechnicalNumber = "",
@@ -52,6 +53,8 @@ export default function VehicleAssignmentModal({
   const [attachmentCpl, setAttachmentCpl] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedDatabaseId, setSelectedDatabaseId] = useState("");
+  const [motorMode, setMotorMode] = useState("new"); // "existing" | "new"
+  const [selectedMotorId, setSelectedMotorId] = useState("");
 
   useEffect(() => {
     if (!open) {
@@ -62,6 +65,13 @@ export default function VehicleAssignmentModal({
     setEngineName("");
     setAttachmentFile(null);
     setAttachmentCpl(vehicle?.cpl || "");
+    setMotorMode(motors.length > 0 ? "existing" : "new");
+
+    // Pre-select the motor that matches the vehicle's current technical_number
+    const currentMotor = motors.find(
+      (m) => m.technical_number === initialTechnicalNumber
+    );
+    setSelectedMotorId(currentMotor ? String(currentMotor.id) : "");
 
     const matchingCustomer = customers.find((customer) => customer.name === vehicle?.client_name);
     const customerId = matchingCustomer ? String(matchingCustomer.id) : "";
@@ -104,19 +114,34 @@ export default function VehicleAssignmentModal({
     }
   }, [availableDatabases, selectedCustomerId, selectedDatabaseId]);
 
+  const selectedExistingMotor = useMemo(
+    () => motors.find((m) => String(m.id) === selectedMotorId) || null,
+    [motors, selectedMotorId]
+  );
+
   if (!open || !vehicle) {
     return null;
   }
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    await onSubmit({
-      technical_number: technicalNumber.trim(),
-      engine_name: engineName.trim(),
-      attachmentFile,
-      attachmentCpl: attachmentCpl.trim(),
-      customer_database_id: selectedDatabaseId ? Number(selectedDatabaseId) : null
-    });
+    if (motors.length > 0 && motorMode === "existing" && selectedExistingMotor) {
+      await onSubmit({
+        technical_number: selectedExistingMotor.technical_number,
+        engine_name: selectedExistingMotor.engine_name,
+        attachmentFile: null,
+        attachmentCpl: "",
+        customer_database_id: selectedDatabaseId ? Number(selectedDatabaseId) : null
+      });
+    } else {
+      await onSubmit({
+        technical_number: technicalNumber.trim(),
+        engine_name: engineName.trim(),
+        attachmentFile,
+        attachmentCpl: attachmentCpl.trim(),
+        customer_database_id: selectedDatabaseId ? Number(selectedDatabaseId) : null
+      });
+    }
   };
 
   return (
@@ -185,54 +210,97 @@ export default function VehicleAssignmentModal({
         <form className="register-form" onSubmit={handleSubmit}>
           {requiresMotorRegistration ? (
             <>
-              <div className="form-field">
-                <label htmlFor="assign-technical-number">Technical Engine Configuration #</label>
-                <input
-                  id="assign-technical-number"
-                  value={technicalNumber}
-                  onChange={(event) => setTechnicalNumber(event.target.value)}
-                  placeholder="Ej: D103042BX03"
-                  readOnly={lockTechnicalNumber}
-                  required
-                />
-              </div>
-
-              <div className="form-field">
-                <label htmlFor="assign-engine-name">Nombre del motor</label>
-                <input
-                  id="assign-engine-name"
-                  value={engineName}
-                  onChange={(event) => setEngineName(event.target.value)}
-                  placeholder="Ej: ISX15"
-                  required
-                />
-              </div>
-
-              <FileDropzone
-                id="assign-motor-attachment"
-                file={attachmentFile}
-                onChange={(nextFile) => {
-                  setAttachmentFile(nextFile);
-                  if (!nextFile) {
-                    setAttachmentCpl(vehicle?.cpl || "");
-                  }
-                }}
-                label="Arrastra o selecciona una imagen o PDF"
-                hint="Curvas de torque, potencia o respaldo tecnico. Opcional."
-              />
-
-              {attachmentFile ? (
+              {motors.length > 0 ? (
                 <div className="form-field">
-                  <label htmlFor="assign-motor-cpl">CPL del adjunto</label>
-                  <input
-                    id="assign-motor-cpl"
-                    value={attachmentCpl}
-                    onChange={(event) => setAttachmentCpl(event.target.value)}
-                    placeholder="Ej: 5248"
-                    required
-                  />
+                  <label>Motor</label>
+                  <div className="motor-mode-toggle">
+                    <button
+                      type="button"
+                      className={`button-sm ${motorMode === "existing" ? "" : "button-secondary"}`}
+                      onClick={() => setMotorMode("existing")}
+                    >
+                      Seleccionar existente
+                    </button>
+                    <button
+                      type="button"
+                      className={`button-sm ${motorMode === "new" ? "" : "button-secondary"}`}
+                      onClick={() => setMotorMode("new")}
+                    >
+                      Crear nuevo
+                    </button>
+                  </div>
                 </div>
               ) : null}
+
+              {motors.length > 0 && motorMode === "existing" ? (
+                <div className="form-field">
+                  <label htmlFor="assign-existing-motor">Motor del catalogo</label>
+                  <select
+                    id="assign-existing-motor"
+                    value={selectedMotorId}
+                    onChange={(event) => setSelectedMotorId(event.target.value)}
+                    required
+                  >
+                    <option value="">Selecciona un motor...</option>
+                    {motors.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.engine_name} ({m.technical_number})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <>
+                  <div className="form-field">
+                    <label htmlFor="assign-technical-number">Technical Engine Configuration #</label>
+                    <input
+                      id="assign-technical-number"
+                      value={technicalNumber}
+                      onChange={(event) => setTechnicalNumber(event.target.value)}
+                      placeholder="Ej: D103042BX03"
+                      readOnly={lockTechnicalNumber}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label htmlFor="assign-engine-name">Nombre del motor</label>
+                    <input
+                      id="assign-engine-name"
+                      value={engineName}
+                      onChange={(event) => setEngineName(event.target.value)}
+                      placeholder="Ej: ISX15"
+                      required
+                    />
+                  </div>
+
+                  <FileDropzone
+                    id="assign-motor-attachment"
+                    file={attachmentFile}
+                    onChange={(nextFile) => {
+                      setAttachmentFile(nextFile);
+                      if (!nextFile) {
+                        setAttachmentCpl(vehicle?.cpl || "");
+                      }
+                    }}
+                    label="Arrastra o selecciona una imagen o PDF"
+                    hint="Curvas de torque, potencia o respaldo tecnico. Opcional."
+                  />
+
+                  {attachmentFile ? (
+                    <div className="form-field">
+                      <label htmlFor="assign-motor-cpl">CPL del adjunto</label>
+                      <input
+                        id="assign-motor-cpl"
+                        value={attachmentCpl}
+                        onChange={(event) => setAttachmentCpl(event.target.value)}
+                        placeholder="Ej: 5248"
+                        required
+                      />
+                    </div>
+                  ) : null}
+                </>
+              )}
             </>
           ) : registeredMotor ? (
             <div className="form-field">

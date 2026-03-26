@@ -20,6 +20,10 @@ export default function LookupResult({ result }) {
       </header>
 
       <DataRow label="Placa" value={result.plate} />
+      <DataRow label="Marca" value={result.marca} />
+      <DataRow label="Linea" value={result.linea} />
+      <DataRow label="Año Modelo" value={result.ano_modelo} />
+      <DataRow label="Tipo de Combustible" value={result.tipo_combustible} />
       <DataRow label="VIN" value={result.vin} />
       <DataRow label="Numero de motor (ESN)" value={result.engine_number} />
       <DataRow

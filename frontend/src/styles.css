@@ -640,6 +640,38 @@ button:hover {
   box-shadow: var(--shadow-sm);
 }
 
+/* Danger */
+.button-danger {
+  background-color: var(--red);
+  color: var(--surface);
+  border-color: var(--red);
+}
+
+.button-danger:hover {
+  background-color: #c82526;
+  border-color: #c82526;
+}
+
+/* Danger outline */
+.button-danger-outline {
+  background-color: transparent;
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.button-danger-outline:hover {
+  background-color: var(--red);
+  color: var(--surface);
+}
+
+/* Delete confirmation section */
+.delete-confirm-section {
+  padding: 16px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 /* Icon / ghost button */
 .icon-button {
   height: 32px;
@@ -747,6 +779,11 @@ input[readonly] {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.motor-mode-toggle {
+  display: flex;
+  gap: 6px;
 }
 
 .form-caption,
@@ -905,7 +942,7 @@ input[readonly] {
 }
 
 .vehicles-summary-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .rendimientos-summary-grid {
@@ -938,6 +975,22 @@ input[readonly] {
 .motor-card {
   display: grid;
   gap: 10px;
+}
+
+.metric-card-compact {
+  gap: 6px;
+  padding: 16px 18px;
+  align-content: start;
+}
+
+.metric-card-compact .eyebrow {
+  font-size: 8px;
+  letter-spacing: 0.18em;
+}
+
+.metric-card-compact strong {
+  font-size: clamp(26px, 3vw, 38px);
+  line-height: 0.95;
 }
 
 .detail-card h3,
@@ -983,6 +1036,18 @@ input[readonly] {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.section-heading-meta {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+}
+
+.section-heading-actions {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .detail-status-group {
@@ -2438,10 +2503,59 @@ input[readonly] {
 
 .vehicles-filter-actions {
   flex-wrap: nowrap;
+  gap: 8px;
 }
 
 .vehicles-row-actions {
   flex-wrap: nowrap;
+}
+
+/* ── Bulk refresh progress bar ── */
+
+.bulk-progress-bar-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.bulk-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bulk-progress-label {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary, var(--gray));
+}
+
+.bulk-progress-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--clear-gray);
+  overflow: hidden;
+}
+
+.bulk-progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--red);
+  transition: width 0.4s ease;
+}
+
+.bulk-progress-percent {
+  font-family: var(--font-heading);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary, var(--black));
+  align-self: flex-end;
 }
 
 .vehicles-table-shell {
@@ -2693,6 +2807,26 @@ input[readonly] {
   flex-wrap: nowrap;
 }
 
+.rendimientos-button-reload {
+  background-color: var(--red);
+  border-color: var(--red);
+}
+
+.rendimientos-button-reload:hover:not(:disabled) {
+  background-color: var(--red-hover);
+  border-color: var(--red-hover);
+}
+
+.rendimientos-button-export {
+  background-color: var(--gray-deep);
+  border-color: var(--gray-deep);
+}
+
+.rendimientos-button-export:hover:not(:disabled) {
+  background-color: var(--black);
+  border-color: var(--black);
+}
+
 .rendimientos-table-shell {
   overflow: auto;
   border-radius: var(--radius-md);
@@ -2706,7 +2840,7 @@ input[readonly] {
 }
 
 .rendimientos-table thead th {
-  padding: 10px 14px;
+  padding: 0;
   text-align: left;
   font-family: "Poppins", sans-serif;
   font-size: 10px;
@@ -2717,6 +2851,40 @@ input[readonly] {
   background: var(--bg);
   border-bottom: 1px solid var(--border-strong);
   white-space: nowrap;
+}
+
+.table-sort-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.table-sort-button:hover {
+  background: rgba(53, 69, 80, 0.04);
+}
+
+.table-sort-button.is-active {
+  color: var(--text-secondary);
+}
+
+.table-sort-indicator {
+  font-size: 10px;
+  color: var(--text-subtle);
+}
+
+.table-sort-button.is-active .table-sort-indicator {
+  color: var(--red);
 }
 
 .rendimientos-table tbody td {
@@ -2968,6 +3136,21 @@ input[readonly] {
   .vehicles-filter-bar,
   .rendimientos-filter-bar {
     grid-template-columns: 1fr;
+  }
+
+  .section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .section-heading-meta {
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .section-heading-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .rendimientos-range-bar {

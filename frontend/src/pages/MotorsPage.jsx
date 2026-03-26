@@ -42,12 +42,19 @@ function formatLastSeen(value) {
 }
 
 /* ── Edit Motor Modal ──────────────────────────────────────────────── */
-function EditMotorModal({ motor, loading, onClose, onSubmit }) {
+function EditMotorModal({ motor, loading, onClose, onSubmit, onDelete }) {
   const [engineName, setEngineName] = useState(motor.engine_name);
+  const [technicalNumber, setTechnicalNumber] = useState(motor.technical_number);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    await onSubmit({ engine_name: engineName.trim() });
+    const payload = { engine_name: engineName.trim() };
+    const trimmedTechnical = technicalNumber.trim();
+    if (trimmedTechnical && trimmedTechnical !== motor.technical_number) {
+      payload.technical_number = trimmedTechnical;
+    }
+    await onSubmit(payload);
   };
 
   return (
@@ -63,32 +70,74 @@ function EditMotorModal({ motor, loading, onClose, onSubmit }) {
           </button>
         </header>
 
-        <form className="register-form" onSubmit={handleSubmit}>
-          <div className="form-field">
-            <label htmlFor="edit-motor-name">Nombre del motor</label>
-            <input
-              id="edit-motor-name"
-              value={engineName}
-              onChange={(event) => setEngineName(event.target.value)}
-              required
-              autoFocus
-            />
+        {showDeleteConfirm ? (
+          <div className="delete-confirm-section">
+            {motor.vehicle_count > 0 ? (
+              <div className="notice-banner notice-error">
+                Este motor tiene <strong>{motor.vehicle_count} vehiculo{motor.vehicle_count !== 1 ? "s" : ""}</strong> asociado{motor.vehicle_count !== 1 ? "s" : ""}. Al eliminarlo, los vehiculos quedaran sin motor catalogado.
+              </div>
+            ) : null}
+            <p className="support-copy">
+              Esta accion no se puede deshacer. Se eliminaran tambien los adjuntos y grupos de reglas asociados.
+            </p>
+            <div className="actions-row modal-actions">
+              <button
+                type="button"
+                className="button-danger"
+                disabled={loading}
+                onClick={() => onDelete(motor.id)}
+              >
+                {loading ? "Eliminando..." : "Si, eliminar motor"}
+              </button>
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={() => setShowDeleteConfirm(false)}
+              >
+                Cancelar
+              </button>
+            </div>
           </div>
+        ) : (
+          <form className="register-form" onSubmit={handleSubmit}>
+            <div className="form-field">
+              <label htmlFor="edit-motor-name">Nombre del motor</label>
+              <input
+                id="edit-motor-name"
+                value={engineName}
+                onChange={(event) => setEngineName(event.target.value)}
+                required
+                autoFocus
+              />
+            </div>
 
-          <div className="form-field">
-            <label>Technical Engine Configuration #</label>
-            <input value={motor.technical_number} readOnly />
-          </div>
+            <div className="form-field">
+              <label htmlFor="edit-motor-technical">Technical Engine Configuration #</label>
+              <input
+                id="edit-motor-technical"
+                value={technicalNumber}
+                onChange={(event) => setTechnicalNumber(event.target.value)}
+                required
+              />
+            </div>
 
-          <div className="actions-row modal-actions">
-            <button type="submit" disabled={loading || !engineName.trim()}>
-              {loading ? "Guardando..." : "Guardar cambios"}
-            </button>
-            <button type="button" className="button-secondary" onClick={onClose}>
-              Cancelar
-            </button>
-          </div>
-        </form>
+            <div className="actions-row modal-actions">
+              <button type="submit" disabled={loading || !engineName.trim() || !technicalNumber.trim()}>
+                {loading ? "Guardando..." : "Guardar cambios"}
+              </button>
+              <button type="button" className="button-secondary" onClick={onClose}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="button-danger-outline"
+                onClick={() => setShowDeleteConfirm(true)}
+              >
+                Eliminar
+              </button>
+            </div>
+          </form>
+        )}
       </section>
     </div>
   );
@@ -108,6 +157,7 @@ export default function MotorsPage() {
     error,
     registerMotor,
     editMotor,
+    removeMotor,
     uploadAttachment,
     updateAttachment,
     deleteAttachment
@@ -164,6 +214,19 @@ export default function MotorsPage() {
       pushToast("success", "Motor actualizado.");
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message : "No fue posible actualizar el motor");
+    }
+  };
+
+  const handleDeleteMotor = async (motorId) => {
+    try {
+      const result = await removeMotor(motorId);
+      setEditingMotor(null);
+      const msg = result.vehicles_unlinked > 0
+        ? `Motor eliminado. ${result.vehicles_unlinked} vehiculo${result.vehicles_unlinked !== 1 ? "s" : ""} desvinculado${result.vehicles_unlinked !== 1 ? "s" : ""}.`
+        : "Motor eliminado.";
+      pushToast("success", msg);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "No fue posible eliminar el motor");
     }
   };
 
@@ -374,6 +437,7 @@ export default function MotorsPage() {
           loading={loading}
           onClose={() => setEditingMotor(null)}
           onSubmit={handleEditMotor}
+          onDelete={handleDeleteMotor}
         />
       ) : null}
     </section>

@@ -81,6 +81,27 @@ function formatMonthLabel(monthStr) {
   return `${names[parseInt(m, 10) - 1]} ${year}`;
 }
 
+function buildExportFileName(monthFrom, monthTo) {
+  const range = monthFrom === monthTo ? monthFrom : `${monthFrom}_a_${monthTo}`;
+  return `rendimientos_${range}.xlsx`;
+}
+
+function compareValues(left, right, direction = "asc") {
+  if (left === right) return 0;
+  if (left === null || left === undefined || left === "") return 1;
+  if (right === null || right === undefined || right === "") return -1;
+
+  let result = 0;
+
+  if (typeof left === "number" && typeof right === "number") {
+    result = left - right;
+  } else {
+    result = String(left).localeCompare(String(right), "es", { numeric: true, sensitivity: "base" });
+  }
+
+  return direction === "desc" ? result * -1 : result;
+}
+
 export default function RendimientosPage() {
   const { toasts, pushToast } = useToasts();
 
@@ -102,6 +123,7 @@ export default function RendimientosPage() {
     motorGroup: "",
     plateSearch: ""
   });
+  const [sortConfig, setSortConfig] = useState({ key: "", direction: "asc" });
 
   const isRange = monthFrom !== monthTo;
   const pickerRef = useRef(null);
@@ -220,6 +242,83 @@ export default function RendimientosPage() {
 
   const filteredRows = useMemo(() => filterRows(payload.rows, filters), [filters, payload.rows]);
 
+  const sortedRows = useMemo(() => {
+    if (!sortConfig.key) return filteredRows;
+
+    return [...filteredRows].sort((left, right) => {
+      const getComparableValue = (row) => {
+        switch (sortConfig.key) {
+          case "status":
+            return getStatusLabel(row.calculation_status);
+          case "client":
+            return row.client_name || "";
+          case "database":
+            return row.database_name || "";
+          case "motor":
+            return row.engine_name || "Sin catalogar";
+          case "plate":
+            return row.plate || "";
+          case "odo_start":
+            return row.odo_start;
+          case "odo_end":
+            return row.odo_end;
+          case "kms_ecm":
+            return row.kms_ecm;
+          case "kms_gps":
+            return row.kms_gps;
+          case "horo_start":
+            return row.horo_start;
+          case "horo_end":
+            return row.horo_end;
+          case "hours_ecm":
+            return row.hours_ecm;
+          case "hours_gps":
+            return row.hours_gps;
+          case "fuel_gallons":
+            return row.fuel_gallons;
+          case "kpg":
+            return row.fuel_gallons > 0 && row.kms_ecm !== null && row.kms_ecm !== undefined
+              ? row.kms_ecm / row.fuel_gallons
+              : null;
+          case "gph":
+            return row.hours_ecm > 0 && row.fuel_gallons !== null && row.fuel_gallons !== undefined
+              ? row.fuel_gallons / row.hours_ecm
+              : null;
+          default:
+            return "";
+        }
+      };
+
+      const comparison = compareValues(
+        getComparableValue(left),
+        getComparableValue(right),
+        sortConfig.direction
+      );
+
+      if (comparison !== 0) return comparison;
+      return compareValues(left.plate || "", right.plate || "", "asc");
+    });
+  }, [filteredRows, sortConfig]);
+
+  const sortableColumns = [
+    { key: "status", label: "Estado" },
+    { key: "client", label: "Cliente" },
+    { key: "database", label: "Database" },
+    { key: "motor", label: "Motor" },
+    { key: "plate", label: "Placa" },
+    { key: "odo_start", label: "Odo ini" },
+    { key: "odo_end", label: "Odo fin" },
+    { key: "kms_ecm", label: "Kms ECM" },
+    { key: "kms_gps", label: "Kms GPS" },
+    { key: "horo_start", label: "Horo ini" },
+    { key: "horo_end", label: "Horo fin" },
+    { key: "hours_ecm", label: "Hrs ECM" },
+    { key: "hours_gps", label: "Hrs GPS" },
+    { key: "fuel_gallons", label: "Galones" },
+    { key: "kpg", label: "KPG" },
+    { key: "gph", label: "GPH" }
+  ];
+
   const visibleSummary = useMemo(() => {
     const totals = filteredRows.reduce(
       (accumulator, row) => {
@@ -248,6 +347,15 @@ export default function RendimientosPage() {
     setFilters({ client: "", database: "", motorGroup: "", plateSearch: "" });
   };
 
+  const handleSort = (key) => {
+    setSortConfig((current) => {
+      if (current.key === key) {
+        return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+      }
+      return { key, direction: "asc" };
+    });
+  };
+
   const handleCalculate = async () => {
     setCalculating(true);
     try {
@@ -265,6 +373,66 @@ export default function RendimientosPage() {
       pushToast("error", err instanceof Error ? err.message : "No fue posible calcular rendimientos");
     } finally {
       setCalculating(false);
+    }
+  };
+
+  const handleExport = async () => {
+    if (!sortedRows.length) {
+      pushToast("error", "No hay filas para exportar con los filtros actuales.");
+      return;
+    }
+
+    try {
+      const XLSX = await import("xlsx");
+      const exportRows = sortedRows.map((row) => {
+        const kpg = row.fuel_gallons > 0 && row.kms_ecm !== null && row.kms_ecm !== undefined
+          ? row.kms_ecm / row.fuel_gallons
+          : null;
+        const gph = row.hours_ecm > 0 && row.fuel_gallons !== null && row.fuel_gallons !== undefined
+          ? row.fuel_gallons / row.hours_ecm
+          : null;
+
+        return {
+          Mes: row.period_month || "",
+          Estado: getStatusLabel(row.calculation_status),
+          Cliente: row.client_name || "",
+          Database: row.database_name || "",
+          Motor: row.engine_name || "Sin catalogar",
+          Placa: row.plate || "",
+          "Odo ini": row.odo_start,
+          "Odo fin": row.odo_end,
+          "Kms ECM": row.kms_ecm,
+          "Kms GPS": row.kms_gps,
+          "Horo ini": row.horo_start,
+          "Horo fin": row.horo_end,
+          "Hrs ECM": row.hours_ecm,
+          "Hrs GPS": row.hours_gps,
+          Galones: row.fuel_gallons,
+          KPG: kpg,
+          GPH: gph
+        };
+      });
+
+      const filterRowsSheet = [
+        { Filtro: "Desde", Valor: monthFrom || "Todos" },
+        { Filtro: "Hasta", Valor: monthTo || "Todos" },
+        { Filtro: "Cliente", Valor: filters.client || "Todos" },
+        { Filtro: "Database", Valor: filters.database || "Todas" },
+        { Filtro: "Grupo de motor", Valor: filters.motorGroup || "Todos" },
+        { Filtro: "Placa", Valor: filters.plateSearch || "Todas" }
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      const dataSheet = XLSX.utils.json_to_sheet(exportRows);
+      const filtersSheet = XLSX.utils.json_to_sheet(filterRowsSheet);
+
+      XLSX.utils.book_append_sheet(workbook, dataSheet, "Rendimientos");
+      XLSX.utils.book_append_sheet(workbook, filtersSheet, "Filtros");
+      XLSX.writeFile(workbook, buildExportFileName(monthFrom, monthTo));
+
+      pushToast("success", `Excel exportado con ${sortedRows.length} filas.`);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "No fue posible exportar el Excel");
     }
   };
 
@@ -395,9 +563,27 @@ export default function RendimientosPage() {
             <span className="eyebrow">{isRange ? "Acumulado" : "Lote"} {rangeLabel}</span>
             <h3>Explorador {isRange ? "por rango" : "mensual"}</h3>
           </div>
-          <span className="support-copy">
-            {payload.summary?.total ?? 0} placas {isRange ? "acumuladas en el rango" : "calculadas o cargadas para el mes"}
-          </span>
+
+          <div className="actions-row section-heading-actions">
+            <button
+              type="button"
+              className="button button-sm rendimientos-button-reload"
+              onClick={() => loadRecords(monthFrom, monthTo)}
+            >
+              {loading ? "Cargando..." : "Recargar"}
+            </button>
+            <button type="button" className="button-secondary button-sm" onClick={handleClear}>
+              Limpiar
+            </button>
+            <button
+              type="button"
+              className="button button-sm rendimientos-button-export"
+              onClick={handleExport}
+              disabled={!filteredRows.length}
+            >
+              Exportar Excel
+            </button>
+          </div>
         </header>
 
         <div className="rendimientos-status-strip">
@@ -470,18 +656,6 @@ export default function RendimientosPage() {
             </select>
           </div>
 
-          <div className="actions-row rendimientos-filter-actions">
-            <button
-              type="button"
-              className="button-secondary button-sm"
-              onClick={() => loadRecords(monthFrom, monthTo)}
-            >
-              {loading ? "Cargando..." : "Recargar"}
-            </button>
-            <button type="button" className="button-secondary button-sm" onClick={handleClear}>
-              Limpiar
-            </button>
-          </div>
         </div>
 
         {filteredRows.length === 0 ? (
@@ -498,26 +672,28 @@ export default function RendimientosPage() {
             <table className="rendimientos-table">
               <thead>
                 <tr>
-                  <th>Estado</th>
-                  <th>Cliente</th>
-                  <th>Database</th>
-                  <th>Motor</th>
-                  <th>Placa</th>
-                  <th>Odo ini</th>
-                  <th>Odo fin</th>
-                  <th>Kms ECM</th>
-                  <th>Kms GPS</th>
-                  <th>Horo ini</th>
-                  <th>Horo fin</th>
-                  <th>Hrs ECM</th>
-                  <th>Hrs GPS</th>
-                  <th>Galones</th>
-                  <th>KPG</th>
-                  <th>GPH</th>
+                  {sortableColumns.map((column) => {
+                    const isActive = sortConfig.key === column.key;
+                    const directionSymbol = isActive ? (sortConfig.direction === "asc" ? "▲" : "▼") : "↕";
+
+                    return (
+                      <th key={column.key}>
+                        <button
+                          type="button"
+                          className={`table-sort-button ${isActive ? "is-active" : ""}`}
+                          onClick={() => handleSort(column.key)}
+                          aria-label={`Ordenar por ${column.label} ${isActive && sortConfig.direction === "asc" ? "descendente" : "ascendente"}`}
+                        >
+                          <span>{column.label}</span>
+                          <span className="table-sort-indicator" aria-hidden="true">{directionSymbol}</span>
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row) => {
+                {sortedRows.map((row) => {
                   const kpg = row.fuel_gallons > 0 && row.kms_ecm !== null && row.kms_ecm !== undefined
                     ? row.kms_ecm / row.fuel_gallons
                     : null;

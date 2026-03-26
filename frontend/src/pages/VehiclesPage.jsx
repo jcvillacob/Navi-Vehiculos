@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
+import { useBulkRefresh } from "../context/BulkRefreshContext";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicleAssignments";
+import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
-import { assignVehicleDatabase, refreshVehicle, revalidateCustomerGeotab } from "../api/vehicleApi";
+import { assignVehicleDatabase, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab } from "../api/vehicleApi";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
@@ -40,7 +42,26 @@ export default function VehiclesPage() {
   const [filterDatabase, setFilterDatabase] = useState("");
   const { loading, vehicles, error, search, setSearch, loadVehicles } = useVehicleAssignments();
   const { customers, loading: customersLoading } = useCustomersCatalog();
+  const { motors, loading: motorsLoading } = useMotorsCatalog();
   const { toasts, pushToast } = useToasts();
+  const { bulkRefresh, startBulkRefresh, cancelBulkRefresh, acknowledgeBulkRefresh } = useBulkRefresh();
+
+  // React to bulk refresh finishing (works even if user navigated away and came back)
+  useEffect(() => {
+    if (bulkRefresh?.status !== "finished") return;
+    const { wasCancelled, errors, total } = bulkRefresh;
+
+    loadVehicles(search).then(() => {
+      if (wasCancelled) {
+        pushToast("error", "Reprocesamiento cancelado.");
+      } else if (errors.length) {
+        pushToast("error", `Completado con ${errors.length} error(es): ${errors.join(", ")}`);
+      } else {
+        pushToast("success", `${total} vehiculos reprocesados correctamente.`);
+      }
+      acknowledgeBulkRefresh();
+    });
+  }, [bulkRefresh?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (error) pushToast("error", error);
@@ -127,12 +148,34 @@ export default function VehiclesPage() {
       return;
     }
 
-    await assignVehicleDatabase(selectedVehicle.plate, {
-      customer_database_id: payload.customer_database_id
-    });
-    pushToast("success", `Vehiculo ${selectedVehicle.plate} actualizado.`);
-    setSelectedVehicle(null);
-    await loadVehicles(search);
+    try {
+      const motorChanged =
+        payload.technical_number &&
+        payload.technical_number !== selectedVehicle.technical_number;
+
+      if (motorChanged) {
+        await manualAssignVehicle(selectedVehicle.plate, {
+          technical_number: payload.technical_number,
+          cpl: selectedVehicle.cpl || null,
+          vin: selectedVehicle.vin || null,
+          engine_number: selectedVehicle.engine_number || null,
+          marca: selectedVehicle.marca || null,
+          linea: selectedVehicle.linea || null,
+          ano_modelo: selectedVehicle.ano_modelo || null,
+          tipo_combustible: selectedVehicle.tipo_combustible || null,
+          geotab_status: selectedVehicle.geotab_status || "unknown",
+        });
+      }
+
+      await assignVehicleDatabase(selectedVehicle.plate, {
+        customer_database_id: payload.customer_database_id
+      });
+      pushToast("success", `Vehiculo ${selectedVehicle.plate} actualizado.`);
+      setSelectedVehicle(null);
+      await loadVehicles(search);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "Error actualizando vehiculo");
+    }
   };
 
   const handleRevalidateCustomerGeotab = async (plate) => {
@@ -183,22 +226,19 @@ export default function VehiclesPage() {
       </header>
 
       <section className="vehicles-summary-grid">
-        <article className="card metric-card">
+        <article className="card metric-card metric-card-compact">
           <span className="eyebrow">Placas unicas</span>
           <strong>{summary.total}</strong>
-          <p>Vehiculos persistidos en la relacion placa-motor</p>
         </article>
 
-        <article className="card metric-card feature-card-accent">
+        <article className="card metric-card metric-card-compact feature-card-accent">
           <span className="eyebrow">Catalogadas</span>
           <strong>{summary.registered}</strong>
-          <p>Placas con un motor visible ya registrado</p>
         </article>
 
-        <article className="card metric-card">
+        <article className="card metric-card metric-card-compact">
           <span className="eyebrow">Con reglas</span>
           <strong>{summary.withRules}</strong>
-          <p>Vehiculos con reglas Geotab configuradas</p>
         </article>
       </section>
 
@@ -207,6 +247,20 @@ export default function VehiclesPage() {
           <div>
             <span className="eyebrow">Explorar</span>
             <h3>Base de vehiculos asociados</h3>
+          </div>
+
+          <div className="actions-row section-heading-actions">
+            <button type="button" className="button-secondary button-sm" onClick={handleClear} disabled={loading}>
+              Limpiar
+            </button>
+            <button
+              type="button"
+              className="button button-sm"
+              onClick={() => startBulkRefresh(filteredVehicles.map((v) => v.plate))}
+              disabled={loading || Boolean(bulkRefresh) || filteredVehicles.length === 0}
+            >
+              Reprocesar todos ({filteredVehicles.length})
+            </button>
           </div>
         </header>
 
@@ -263,12 +317,35 @@ export default function VehiclesPage() {
             </select>
           </div>
 
-          <div className="actions-row vehicles-filter-actions">
-            <button type="button" className="button-secondary button-sm" onClick={handleClear} disabled={loading}>
-              Limpiar
-            </button>
-          </div>
         </div>
+
+        {/* ── Bulk refresh progress ── */}
+        {bulkRefresh?.status === "running" ? (
+          <div className="bulk-progress-bar-container">
+            <div className="bulk-progress-header">
+              <span className="bulk-progress-label">
+                Reprocesando {bulkRefresh.done}/{bulkRefresh.total}
+                {bulkRefresh.currentPlate ? ` — ${bulkRefresh.currentPlate}` : ""}
+              </span>
+              <button
+                type="button"
+                className="button-secondary button-sm"
+                onClick={cancelBulkRefresh}
+              >
+                Cancelar
+              </button>
+            </div>
+            <div className="bulk-progress-track">
+              <div
+                className="bulk-progress-fill"
+                style={{ width: `${(bulkRefresh.done / bulkRefresh.total) * 100}%` }}
+              />
+            </div>
+            <span className="bulk-progress-percent">
+              {Math.round((bulkRefresh.done / bulkRefresh.total) * 100)}%
+            </span>
+          </div>
+        ) : null}
 
         {!customersLoading && customers.length === 0 ? (
           <p className="notice-banner notice-soft">
@@ -293,6 +370,10 @@ export default function VehiclesPage() {
               <thead>
                 <tr>
                   <th>Placa</th>
+                  <th>Marca</th>
+                  <th>Linea</th>
+                  <th>Año</th>
+                  <th>Combustible</th>
                   <th>VIN</th>
                   <th>CPL</th>
                   <th>Navitrans</th>
@@ -312,6 +393,10 @@ export default function VehiclesPage() {
                     <td data-label="Placa">
                       <strong>{vehicle.plate}</strong>
                     </td>
+                    <td data-label="Marca">{vehicle.marca || "-"}</td>
+                    <td data-label="Linea">{vehicle.linea || "-"}</td>
+                    <td data-label="Año">{vehicle.ano_modelo || "-"}</td>
+                    <td data-label="Combustible">{vehicle.tipo_combustible || "-"}</td>
                     <td data-label="VIN">{vehicle.vin || "Sin VIN"}</td>
                     <td data-label="CPL">{vehicle.cpl || "Sin CPL"}</td>
                     <td data-label="Navitrans">
@@ -412,18 +497,13 @@ export default function VehiclesPage() {
 
       <VehicleAssignmentModal
         open={Boolean(selectedVehicle)}
-        loading={loading || customersLoading}
+        loading={loading || customersLoading || motorsLoading}
         title={selectedVehicle ? `Detalles ${selectedVehicle.plate}` : "Detalles del vehiculo"}
         vehicle={selectedVehicle}
         customers={customers}
-        registeredMotor={
-          selectedVehicle?.engine_name
-            ? {
-                engine_name: selectedVehicle.engine_name,
-                technical_number: selectedVehicle.technical_number
-              }
-            : null
-        }
+        motors={motors}
+        requiresMotorRegistration
+        initialTechnicalNumber={selectedVehicle?.technical_number || ""}
         onClose={() => setSelectedVehicle(null)}
         onSubmit={handleUpdateVehicle}
         onRevalidateCustomerGeotab={handleRevalidateCustomerGeotab}

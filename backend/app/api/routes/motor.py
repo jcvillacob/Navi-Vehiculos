@@ -8,6 +8,7 @@ from app.schemas.vehicle import MotorAttachmentRecord, MotorCatalogRecord, Motor
 from app.services.motor_catalog import (
     create_motor,
     create_motor_attachment,
+    delete_motor,
     delete_motor_attachment,
     get_motor_attachment_file,
     list_motor_attachments,
@@ -44,6 +45,18 @@ def update_motor_record(
 ) -> MotorCatalogRecord:
     try:
         return update_motor(motor_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/{motor_id}", status_code=status.HTTP_200_OK)
+def delete_motor_record(
+    motor_id: int = Path(..., ge=1, description="ID del motor"),
+    _user: dict = Depends(require_role("admin", "editor")),
+) -> dict:
+    try:
+        vehicle_count = delete_motor(motor_id)
+        return {"deleted": True, "vehicles_unlinked": vehicle_count}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   createMotor,
+  deleteMotor as deleteMotorApi,
   deleteMotorAttachment,
   listMotors,
   updateMotor,
@@ -73,6 +74,22 @@ export function useMotorsCatalog() {
     }
   };
 
+  const removeMotor = async (motorId) => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await deleteMotorApi(motorId);
+      setMotors((prev) => prev.filter((m) => m.id !== motorId));
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible eliminar el motor";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     loading,
     motors,
@@ -80,6 +97,7 @@ export function useMotorsCatalog() {
     loadMotors,
     registerMotor,
     editMotor,
+    removeMotor,
     uploadAttachment: async (motorId, payload) => {
       setLoading(true);
       setError("");

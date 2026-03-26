@@ -6,6 +6,7 @@ import { useToasts } from "../components/useToasts";
 import LookupDetails from "../features/engineLookup/components/LookupDetails";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import { useEngineLookup } from "../features/engineLookup/hooks/useEngineLookup";
+import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
 
 const HISTORY_KEY = "navi:lookup-history";
@@ -39,11 +40,13 @@ export default function EngineLookupPage() {
   const { toasts, pushToast } = useToasts();
   const [history, setHistory] = useState(loadHistory);
   const { customers, loading: customersLoading } = useCustomersCatalog();
+  const { motors } = useMotorsCatalog();
 
   const {
     loading,
     lookupResult,
     error,
+    isManualAssignment,
     canRegisterCurrentMotor,
     canConfigureCurrentVehicle,
     searchVehicle,
@@ -159,7 +162,9 @@ export default function EngineLookupPage() {
           loading={loading}
           canRegister={canRegisterCurrentMotor}
           canConfigure={canConfigureCurrentVehicle}
+          isManualAssignment={isManualAssignment}
           onAction={() => setIsRegisterOpen(true)}
+          onForceSearch={lookupResult.cached ? () => searchVehicle(identifier, { force: true }) : undefined}
         />
       ) : !loading ? (
         <p className="support-copy lookup-empty-hint">
@@ -185,8 +190,9 @@ export default function EngineLookupPage() {
           geotab_customer_status: lookupResult?.geotab_customer_status || "not_applicable"
         }}
         customers={customers}
+        motors={isManualAssignment ? motors : []}
         initialTechnicalNumber={lookupResult?.technical_engine_configuration || ""}
-        lockTechnicalNumber
+        lockTechnicalNumber={!isManualAssignment}
         registeredMotor={lookupResult?.registered_motor || null}
         requiresMotorRegistration={!lookupResult?.registered_motor}
         onClose={() => setIsRegisterOpen(false)}

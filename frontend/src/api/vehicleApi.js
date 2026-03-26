@@ -135,8 +135,9 @@ export async function calculateMonthlyPerformance(payload) {
 
 // ── Vehicle ───────────────────────────────────────────────────────────────────
 
-export async function lookupVehicle(identifier) {
+export async function lookupVehicle(identifier, { force = false } = {}) {
   const query = new URLSearchParams({ identifier: identifier.trim().toUpperCase() });
+  if (force) query.set("force", "true");
   const response = await fetch(`${API_BASE}/api/v1/vehicle/lookup?${query.toString()}`, {
     credentials: "include",
   });
@@ -155,6 +156,17 @@ export async function listVehicleAssignments(search = "") {
     credentials: "include",
   });
   return parseJsonOrThrow(response, "Error listando vehiculos");
+}
+
+export async function manualAssignVehicle(plate, payload) {
+  const normalizedPlate = plate.trim().toUpperCase();
+  const response = await fetch(`${API_BASE}/api/v1/vehicle/${normalizedPlate}/manual-assign`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error registrando asignacion manual del vehiculo");
 }
 
 export async function assignVehicleDatabase(plate, payload) {
@@ -213,6 +225,14 @@ export async function updateMotor(motorId, payload) {
     body: JSON.stringify(payload),
   });
   return parseJsonOrThrow(response, "Error actualizando motor");
+}
+
+export async function deleteMotor(motorId) {
+  const response = await fetch(`${API_BASE}/api/v1/motors/${motorId}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  return parseJsonOrThrow(response, "Error eliminando motor");
 }
 
 export async function uploadMotorAttachment(motorId, payload) {

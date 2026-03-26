@@ -1,6 +1,7 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 import { useAuth } from "./context/AuthContext";
+import { BulkRefreshProvider } from "./context/BulkRefreshContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import LoginPage from "./pages/LoginPage";
 import AuditPage from "./pages/AuditPage";
@@ -32,6 +33,7 @@ function AppShell() {
   const { user, logout } = useAuth();
 
   return (
+    <BulkRefreshProvider>
     <div className="app-shell">
       <div className="app-orb app-orb-one" aria-hidden="true" />
       <div className="app-orb app-orb-two" aria-hidden="true" />
@@ -136,5 +138,6 @@ function AppShell() {
         </main>
       </div>
     </div>
+    </BulkRefreshProvider>
   );
 }
