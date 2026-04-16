@@ -18,7 +18,7 @@ import sys
 # Asegurar que el directorio raiz del proyecto esté en el path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.services.auth_service import create_user, ensure_auth_tables, get_user_by_username
+from app.services.auth_service import create_user, get_user_by_username
 
 
 def _prompt(name: str, env_var: str, secret: bool = False) -> str:
@@ -49,9 +49,6 @@ def main() -> None:
     if len(password) < 8:
         print("Error: la contrasena debe tener al menos 8 caracteres.")
         sys.exit(1)
-
-    print("\nCreando tablas de auth si no existen...")
-    ensure_auth_tables()
 
     existing = get_user_by_username(username)
     if existing:

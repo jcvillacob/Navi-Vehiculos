@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
 
 import psycopg
 from psycopg.rows import dict_row
@@ -20,57 +19,6 @@ def _database_dsn() -> str:
 
 def _redis_client() -> redis_lib.Redis:
     return redis_lib.from_url(settings.redis_url, decode_responses=True)
-
-
-def _ensure_auth_tables(conn: psycopg.Connection) -> None:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id            SERIAL PRIMARY KEY,
-                username      TEXT NOT NULL UNIQUE,
-                email         TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                role          TEXT NOT NULL DEFAULT 'viewer'
-                                  CHECK (role IN ('admin', 'editor', 'viewer')),
-                is_active     BOOLEAN NOT NULL DEFAULT TRUE,
-                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS audit_logs (
-                id            SERIAL PRIMARY KEY,
-                user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                action        TEXT NOT NULL,
-                resource_type TEXT NOT NULL,
-                resource_id   TEXT,
-                detail        JSONB,
-                ip_address    TEXT,
-                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE INDEX IF NOT EXISTS audit_logs_user_id_idx
-            ON audit_logs (user_id);
-            """
-        )
-        cur.execute(
-            """
-            CREATE INDEX IF NOT EXISTS audit_logs_created_idx
-            ON audit_logs (created_at DESC);
-            """
-        )
-
-
-def ensure_auth_tables() -> None:
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_auth_tables(conn)
-        conn.commit()
 
 
 # ── Password helpers ──────────────────────────────────────────────────────────
@@ -97,8 +45,6 @@ def is_token_blacklisted(jti: str) -> bool:
 
 def get_user_by_username(username: str) -> dict | None:
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_auth_tables(conn)
-        conn.commit()
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT * FROM users WHERE username = %s",
@@ -109,8 +55,6 @@ def get_user_by_username(username: str) -> dict | None:
 
 def get_user_by_id(user_id: int) -> dict | None:
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_auth_tables(conn)
-        conn.commit()
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT * FROM users WHERE id = %s",
@@ -121,8 +65,6 @@ def get_user_by_id(user_id: int) -> dict | None:
 
 def list_users() -> list[dict]:
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_auth_tables(conn)
-        conn.commit()
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, username, email, role, is_active, created_at, updated_at "
@@ -134,7 +76,6 @@ def list_users() -> list[dict]:
 def create_user(username: str, email: str, password: str, role: str = "viewer") -> dict:
     password_hash = hash_password(password)
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_auth_tables(conn)
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -151,8 +92,6 @@ def create_user(username: str, email: str, password: str, role: str = "viewer") 
 
 def update_user(user_id: int, email: str | None, role: str | None, is_active: bool | None) -> dict | None:
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_auth_tables(conn)
-        conn.commit()
         sets = []
         params: list = []
         if email is not None:
@@ -192,7 +131,6 @@ def write_audit_log(
 ) -> None:
     import json as _json
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_auth_tables(conn)
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -214,8 +152,6 @@ def write_audit_log(
 
 def list_audit_logs(limit: int = 100, offset: int = 0) -> list[dict]:
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_auth_tables(conn)
-        conn.commit()
         with conn.cursor() as cur:
             cur.execute(
                 """
