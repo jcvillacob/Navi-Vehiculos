@@ -90,7 +90,9 @@ def _build_token(user: dict) -> str:
 
 @router.post("/login")
 @limiter.limit("5/minute")
-def login(request: Request, payload: LoginRequest, response: Response) -> dict:
+async def login(request: Request, response: Response) -> dict:
+    body = await request.json()
+    payload = LoginRequest(**body)
     ip_address = _request_ip(request)
     user = get_user_by_username(payload.username)
     if user:

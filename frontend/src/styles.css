@@ -8,6 +8,11 @@
 ───────────────────────────────────────────── */
 
 :root {
+  /* Font aliases */
+  --font-body: "Poppins", sans-serif;
+  --font-heading: "Montserrat", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
   /* Brand colors */
   --red: #ee2e2f;
   --red-hover: #d42526;
@@ -22,6 +27,8 @@
   --cream: #eff0c8;
   --yellow: #ffb301;
   --blue: #185979;
+  --accent: var(--red);
+  --amber: #d4a017;
 
   /* Surfaces */
   --bg: #f1f3f5;
@@ -31,6 +38,8 @@
 
   /* Text */
   --text: #1e2528;
+  --text-primary: var(--text);
+  --text-strong: var(--text);
   --text-secondary: #354550;
   --text-muted: #6b7b85;
   --text-subtle: #98aab4;

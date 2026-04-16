@@ -61,7 +61,11 @@ async function parseJsonOrThrow(response, fallbackMessage) {
     let detail = "";
     try {
       const payload = await response.json();
-      detail = payload?.detail ? `: ${payload.detail}` : "";
+      if (typeof payload?.detail === "string") {
+        detail = `: ${payload.detail}`;
+      } else if (Array.isArray(payload?.detail)) {
+        detail = `: ${payload.detail.map((e) => e.msg || e.message || JSON.stringify(e)).join("; ")}`;
+      }
     } catch {
       detail = "";
     }
