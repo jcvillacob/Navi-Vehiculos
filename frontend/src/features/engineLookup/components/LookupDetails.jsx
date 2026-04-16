@@ -43,6 +43,7 @@ export default function LookupDetails({
   loading,
   canRegister,
   canConfigure,
+  canManageVehicle,
   isManualAssignment,
   onAction,
   onForceSearch
@@ -178,13 +179,17 @@ export default function LookupDetails({
               No existe motor registrado para este TEC#.
             </p>
           )}
-          <button
-            type="button"
-            disabled={(!canRegister && !canConfigure && !isManualAssignment) || loading}
-            onClick={onAction}
-          >
-            {actionLabel}
-          </button>
+          {canManageVehicle ? (
+            <button
+              type="button"
+              disabled={(!canRegister && !canConfigure && !isManualAssignment) || loading}
+              onClick={onAction}
+            >
+              {actionLabel}
+            </button>
+          ) : (
+            <span className="support-copy">Solo lectura para esta asignacion.</span>
+          )}
         </div>
       ) : !canAct ? (
         <p className="support-copy">

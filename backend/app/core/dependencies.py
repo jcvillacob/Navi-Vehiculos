@@ -4,7 +4,7 @@ from fastapi import Cookie, Depends, HTTPException
 from jose import JWTError, jwt
 
 from app.core.config import settings
-from app.services.auth_service import get_user_by_id, is_token_blacklisted
+from app.services.auth_service import get_user_by_id, get_user_permissions, is_token_blacklisted
 
 
 def get_current_user(access_token: str | None = Cookie(default=None)) -> dict:
@@ -35,14 +35,13 @@ def get_current_user(access_token: str | None = Cookie(default=None)) -> dict:
     return user
 
 
-def require_role(*roles: str):
+def require_permission(*perms: str):
     """
-    Factory que retorna un Depends verificando que el usuario tenga uno de los roles dados.
-
-    Uso: Depends(require_role("admin", "editor"))
+    Factory que valida que el usuario tenga al menos uno de los permisos dados.
     """
     def check(user: dict = Depends(get_current_user)) -> dict:
-        if user["role"] not in roles:
+        user_permissions = get_user_permissions(user["role"])
+        if not any(perm in user_permissions for perm in perms):
             raise HTTPException(status_code=403, detail="Sin permisos suficientes")
         return user
     return check

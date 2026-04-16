@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.dependencies import get_current_user, require_role
+from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
     MonthlyPerformanceCalculateRequest,
     MonthlyPerformanceResponse,
@@ -25,7 +25,7 @@ def get_monthly_performance(
     ),
     plate_search: str | None = Query(default=None, min_length=1, max_length=32),
     motor_group: str | None = Query(default=None, min_length=1, max_length=120),
-    _user: dict = Depends(get_current_user),
+    _user: dict = Depends(require_permission("rendimientos.view")),
 ) -> MonthlyPerformanceResponse:
     effective_from = month_from or month
     effective_to = month_to or month
@@ -50,7 +50,7 @@ def get_monthly_performance(
 @router.post("/calculate", response_model=MonthlyPerformanceResponse)
 def calculate_monthly_performance_route(
     payload: MonthlyPerformanceCalculateRequest,
-    _user: dict = Depends(require_role("admin", "editor")),
+    _user: dict = Depends(require_permission("rendimientos.refresh")),
 ) -> MonthlyPerformanceResponse:
     try:
         return calculate_monthly_performance(payload)

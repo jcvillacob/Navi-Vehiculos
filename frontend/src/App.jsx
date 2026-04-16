@@ -1,5 +1,6 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
+import Can from "./components/Can";
 import { useAuth } from "./context/AuthContext";
 import { BulkRefreshProvider } from "./context/BulkRefreshContext";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -71,18 +72,20 @@ function AppShell() {
                 <span>Clientes</span>
                 <small>Databases y accesos</small>
               </NavLink>
-              {user?.role === "admin" && (
+              <Can permission="users.list">
+                <NavLink to="/usuarios">
+                  <span>Usuarios</span>
+                  <small>Roles y accesos</small>
+                </NavLink>
+              </Can>
+              <Can permission="audit.view">
                 <>
-                  <NavLink to="/usuarios">
-                    <span>Usuarios</span>
-                    <small>Roles y accesos</small>
-                  </NavLink>
                   <NavLink to="/auditoria">
                     <span>Auditoria</span>
                     <small>Logs del sistema</small>
                   </NavLink>
                 </>
-              )}
+              </Can>
             </nav>
 
             <section className="sidebar-note">
@@ -119,7 +122,7 @@ function AppShell() {
               <Route
                 path="/usuarios"
                 element={
-                  <ProtectedRoute roles={["admin"]}>
+                  <ProtectedRoute permissions={["users.list"]}>
                     <UsersPage />
                   </ProtectedRoute>
                 }
@@ -127,7 +130,7 @@ function AppShell() {
               <Route
                 path="/auditoria"
                 element={
-                  <ProtectedRoute roles={["admin"]}>
+                  <ProtectedRoute permissions={["audit.view"]}>
                     <AuditPage />
                   </ProtectedRoute>
                 }

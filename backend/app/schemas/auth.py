@@ -19,6 +19,11 @@ class UserRecord(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    permissions: list[str] = Field(default_factory=list)
+
+
+class PermissionListResponse(BaseModel):
+    permissions: list[str] = Field(default_factory=list)
 
 
 class UserCreateRequest(BaseModel):

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
+import Can from "../components/Can";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
+import { usePermission } from "../context/AuthContext";
 import { useBulkRefresh } from "../context/BulkRefreshContext";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicleAssignments";
@@ -45,6 +47,8 @@ export default function VehiclesPage() {
   const { motors, loading: motorsLoading } = useMotorsCatalog();
   const { toasts, pushToast } = useToasts();
   const { bulkRefresh, startBulkRefresh, cancelBulkRefresh, acknowledgeBulkRefresh } = useBulkRefresh();
+  const canEditVehicles = usePermission("vehicles.edit");
+  const canRefreshVehicles = usePermission("vehicles.refresh");
 
   // React to bulk refresh finishing (works even if user navigated away and came back)
   useEffect(() => {
@@ -253,14 +257,16 @@ export default function VehiclesPage() {
             <button type="button" className="button-secondary button-sm" onClick={handleClear} disabled={loading}>
               Limpiar
             </button>
-            <button
-              type="button"
-              className="button button-sm"
-              onClick={() => startBulkRefresh(filteredVehicles.map((v) => v.plate))}
-              disabled={loading || Boolean(bulkRefresh) || filteredVehicles.length === 0}
-            >
-              Reprocesar todos ({filteredVehicles.length})
-            </button>
+            <Can permission="vehicles.refresh">
+              <button
+                type="button"
+                className="button button-sm"
+                onClick={() => startBulkRefresh(filteredVehicles.map((v) => v.plate))}
+                disabled={loading || Boolean(bulkRefresh) || filteredVehicles.length === 0}
+              >
+                Reprocesar todos ({filteredVehicles.length})
+              </button>
+            </Can>
           </div>
         </header>
 
@@ -440,30 +446,32 @@ export default function VehiclesPage() {
                         >
                           Detalles
                         </button>
-                        <button
-                          type="button"
-                          className="icon-button"
-                          title="Actualizar datos del vehiculo"
-                          onClick={() => handleRefreshVehicle(vehicle.plate)}
-                          disabled={refreshingPlates.has(vehicle.plate)}
-                        >
-                          <svg
-                            className={refreshingPlates.has(vehicle.plate) ? "spin" : ""}
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
+                        <Can permission="vehicles.refresh">
+                          <button
+                            type="button"
+                            className="icon-button"
+                            title="Actualizar datos del vehiculo"
+                            onClick={() => handleRefreshVehicle(vehicle.plate)}
+                            disabled={refreshingPlates.has(vehicle.plate)}
                           >
-                            <path d="M21 2v6h-6" />
-                            <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
-                            <path d="M3 22v-6h6" />
-                            <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
-                          </svg>
-                        </button>
+                            <svg
+                              className={refreshingPlates.has(vehicle.plate) ? "spin" : ""}
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M21 2v6h-6" />
+                              <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+                              <path d="M3 22v-6h6" />
+                              <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+                            </svg>
+                          </button>
+                        </Can>
                       </div>
                     </td>
                     <td data-label="Adjuntos">
@@ -507,6 +515,8 @@ export default function VehiclesPage() {
         onClose={() => setSelectedVehicle(null)}
         onSubmit={handleUpdateVehicle}
         onRevalidateCustomerGeotab={handleRevalidateCustomerGeotab}
+        canEditVehicle={canEditVehicles}
+        canRevalidateCustomerGeotab={canRefreshVehicles}
       />
     </section>
   );

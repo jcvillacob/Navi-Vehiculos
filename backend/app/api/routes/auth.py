@@ -8,11 +8,12 @@ from jose import jwt, JWTError
 
 from app.core.config import settings
 from app.core.dependencies import get_current_user
-from app.schemas.auth import UserRecord
-from app.schemas.auth import LoginRequest
+from app.schemas.auth import LoginRequest, PermissionListResponse, UserRecord
 from app.services.auth_service import (
     blacklist_token,
+    build_user_payload,
     get_user_by_username,
+    get_user_permissions,
     verify_password,
 )
 
@@ -52,12 +53,7 @@ def login(payload: LoginRequest, response: Response) -> dict:
         max_age=settings.jwt_expire_minutes * 60,
         path="/",
     )
-    return {
-        "id": user["id"],
-        "username": user["username"],
-        "email": user["email"],
-        "role": user["role"],
-    }
+    return build_user_payload(user)
 
 
 @router.post("/logout")
@@ -84,4 +80,9 @@ def logout(request: Request, response: Response, _user: dict = Depends(get_curre
 
 @router.get("/me", response_model=UserRecord)
 def me(user: dict = Depends(get_current_user)) -> dict:
-    return user
+    return build_user_payload(user)
+
+
+@router.get("/permissions", response_model=PermissionListResponse)
+def permissions(user: dict = Depends(get_current_user)) -> dict:
+    return {"permissions": sorted(get_user_permissions(user["role"]))}

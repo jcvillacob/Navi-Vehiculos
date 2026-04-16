@@ -45,7 +45,9 @@ export default function VehicleAssignmentModal({
   lockTechnicalNumber = false,
   onClose,
   onSubmit,
-  onRevalidateCustomerGeotab = null
+  onRevalidateCustomerGeotab = null,
+  canEditVehicle = true,
+  canRevalidateCustomerGeotab = true
 }) {
   const [technicalNumber, setTechnicalNumber] = useState(initialTechnicalNumber);
   const [engineName, setEngineName] = useState("");
@@ -164,6 +166,7 @@ export default function VehicleAssignmentModal({
             status={vehicle.geotab_customer_status || "not_applicable"}
           />
           {onRevalidateCustomerGeotab &&
+            canRevalidateCustomerGeotab &&
             vehicle.database_connection_type === "geotab" &&
             vehicle.plate ? (
             <button
@@ -204,9 +207,12 @@ export default function VehicleAssignmentModal({
         ) : null}
 
         <p className="support-copy modal-support-copy">
-          Desde aqui puedes revisar el detalle y ajustar la asignacion del cliente/database.
+          {canEditVehicle
+            ? "Desde aqui puedes revisar el detalle y ajustar la asignacion del cliente/database."
+            : "Desde aqui puedes revisar el detalle del vehiculo y su asignacion actual."}
         </p>
 
+        {canEditVehicle ? (
         <form className="register-form" onSubmit={handleSubmit}>
           {requiresMotorRegistration ? (
             <>
@@ -358,6 +364,7 @@ export default function VehicleAssignmentModal({
             </button>
           </div>
         </form>
+        ) : null}
       </section>
     </div>
   );

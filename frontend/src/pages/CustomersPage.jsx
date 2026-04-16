@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
+import Can from "../components/Can";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
+import { usePermission } from "../context/AuthContext";
 import { inspectGeotabRule, listMotors, resolveGeotabRule } from "../api/vehicleApi";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import {
@@ -703,7 +705,8 @@ function DatabaseDetailModal({
   onAddRule,
   onDeleteRule,
   onAddRuleGroup,
-  onDeleteRuleGroup
+  onDeleteRuleGroup,
+  canEdit = true
 }) {
   const [ruleId, setRuleId] = useState("");
   const [resolveStatus, setResolveStatus] = useState("idle");
@@ -886,14 +889,16 @@ function DatabaseDetailModal({
             <h3>{database.database_name}</h3>
           </div>
           <div className="modal-header-actions">
-            <button
-              type="button"
-              className="icon-button"
-              onClick={onEdit}
-              title="Editar database"
-            >
-              &#9998;
-            </button>
+            {canEdit && onEdit ? (
+              <button
+                type="button"
+                className="icon-button"
+                onClick={onEdit}
+                title="Editar database"
+              >
+                &#9998;
+              </button>
+            ) : null}
             <button type="button" className="icon-button modal-close-button" onClick={onClose}>
               &#10005;
             </button>
@@ -941,19 +946,21 @@ function DatabaseDetailModal({
                   required
                   autoComplete="off"
                 />
-                <button
-                  type="submit"
-                  className="button button-sm"
-                  disabled={
-                    loading ||
-                    resolveStatus !== "resolved" ||
-                    !rulePreview?.exists ||
-                    rulePreview?.rule_id !== ruleId.trim()
-                  }
-                  title="Agregar regla"
-                >
-                  Agregar
-                </button>
+                {canEdit ? (
+                  <button
+                    type="submit"
+                    className="button button-sm"
+                    disabled={
+                      loading ||
+                      resolveStatus !== "resolved" ||
+                      !rulePreview?.exists ||
+                      rulePreview?.rule_id !== ruleId.trim()
+                    }
+                    title="Agregar regla"
+                  >
+                    Agregar
+                  </button>
+                ) : null}
               </form>
 
               {rulePreview || resolveStatus === "loading" || (resolveStatus === "error" && resolveError) ? (
@@ -973,7 +980,7 @@ function DatabaseDetailModal({
                   <span className="rules-label">Reglas por motor</span>
                   <span className="rules-count-subtle">{ruleGroups.length} {ruleGroups.length === 1 ? "motor" : "motores"} · {rules.length} {rules.length === 1 ? "regla" : "reglas"}</span>
                 </div>
-                {unassignedRules.length > 0 ? (
+                {canEdit && unassignedRules.length > 0 ? (
                   <button
                     type="button"
                     className={`button-sm ${showAssignForm ? "button-secondary" : "button"}`}
@@ -985,7 +992,7 @@ function DatabaseDetailModal({
               </div>
 
               {/* ── Assign form (only unassigned rules) ── */}
-              {showAssignForm && unassignedRules.length > 0 ? (
+              {canEdit && showAssignForm && unassignedRules.length > 0 ? (
                 <form className="rule-assign-form" onSubmit={handleAddRuleGroup}>
                   <div className="rule-assign-form-row">
                     <div className="form-field">
@@ -1063,7 +1070,7 @@ function DatabaseDetailModal({
                         <div className="motor-group-card-meta">
                           <span className="rule-badge is-match-mode">{formatMatchModeLabel(group.match_mode)}</span>
                           <span className="rule-badge is-muted">{group.rules.length} {group.rules.length === 1 ? "regla" : "reglas"}</span>
-                          {confirmDeleteGroupId === group.id ? (
+                          {canEdit && confirmDeleteGroupId === group.id ? (
                             <div className="motor-group-card-confirm" onClick={(e) => e.stopPropagation()}>
                               <button
                                 type="button"
@@ -1085,7 +1092,7 @@ function DatabaseDetailModal({
                                 &#8592;
                               </button>
                             </div>
-                          ) : (
+                          ) : canEdit ? (
                             <button
                               type="button"
                               className="icon-button rule-delete-button"
@@ -1095,7 +1102,7 @@ function DatabaseDetailModal({
                             >
                               &#10005;
                             </button>
-                          )}
+                          ) : null}
                         </div>
                       </summary>
                       <div className="motor-group-card-rules">
@@ -1134,7 +1141,7 @@ function DatabaseDetailModal({
                           <span className="rule-list-name">{rule.name}</span>
                           <span className="rule-id-cell">{rule.rule_id}</span>
                         </button>
-                        {confirmDeleteRuleId === rule.id ? (
+                        {canEdit && confirmDeleteRuleId === rule.id ? (
                           <>
                             <button
                               type="button"
@@ -1156,7 +1163,7 @@ function DatabaseDetailModal({
                               &#8592;
                             </button>
                           </>
-                        ) : (
+                        ) : canEdit ? (
                           <button
                             type="button"
                             className="icon-button rule-delete-button"
@@ -1166,7 +1173,7 @@ function DatabaseDetailModal({
                           >
                             &#10005;
                           </button>
-                        )}
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -1208,6 +1215,7 @@ function DatabaseDetailModal({
 /* ── Main Page ─────────────────────────────────────────────────────── */
 export default function CustomersPage() {
   const { toasts, pushToast } = useToasts();
+  const canEditCustomer = usePermission("customers.edit");
 
   const [showCreateCustomer, setShowCreateCustomer] = useState(false);
   const [createDbForCustomerId, setCreateDbForCustomerId] = useState(null);
@@ -1378,17 +1386,21 @@ export default function CustomersPage() {
           </p>
         </div>
         <div className="page-header-actions">
-          <button type="button" onClick={() => setShowCreateCustomer(true)}>
-            + Cliente
-          </button>
-          <button
-            type="button"
-            className="button-secondary"
-            onClick={() => setCreateDbForCustomerId("")}
-            disabled={customers.length === 0}
-          >
-            + Database
-          </button>
+          <Can permission="customers.create">
+            <button type="button" onClick={() => setShowCreateCustomer(true)}>
+              + Cliente
+            </button>
+          </Can>
+          <Can permission="customers.edit">
+            <button
+              type="button"
+              className="button-secondary"
+              onClick={() => setCreateDbForCustomerId("")}
+              disabled={customers.length === 0}
+            >
+              + Database
+            </button>
+          </Can>
         </div>
       </header>
 
@@ -1423,22 +1435,26 @@ export default function CustomersPage() {
               <h3>{customer.name}</h3>
               <div className="motor-card-heading-row">
                 <div className="motor-card-heading-actions">
-                  <button
-                    type="button"
-                    className="icon-button"
-                    onClick={() => setCreateDbForCustomerId(String(customer.id))}
-                    title="Agregar database"
-                  >
-                    +
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    onClick={() => setEditingCustomer(customer)}
-                    title="Editar cliente"
-                  >
-                    &#9998;
-                  </button>
+                  <Can permission="customers.edit">
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setCreateDbForCustomerId(String(customer.id))}
+                      title="Agregar database"
+                    >
+                      +
+                    </button>
+                  </Can>
+                  <Can permission="customers.edit">
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setEditingCustomer(customer)}
+                      title="Editar cliente"
+                    >
+                      &#9998;
+                    </button>
+                  </Can>
                 </div>
               </div>
             </div>
@@ -1532,11 +1548,12 @@ export default function CustomersPage() {
           motors={motors}
           motorsLoading={motorsLoading}
           onClose={() => setViewingDatabase(null)}
-          onEdit={openEditFromDetail}
+          onEdit={canEditCustomer ? openEditFromDetail : null}
           onAddRule={handleAddRule}
           onDeleteRule={handleDeleteRule}
           onAddRuleGroup={handleAddRuleGroup}
           onDeleteRuleGroup={handleDeleteRuleGroup}
+          canEdit={canEditCustomer}
         />
       ) : null}
     </section>

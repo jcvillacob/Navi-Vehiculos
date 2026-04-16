@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
-from app.core.dependencies import get_current_user, require_role
+from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
     AssignedDatabaseSummary,
     ManualVehicleAssignmentRequest,
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/vehicle", tags=["vehicle"])
 def lookup_vehicle(
     identifier: str = Query(..., min_length=3, max_length=32, description="Placa o VIN del vehiculo"),
     force: bool = Query(default=False, description="Forzar consulta externa ignorando cache local"),
-    _user: dict = Depends(get_current_user),
+    _user: dict = Depends(require_permission("engine_lookup.use")),
 ) -> VehicleLookupResponse:
     return lookup_vehicle_service(identifier, force=force)
 
@@ -36,7 +36,7 @@ def get_vehicle_assignments(
         max_length=64,
         description="Texto para filtrar por placa, VIN, TEC# o nombre del motor",
     ),
-    _user: dict = Depends(get_current_user),
+    _user: dict = Depends(require_permission("vehicles.list")),
 ) -> list[VehicleAssignmentRecord]:
     return list_vehicle_assignments(search)
 
@@ -45,7 +45,7 @@ def get_vehicle_assignments(
 def assign_database_to_vehicle(
     payload: VehicleDatabaseAssignmentRequest,
     plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
-    _user: dict = Depends(require_role("admin", "editor")),
+    _user: dict = Depends(require_permission("vehicles.edit")),
 ) -> AssignedDatabaseSummary:
     try:
         return assign_vehicle_database(plate, payload)
@@ -58,7 +58,7 @@ def assign_database_to_vehicle(
 def manual_assign_vehicle(
     payload: ManualVehicleAssignmentRequest,
     plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
-    _user: dict = Depends(require_role("admin", "editor")),
+    _user: dict = Depends(require_permission("vehicles.edit")),
 ) -> dict:
     try:
         register_vehicle_assignment(
@@ -81,7 +81,7 @@ def manual_assign_vehicle(
 @router.post("/{plate}/refresh", response_model=VehicleLookupResponse)
 def refresh_vehicle_assignment(
     plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
-    _user: dict = Depends(require_role("admin", "editor")),
+    _user: dict = Depends(require_permission("vehicles.refresh")),
 ) -> VehicleLookupResponse:
     return lookup_vehicle_service(plate, force=True)
 
@@ -89,7 +89,7 @@ def refresh_vehicle_assignment(
 @router.post("/{plate}/revalidate-customer-geotab")
 def revalidate_customer_geotab(
     plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
-    _user: dict = Depends(require_role("admin", "editor")),
+    _user: dict = Depends(require_permission("vehicles.refresh")),
 ) -> dict:
     try:
         return revalidate_vehicle_customer_geotab(plate)

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import Can from "../components/Can";
 import { listUsers, createUser, updateUser } from "../api/vehicleApi";
 
 const ROLE_LABELS = { admin: "Admin", editor: "Editor", viewer: "Viewer" };
@@ -192,9 +193,11 @@ export default function UsersPage() {
           <p>Gestiona los accesos y roles de los usuarios del sistema.</p>
         </div>
 
-        <button type="button" onClick={() => setModal("create")}>
-          + Usuario
-        </button>
+        <Can permission="users.create">
+          <button type="button" onClick={() => setModal("create")}>
+            + Usuario
+          </button>
+        </Can>
       </header>
 
       {error && (
@@ -246,12 +249,14 @@ export default function UsersPage() {
                   </td>
                   <td data-label="Creado">{formatDate(u.created_at)}</td>
                   <td data-label="Acciones">
-                    <button
-                      className="button-secondary button-sm"
-                      onClick={() => setModal({ mode: "edit", user: u })}
-                    >
-                      Editar
-                    </button>
+                    <Can permission="users.edit">
+                      <button
+                        className="button-secondary button-sm"
+                        onClick={() => setModal({ mode: "edit", user: u })}
+                      >
+                        Editar
+                      </button>
+                    </Can>
                   </td>
                 </tr>
               ))}

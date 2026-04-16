@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
+import Can from "../components/Can";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import {
@@ -517,9 +518,11 @@ export default function RendimientosPage() {
             </div>
           </details>
 
-          <button type="button" onClick={handleCalculate} disabled={calculating || !calcMonth}>
-            {calculating ? "Calculando..." : "Calcular"}
-          </button>
+          <Can permission="rendimientos.refresh">
+            <button type="button" onClick={handleCalculate} disabled={calculating || !calcMonth}>
+              {calculating ? "Calculando..." : "Calcular"}
+            </button>
+          </Can>
         </div>
       </header>
 

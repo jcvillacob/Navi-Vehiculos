@@ -10,6 +10,79 @@ import redis as redis_lib
 from app.core.config import settings
 
 
+PERMISSIONS_BY_ROLE: dict[str, tuple[str, ...]] = {
+    "admin": (
+        "dashboard.view",
+        "motors.list",
+        "motors.create",
+        "motors.edit",
+        "motors.delete",
+        "motors.attachments",
+        "vehicles.list",
+        "vehicles.edit",
+        "vehicles.refresh",
+        "customers.list",
+        "customers.create",
+        "customers.edit",
+        "rendimientos.view",
+        "rendimientos.refresh",
+        "users.list",
+        "users.create",
+        "users.edit",
+        "audit.view",
+        "engine_lookup.use",
+    ),
+    "editor": (
+        "dashboard.view",
+        "motors.list",
+        "motors.create",
+        "motors.edit",
+        "motors.attachments",
+        "vehicles.list",
+        "vehicles.edit",
+        "vehicles.refresh",
+        "customers.list",
+        "customers.create",
+        "customers.edit",
+        "rendimientos.view",
+        "rendimientos.refresh",
+        "engine_lookup.use",
+    ),
+    "viewer": (
+        "dashboard.view",
+        "motors.list",
+        "vehicles.list",
+        "customers.list",
+        "rendimientos.view",
+        "engine_lookup.use",
+    ),
+}
+
+PERMISSION_DESCRIPTIONS: dict[str, str] = {
+    "dashboard.view": "Ver dashboard",
+    "motors.list": "Listar motores",
+    "motors.create": "Crear motor",
+    "motors.edit": "Editar motor",
+    "motors.delete": "Eliminar motor",
+    "motors.attachments": "Gestionar adjuntos",
+    "vehicles.list": "Listar vehiculos",
+    "vehicles.edit": "Editar vehiculo",
+    "vehicles.refresh": "Refrescar datos Geotab",
+    "customers.list": "Listar clientes",
+    "customers.create": "Crear cliente",
+    "customers.edit": "Editar cliente y databases",
+    "rendimientos.view": "Ver rendimientos",
+    "rendimientos.refresh": "Refrescar rendimientos",
+    "users.list": "Listar usuarios",
+    "users.create": "Crear usuario",
+    "users.edit": "Editar usuario",
+    "audit.view": "Ver auditoria",
+    "engine_lookup.use": "Consultar motor por placa",
+}
+
+_PERMISSION_CACHE_TTL_SECONDS = 300
+
+
 def _database_dsn() -> str:
     raw_dsn = os.getenv("DATABASE_URL", "").strip()
     if not raw_dsn:
@@ -19,6 +92,10 @@ def _database_dsn() -> str:
 
 def _redis_client() -> redis_lib.Redis:
     return redis_lib.from_url(settings.redis_url, decode_responses=True)
+
+
+def _permissions_cache_key(role: str) -> str:
+    return f"perm:{role}"
 
 
 # ── Password helpers ──────────────────────────────────────────────────────────
@@ -39,6 +116,54 @@ def blacklist_token(jti: str, expire_seconds: int) -> None:
 
 def is_token_blacklisted(jti: str) -> bool:
     return _redis_client().exists(f"bl:{jti}") == 1
+
+
+def clear_role_permissions_cache(role: str | None = None) -> None:
+    client = _redis_client()
+    if role:
+        client.delete(_permissions_cache_key(role))
+        return
+
+    keys = client.keys("perm:*")
+    if keys:
+        client.delete(*keys)
+
+
+def get_user_permissions(role: str) -> set[str]:
+    cache_key = _permissions_cache_key(role)
+    client = _redis_client()
+    cached = client.get(cache_key)
+    if cached:
+        return {item for item in cached.split(",") if item}
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT permission
+                FROM role_permissions
+                WHERE role = %s
+                ORDER BY permission ASC
+                """,
+                (role,),
+            )
+            permissions = {row["permission"] for row in cur.fetchall()}
+
+    client.setex(cache_key, _PERMISSION_CACHE_TTL_SECONDS, ",".join(sorted(permissions)))
+    return permissions
+
+
+def build_user_payload(user: dict) -> dict:
+    return {
+        "id": user["id"],
+        "username": user["username"],
+        "email": user["email"],
+        "role": user["role"],
+        "is_active": user["is_active"],
+        "created_at": user["created_at"],
+        "updated_at": user["updated_at"],
+        "permissions": sorted(get_user_permissions(user["role"])),
+    }
 
 
 # ── User CRUD ─────────────────────────────────────────────────────────────────

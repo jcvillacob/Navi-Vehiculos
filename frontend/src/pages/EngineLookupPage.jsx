@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
+import { usePermission } from "../context/AuthContext";
 import LookupDetails from "../features/engineLookup/components/LookupDetails";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import { useEngineLookup } from "../features/engineLookup/hooks/useEngineLookup";
@@ -41,6 +42,7 @@ export default function EngineLookupPage() {
   const [history, setHistory] = useState(loadHistory);
   const { customers, loading: customersLoading } = useCustomersCatalog();
   const { motors } = useMotorsCatalog();
+  const canEditVehicles = usePermission("vehicles.edit");
 
   const {
     loading,
@@ -162,6 +164,7 @@ export default function EngineLookupPage() {
           loading={loading}
           canRegister={canRegisterCurrentMotor}
           canConfigure={canConfigureCurrentVehicle}
+          canManageVehicle={canEditVehicles}
           isManualAssignment={isManualAssignment}
           onAction={() => setIsRegisterOpen(true)}
           onForceSearch={lookupResult.cached ? () => searchVehicle(identifier, { force: true }) : undefined}
@@ -197,6 +200,7 @@ export default function EngineLookupPage() {
         requiresMotorRegistration={!lookupResult?.registered_motor}
         onClose={() => setIsRegisterOpen(false)}
         onSubmit={handleRegisterMotor}
+        canEditVehicle={canEditVehicles}
       />
     </section>
   );

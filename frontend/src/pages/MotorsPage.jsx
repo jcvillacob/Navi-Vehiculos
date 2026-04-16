@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import Can from "../components/Can";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import MotorAttachmentModal from "../features/engineLookup/components/MotorAttachmentModal";
@@ -268,9 +269,11 @@ export default function MotorsPage() {
           </p>
         </div>
 
-        <button type="button" onClick={() => setIsRegisterOpen(true)}>
-          + Motor
-        </button>
+        <Can permission="motors.create">
+          <button type="button" onClick={() => setIsRegisterOpen(true)}>
+            + Motor
+          </button>
+        </Can>
       </header>
 
       <section className="motor-overview-grid">
@@ -344,14 +347,16 @@ export default function MotorsPage() {
               <div className="motor-card-heading-row">
                 <p className="motor-technical-number">{motor.technical_number}</p>
                 <div className="motor-card-heading-actions">
-                  <button
-                    type="button"
-                    className="icon-button"
-                    onClick={() => setEditingMotor(motor)}
-                    title="Editar motor"
-                  >
-                    &#9998;
-                  </button>
+                  <Can permission="motors.edit">
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setEditingMotor(motor)}
+                      title="Editar motor"
+                    >
+                      &#9998;
+                    </button>
+                  </Can>
                 </div>
               </div>
             </div>
@@ -378,14 +383,16 @@ export default function MotorsPage() {
             <div className="motor-card-attachments">
               <div className="motor-attachments-header">
                 <span>Adjuntos ({motor.attachments?.length || 0})</span>
-                <button
-                  type="button"
-                  className="icon-button"
-                  onClick={() => setSelectedMotorForUpload(motor)}
-                  title="Gestionar adjuntos"
-                >
-                  &#8943;
-                </button>
+                <Can permission="motors.attachments">
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => setSelectedMotorForUpload(motor)}
+                    title="Gestionar adjuntos"
+                  >
+                    &#8943;
+                  </button>
+                </Can>
               </div>
 
               {motor.attachments?.length ? (
