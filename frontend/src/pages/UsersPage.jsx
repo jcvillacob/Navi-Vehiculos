@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Can from "../components/Can";
-import { listUsers, createUser, updateUser } from "../api/vehicleApi";
+import { listUsers, createUser, resetUserPassword, updateUser } from "../api/vehicleApi";
+import { validatePasswordStrength } from "../utils/passwordValidation";
 
 const ROLE_LABELS = { admin: "Admin", editor: "Editor", viewer: "Viewer" };
 const ROLES = ["admin", "editor", "viewer"];
@@ -9,13 +10,18 @@ const ROLES = ["admin", "editor", "viewer"];
 function CreateUserModal({ loading, onClose, onSubmit }) {
   const [form, setForm] = useState({ username: "", email: "", password: "", role: "viewer" });
   const set = (key) => (e) => setForm((prev) => ({ ...prev, [key]: e.target.value }));
+  const passwordErrors = validatePasswordStrength(form.password, form.username);
 
   const handleSubmit = (e) => {
     e.preventDefault();
     onSubmit(form);
   };
 
-  const valid = form.username.trim().length >= 3 && form.email.includes("@") && form.password.length >= 8;
+  const valid =
+    form.username.trim().length >= 3 &&
+    form.email.includes("@") &&
+    form.password.length >= 10 &&
+    passwordErrors.length === 0;
 
   return (
     <div className="modal-overlay" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -41,6 +47,9 @@ function CreateUserModal({ loading, onClose, onSubmit }) {
             <label htmlFor="cu-password">Contrasena</label>
             <input id="cu-password" type="password" value={form.password} onChange={set("password")} placeholder="min 8 caracteres" required />
           </div>
+          {form.password && passwordErrors.length ? (
+            <div className="notice-banner notice-soft">{passwordErrors.join(" ")}</div>
+          ) : null}
           <div className="form-field">
             <label htmlFor="cu-role">Rol</label>
             <select id="cu-role" value={form.role} onChange={set("role")}>
@@ -124,6 +133,45 @@ function EditUserModal({ user, loading, onClose, onSubmit }) {
   );
 }
 
+function ResetPasswordModal({ user, loading, onClose, onSubmit }) {
+  const [password, setPassword] = useState("");
+  const errors = validatePasswordStrength(password, user.username);
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    onSubmit({ new_password: password });
+  };
+
+  return (
+    <div className="modal-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Resetear contrasena">
+        <header className="modal-header">
+          <div className="modal-heading">
+            <span className="eyebrow">Seguridad</span>
+            <h3>Resetear contrasena: {user.username}</h3>
+          </div>
+          <button type="button" className="icon-button modal-close-button" onClick={onClose}>Cerrar</button>
+        </header>
+        <form className="register-form" onSubmit={handleSubmit}>
+          <div className="form-field">
+            <label htmlFor="reset-password">Nueva contrasena</label>
+            <input id="reset-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+          </div>
+          {password && errors.length ? (
+            <div className="notice-banner notice-soft">{errors.join(" ")}</div>
+          ) : null}
+          <div className="actions-row modal-actions">
+            <button type="submit" disabled={loading || !password || errors.length > 0}>
+              {loading ? "Guardando..." : "Resetear contrasena"}
+            </button>
+            <button type="button" className="button-secondary" onClick={onClose}>Cancelar</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 /* ── Users Page ──────────────────────────────────────────────────────── */
 export default function UsersPage() {
   const [users, setUsers] = useState([]);
@@ -168,6 +216,19 @@ export default function UsersPage() {
       await updateUser(modal.user.id, form);
       setModal(null);
       await fetchUsers();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleResetPassword = async (form) => {
+    setSaving(true);
+    try {
+      await resetUserPassword(modal.user.id, form);
+      setModal(null);
+      alert("Contrasena reseteada correctamente.");
     } catch (err) {
       alert(err.message);
     } finally {
@@ -250,12 +311,20 @@ export default function UsersPage() {
                   <td data-label="Creado">{formatDate(u.created_at)}</td>
                   <td data-label="Acciones">
                     <Can permission="users.edit">
-                      <button
-                        className="button-secondary button-sm"
-                        onClick={() => setModal({ mode: "edit", user: u })}
-                      >
-                        Editar
-                      </button>
+                      <div className="actions-row">
+                        <button
+                          className="button-secondary button-sm"
+                          onClick={() => setModal({ mode: "edit", user: u })}
+                        >
+                          Editar
+                        </button>
+                        <button
+                          className="button-secondary button-sm"
+                          onClick={() => setModal({ mode: "reset", user: u })}
+                        >
+                          Resetear clave
+                        </button>
+                      </div>
                     </Can>
                   </td>
                 </tr>
@@ -270,6 +339,9 @@ export default function UsersPage() {
       )}
       {modal?.mode === "edit" && (
         <EditUserModal user={modal.user} loading={saving} onClose={() => setModal(null)} onSubmit={handleEdit} />
+      )}
+      {modal?.mode === "reset" && (
+        <ResetPasswordModal user={modal.user} loading={saving} onClose={() => setModal(null)} onSubmit={handleResetPassword} />
       )}
     </section>
   );

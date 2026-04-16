@@ -1,9 +1,12 @@
+import { useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 import Can from "./components/Can";
+import { changeOwnPassword } from "./api/vehicleApi";
 import { useAuth } from "./context/AuthContext";
 import { BulkRefreshProvider } from "./context/BulkRefreshContext";
 import ProtectedRoute from "./components/ProtectedRoute";
+import { validatePasswordStrength } from "./utils/passwordValidation";
 import LoginPage from "./pages/LoginPage";
 import AuditPage from "./pages/AuditPage";
 import UsersPage from "./pages/UsersPage";
@@ -13,6 +16,65 @@ import CustomersPage from "./pages/CustomersPage";
 import EngineLookupPage from "./pages/EngineLookupPage";
 import MotorsPage from "./pages/MotorsPage";
 import VehiclesPage from "./pages/VehiclesPage";
+
+function ChangePasswordModal({ user, onClose }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const errors = validatePasswordStrength(newPassword, user?.username);
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setError("");
+    setSaving(true);
+    try {
+      await changeOwnPassword({
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      onClose();
+    } catch (err) {
+      setError(err.message || "No fue posible cambiar la contrasena");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Cambiar contrasena">
+        <header className="modal-header">
+          <div className="modal-heading">
+            <span className="eyebrow">Seguridad</span>
+            <h3>Cambiar contrasena</h3>
+          </div>
+          <button type="button" className="icon-button modal-close-button" onClick={onClose}>Cerrar</button>
+        </header>
+        {error ? <div className="notice-banner notice-error">{error}</div> : null}
+        <form className="register-form" onSubmit={handleSubmit}>
+          <div className="form-field">
+            <label htmlFor="current-password">Contrasena actual</label>
+            <input id="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
+          </div>
+          <div className="form-field">
+            <label htmlFor="new-password">Nueva contrasena</label>
+            <input id="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+          </div>
+          {newPassword && errors.length ? (
+            <div className="notice-banner notice-soft">{errors.join(" ")}</div>
+          ) : null}
+          <div className="actions-row modal-actions">
+            <button type="submit" disabled={saving || !currentPassword || !newPassword || errors.length > 0}>
+              {saving ? "Guardando..." : "Actualizar contrasena"}
+            </button>
+            <button type="button" className="button-secondary" onClick={onClose}>Cancelar</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
 
 export default function App() {
   return (
@@ -32,6 +94,7 @@ export default function App() {
 
 function AppShell() {
   const { user, logout } = useAuth();
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   return (
     <BulkRefreshProvider>
@@ -102,6 +165,12 @@ function AppShell() {
               </div>
               <button
                 className="button-secondary button-sm sidebar-logout"
+                onClick={() => setShowPasswordModal(true)}
+              >
+                Cambiar contrasena
+              </button>
+              <button
+                className="button-secondary button-sm sidebar-logout"
                 onClick={logout}
               >
                 Cerrar sesion
@@ -141,6 +210,9 @@ function AppShell() {
         </main>
       </div>
     </div>
+    {showPasswordModal ? (
+      <ChangePasswordModal user={user} onClose={() => setShowPasswordModal(false)} />
+    ) : null}
     </BulkRefreshProvider>
   );
 }

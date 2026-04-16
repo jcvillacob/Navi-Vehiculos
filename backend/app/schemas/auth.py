@@ -39,6 +39,15 @@ class UserUpdateRequest(BaseModel):
     is_active: bool | None = Field(default=None, description="Estado activo/inactivo")
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, description="Contrasena actual")
+    new_password: str = Field(..., min_length=10, description="Nueva contrasena")
+
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str = Field(..., min_length=10, description="Nueva contrasena")
+
+
 class AuditLogRecord(BaseModel):
     id: int
     user_id: int | None = None
