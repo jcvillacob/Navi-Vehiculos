@@ -9,6 +9,7 @@ from jose import jwt, JWTError
 from app.core.config import settings
 from app.core.dependencies import get_current_user, get_current_user_optional
 from app.core.rate_limit import limiter
+from app.core.security_logging import log_security_event
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, PermissionListResponse, SessionRecord, UserRecord
 from app.services.auth_service import (
     blacklist_token,
@@ -40,11 +41,10 @@ _REFRESH_COOKIE_PATH = "/api/v1/auth/refresh"
 
 
 def _cookie_settings() -> dict:
-    is_production = settings.environment == "production"
     return {
         "httponly": True,
-        "secure": is_production,
-        "samesite": "strict" if is_production else "lax",
+        "secure": settings.is_production,
+        "samesite": "strict" if settings.is_production else "lax",
     }
 
 
@@ -91,11 +91,18 @@ def _build_token(user: dict) -> str:
 @router.post("/login")
 @limiter.limit("5/minute")
 def login(request: Request, payload: LoginRequest, response: Response) -> dict:
+    ip_address = _request_ip(request)
     user = get_user_by_username(payload.username)
     if user:
         locked, remaining = is_user_locked(user)
         if locked:
             minutes = max(1, remaining // 60)
+            log_security_event(
+                "account_locked",
+                username=payload.username,
+                ip_address=ip_address,
+                remaining_seconds=remaining,
+            )
             raise HTTPException(
                 status_code=423,
                 detail=f"Usuario bloqueado temporalmente. Intenta de nuevo en {minutes} minuto(s).",
@@ -104,6 +111,12 @@ def login(request: Request, payload: LoginRequest, response: Response) -> dict:
     if not user or not verify_password(payload.password, user["password_hash"]):
         if user:
             record_failed_login(user["id"])
+        log_security_event(
+            "login_failed",
+            username=payload.username,
+            ip_address=ip_address,
+            reason="invalid_credentials",
+        )
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
     if not user["is_active"]:
         raise HTTPException(status_code=403, detail="Usuario inactivo")
@@ -111,7 +124,7 @@ def login(request: Request, payload: LoginRequest, response: Response) -> dict:
     reset_login_state(user["id"])
     user = get_user_by_id(user["id"]) or user
     token = _build_token(user)
-    refresh_token, _expires_at = create_refresh_token(user["id"], _request_ip(request))
+    refresh_token, _expires_at = create_refresh_token(user["id"], ip_address)
     _set_access_cookie(response, token)
     _set_refresh_cookie(response, refresh_token)
     return build_user_payload(user)
@@ -119,22 +132,27 @@ def login(request: Request, payload: LoginRequest, response: Response) -> dict:
 
 @router.post("/refresh")
 def refresh(request: Request, response: Response) -> dict:
+    ip_address = _request_ip(request)
     refresh_token = request.cookies.get(_REFRESH_COOKIE_NAME)
     if not refresh_token:
+        log_security_event("refresh_failed", ip_address=ip_address, reason="missing_cookie")
         raise HTTPException(status_code=401, detail="Refresh token ausente")
 
     record = get_refresh_token_record(refresh_token)
     if not record:
+        log_security_event("refresh_failed", ip_address=ip_address, reason="invalid_token")
         raise HTTPException(status_code=401, detail="Refresh token invalido")
     if record["revoked"] or record["expires_at"] <= datetime.now(tz=timezone.utc):
+        log_security_event("refresh_failed", ip_address=ip_address, reason="revoked_or_expired")
         raise HTTPException(status_code=401, detail="Refresh token expirado o revocado")
 
     user = get_user_by_id(record["user_id"])
     if not user or not user["is_active"]:
+        log_security_event("refresh_failed", ip_address=ip_address, reason="inactive_user")
         raise HTTPException(status_code=401, detail="Usuario inactivo o no encontrado")
 
     revoke_refresh_token(refresh_token)
-    new_refresh_token, _expires_at = create_refresh_token(user["id"], _request_ip(request))
+    new_refresh_token, _expires_at = create_refresh_token(user["id"], ip_address)
     access_token = _build_token(user)
     _set_access_cookie(response, access_token)
     _set_refresh_cookie(response, new_refresh_token)

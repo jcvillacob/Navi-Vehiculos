@@ -28,6 +28,10 @@ class Settings:
     redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     environment: str = os.getenv("ENVIRONMENT", "development").strip().lower()
 
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
 
 @dataclass(frozen=True)
 class GeotabConfig:
