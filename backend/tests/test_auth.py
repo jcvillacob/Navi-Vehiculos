@@ -41,7 +41,7 @@ async def test_lockout_after_five_failed_attempts(client_factory, viewer_user, a
     assert locked_response.status_code == 423
 
 
-async def test_rate_limit_on_login_returns_429(client_factory):
+async def test_rate_limit_on_login_returns_429(client_factory, auth_helpers):
     async with client_factory("10.10.10.10") as rate_limited_client:
         for _ in range(5):
             response = await auth_helpers["login"](rate_limited_client, "missing-user", "wrong-password")

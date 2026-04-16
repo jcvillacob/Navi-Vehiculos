@@ -37,6 +37,7 @@ from app.services.auth_service import (  # noqa: E402
     create_user,
     get_refresh_token_record,
     get_user_by_id,
+    get_user_by_username,
     get_user_permissions,
     update_user,
 )
@@ -105,35 +106,36 @@ def clean_state(redis_client) -> None:
 @pytest.fixture
 def admin_user() -> dict:
     create_user("admin", "admin@example.com", ADMIN_PASSWORD, "admin")
-    return get_user_by_id(1)
+    return get_user_by_username("admin")
 
 
 @pytest.fixture
 def editor_user() -> dict:
     create_user("editor", "editor@example.com", EDITOR_PASSWORD, "editor")
-    return get_user_by_id(1)
+    return get_user_by_username("editor")
 
 
 @pytest.fixture
 def viewer_user() -> dict:
     create_user("viewer", "viewer@example.com", VIEWER_PASSWORD, "viewer")
-    return get_user_by_id(1)
+    return get_user_by_username("viewer")
 
 
 @pytest.fixture
 def seeded_users(admin_user, editor_user, viewer_user) -> dict:
     return {
-        "admin": get_user_by_id(1),
-        "editor": get_user_by_id(2),
-        "viewer": get_user_by_id(3),
+        "admin": admin_user,
+        "editor": editor_user,
+        "viewer": viewer_user,
     }
 
 
 @pytest.fixture
 def inactive_user() -> dict:
     create_user("inactive", "inactive@example.com", "Inactive1!", "viewer")
-    update_user(1, None, None, False)
-    return get_user_by_id(1)
+    user = get_user_by_username("inactive")
+    update_user(user["id"], None, None, False)
+    return get_user_by_id(user["id"])
 
 
 @pytest.fixture
