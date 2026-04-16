@@ -23,8 +23,10 @@ class Settings:
     )
     jwt_secret: str = _required_env("JWT_SECRET")
     jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
-    jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))
+    jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "15"))
+    refresh_token_expire_days: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
     redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    environment: str = os.getenv("ENVIRONMENT", "development").strip().lower()
 
 
 @dataclass(frozen=True)

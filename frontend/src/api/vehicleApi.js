@@ -1,4 +1,60 @@
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
+const REFRESH_URL = `${API_BASE}/api/v1/auth/refresh`;
+let refreshPromise = null;
+
+function buildUrl(path) {
+  return `${API_BASE}${path}`;
+}
+
+function dispatchAuthEvent(type, detail = {}) {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(type, { detail }));
+  }
+}
+
+async function attemptRefresh() {
+  if (!refreshPromise) {
+    refreshPromise = fetch(REFRESH_URL, {
+      method: "POST",
+      credentials: "include",
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Refresh fallido");
+        }
+        const data = await response.json();
+        dispatchAuthEvent("auth:updated", { user: data });
+        return data;
+      })
+      .catch((error) => {
+        dispatchAuthEvent("auth:expired");
+        throw error;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+
+  return refreshPromise;
+}
+
+async function fetchWithAuth(input, init = {}, retry = true) {
+  const response = await fetch(input, {
+    credentials: "include",
+    ...init,
+  });
+
+  if (response.status === 401 && retry && input !== REFRESH_URL) {
+    try {
+      await attemptRefresh();
+    } catch {
+      return response;
+    }
+    return fetchWithAuth(input, init, false);
+  }
+
+  return response;
+}
 
 async function parseJsonOrThrow(response, fallbackMessage) {
   if (!response.ok) {
@@ -17,7 +73,7 @@ async function parseJsonOrThrow(response, fallbackMessage) {
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export async function loginUser(username, password) {
-  const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
+  const response = await fetch(buildUrl("/api/v1/auth/login"), {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -27,7 +83,7 @@ export async function loginUser(username, password) {
 }
 
 export async function logoutUser() {
-  const response = await fetch(`${API_BASE}/api/v1/auth/logout`, {
+  const response = await fetch(buildUrl("/api/v1/auth/logout"), {
     method: "POST",
     credentials: "include",
   });
@@ -35,25 +91,29 @@ export async function logoutUser() {
 }
 
 export async function fetchMe() {
-  const response = await fetch(`${API_BASE}/api/v1/auth/me`, {
-    credentials: "include",
-  });
+  const response = await fetchWithAuth(buildUrl("/api/v1/auth/me"));
   return parseJsonOrThrow(response, "Error verificando sesion");
+}
+
+export async function changeOwnPassword(payload) {
+  const response = await fetchWithAuth(buildUrl("/api/v1/auth/password"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error cambiando contrasena");
 }
 
 // ── Users (admin) ─────────────────────────────────────────────────────────────
 
 export async function listUsers() {
-  const response = await fetch(`${API_BASE}/api/v1/users`, {
-    credentials: "include",
-  });
+  const response = await fetchWithAuth(buildUrl("/api/v1/users"));
   return parseJsonOrThrow(response, "Error listando usuarios");
 }
 
 export async function createUser(payload) {
-  const response = await fetch(`${API_BASE}/api/v1/users`, {
+  const response = await fetchWithAuth(buildUrl("/api/v1/users"), {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -61,31 +121,35 @@ export async function createUser(payload) {
 }
 
 export async function updateUser(userId, payload) {
-  const response = await fetch(`${API_BASE}/api/v1/users/${userId}`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/users/${userId}`), {
     method: "PUT",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   return parseJsonOrThrow(response, "Error actualizando usuario");
 }
 
+export async function resetUserPassword(userId, payload) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/users/${userId}/reset-password`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error reseteando contrasena");
+}
+
 // ── Audit logs (admin) ────────────────────────────────────────────────────────
 
 export async function fetchAuditLogs(limit = 100, offset = 0) {
   const query = new URLSearchParams({ limit, offset });
-  const response = await fetch(`${API_BASE}/api/v1/audit?${query}`, {
-    credentials: "include",
-  });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/audit?${query}`));
   return parseJsonOrThrow(response, "Error cargando logs de auditoria");
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
 export async function fetchDashboardSummary() {
-  const response = await fetch(`${API_BASE}/api/v1/dashboard/summary`, {
-    credentials: "include",
-  });
+  const response = await fetchWithAuth(buildUrl("/api/v1/dashboard/summary"));
   return parseJsonOrThrow(response, "Error obteniendo resumen del dashboard");
 }
 
@@ -117,16 +181,13 @@ export async function fetchMonthlyPerformance(params) {
     query.set("motor_group", params.motor_group);
   }
 
-  const response = await fetch(`${API_BASE}/api/v1/rendimientos?${query.toString()}`, {
-    credentials: "include",
-  });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/rendimientos?${query.toString()}`));
   return parseJsonOrThrow(response, "Error cargando rendimientos mensuales");
 }
 
 export async function calculateMonthlyPerformance(payload) {
-  const response = await fetch(`${API_BASE}/api/v1/rendimientos/calculate`, {
+  const response = await fetchWithAuth(buildUrl("/api/v1/rendimientos/calculate"), {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -138,9 +199,7 @@ export async function calculateMonthlyPerformance(payload) {
 export async function lookupVehicle(identifier, { force = false } = {}) {
   const query = new URLSearchParams({ identifier: identifier.trim().toUpperCase() });
   if (force) query.set("force", "true");
-  const response = await fetch(`${API_BASE}/api/v1/vehicle/lookup?${query.toString()}`, {
-    credentials: "include",
-  });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/lookup?${query.toString()}`));
   return parseJsonOrThrow(response, "Error consultando la API");
 }
 
@@ -152,17 +211,14 @@ export async function listVehicleAssignments(search = "") {
   }
 
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  const response = await fetch(`${API_BASE}/api/v1/vehicle${suffix}`, {
-    credentials: "include",
-  });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle${suffix}`));
   return parseJsonOrThrow(response, "Error listando vehiculos");
 }
 
 export async function manualAssignVehicle(plate, payload) {
   const normalizedPlate = plate.trim().toUpperCase();
-  const response = await fetch(`${API_BASE}/api/v1/vehicle/${normalizedPlate}/manual-assign`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/manual-assign`), {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -171,9 +227,8 @@ export async function manualAssignVehicle(plate, payload) {
 
 export async function assignVehicleDatabase(plate, payload) {
   const normalizedPlate = plate.trim().toUpperCase();
-  const response = await fetch(`${API_BASE}/api/v1/vehicle/${normalizedPlate}/database`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/database`), {
     method: "PUT",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -182,18 +237,16 @@ export async function assignVehicleDatabase(plate, payload) {
 
 export async function refreshVehicle(plate) {
   const normalizedPlate = plate.trim().toUpperCase();
-  const response = await fetch(`${API_BASE}/api/v1/vehicle/${normalizedPlate}/refresh`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/refresh`), {
     method: "POST",
-    credentials: "include",
   });
   return parseJsonOrThrow(response, "Error actualizando datos del vehiculo");
 }
 
 export async function revalidateCustomerGeotab(plate) {
   const normalizedPlate = plate.trim().toUpperCase();
-  const response = await fetch(`${API_BASE}/api/v1/vehicle/${normalizedPlate}/revalidate-customer-geotab`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/revalidate-customer-geotab`), {
     method: "POST",
-    credentials: "include",
   });
   return parseJsonOrThrow(response, "Error revalidando Geotab del cliente");
 }
@@ -201,16 +254,13 @@ export async function revalidateCustomerGeotab(plate) {
 // ── Motors ────────────────────────────────────────────────────────────────────
 
 export async function listMotors() {
-  const response = await fetch(`${API_BASE}/api/v1/motors`, {
-    credentials: "include",
-  });
+  const response = await fetchWithAuth(buildUrl("/api/v1/motors"));
   return parseJsonOrThrow(response, "Error listando motores");
 }
 
 export async function createMotor(payload) {
-  const response = await fetch(`${API_BASE}/api/v1/motors`, {
+  const response = await fetchWithAuth(buildUrl("/api/v1/motors"), {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -218,9 +268,8 @@ export async function createMotor(payload) {
 }
 
 export async function updateMotor(motorId, payload) {
-  const response = await fetch(`${API_BASE}/api/v1/motors/${motorId}`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/motors/${motorId}`), {
     method: "PUT",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -228,9 +277,8 @@ export async function updateMotor(motorId, payload) {
 }
 
 export async function deleteMotor(motorId) {
-  const response = await fetch(`${API_BASE}/api/v1/motors/${motorId}`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/motors/${motorId}`), {
     method: "DELETE",
-    credentials: "include",
   });
   return parseJsonOrThrow(response, "Error eliminando motor");
 }
@@ -240,9 +288,8 @@ export async function uploadMotorAttachment(motorId, payload) {
   formData.append("cpl", payload.cpl);
   formData.append("attachment", payload.file);
 
-  const response = await fetch(`${API_BASE}/api/v1/motors/${motorId}/attachments`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/motors/${motorId}/attachments`), {
     method: "POST",
-    credentials: "include",
     body: formData,
   });
   return parseJsonOrThrow(response, "Error subiendo adjunto del motor");
@@ -255,18 +302,16 @@ export async function updateMotorAttachment(attachmentId, payload) {
     formData.append("attachment", payload.file);
   }
 
-  const response = await fetch(`${API_BASE}/api/v1/motors/attachments/${attachmentId}`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/motors/attachments/${attachmentId}`), {
     method: "PUT",
-    credentials: "include",
     body: formData,
   });
   return parseJsonOrThrow(response, "Error actualizando adjunto del motor");
 }
 
 export async function deleteMotorAttachment(attachmentId) {
-  const response = await fetch(`${API_BASE}/api/v1/motors/attachments/${attachmentId}`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/motors/attachments/${attachmentId}`), {
     method: "DELETE",
-    credentials: "include",
   });
   if (!response.ok) {
     throw new Error(`Error eliminando adjunto del motor (${response.status})`);
@@ -276,16 +321,13 @@ export async function deleteMotorAttachment(attachmentId) {
 // ── Customers ─────────────────────────────────────────────────────────────────
 
 export async function listCustomers() {
-  const response = await fetch(`${API_BASE}/api/v1/customers`, {
-    credentials: "include",
-  });
+  const response = await fetchWithAuth(buildUrl("/api/v1/customers"));
   return parseJsonOrThrow(response, "Error listando clientes");
 }
 
 export async function createCustomer(payload) {
-  const response = await fetch(`${API_BASE}/api/v1/customers`, {
+  const response = await fetchWithAuth(buildUrl("/api/v1/customers"), {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -293,9 +335,8 @@ export async function createCustomer(payload) {
 }
 
 export async function updateCustomer(customerId, payload) {
-  const response = await fetch(`${API_BASE}/api/v1/customers/${customerId}`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/${customerId}`), {
     method: "PUT",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -303,9 +344,8 @@ export async function updateCustomer(customerId, payload) {
 }
 
 export async function createCustomerDatabase(customerId, payload) {
-  const response = await fetch(`${API_BASE}/api/v1/customers/${customerId}/databases`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/${customerId}/databases`), {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -313,9 +353,8 @@ export async function createCustomerDatabase(customerId, payload) {
 }
 
 export async function updateCustomerDatabase(databaseId, payload) {
-  const response = await fetch(`${API_BASE}/api/v1/customers/databases/${databaseId}`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/databases/${databaseId}`), {
     method: "PUT",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -323,9 +362,8 @@ export async function updateCustomerDatabase(databaseId, payload) {
 }
 
 export async function createGeotabRule(databaseId, payload) {
-  const response = await fetch(`${API_BASE}/api/v1/customers/databases/${databaseId}/rules`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/databases/${databaseId}/rules`), {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -333,9 +371,8 @@ export async function createGeotabRule(databaseId, payload) {
 }
 
 export async function createGeotabRuleGroup(databaseId, payload) {
-  const response = await fetch(`${API_BASE}/api/v1/customers/databases/${databaseId}/rule-groups`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/databases/${databaseId}/rule-groups`), {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -344,24 +381,20 @@ export async function createGeotabRuleGroup(databaseId, payload) {
 
 export async function resolveGeotabRule(databaseId, ruleId) {
   const query = new URLSearchParams({ rule_id: ruleId.trim() });
-  const response = await fetch(
-    `${API_BASE}/api/v1/customers/databases/${databaseId}/rules/resolve?${query.toString()}`,
-    { credentials: "include" }
+  const response = await fetchWithAuth(
+    buildUrl(`/api/v1/customers/databases/${databaseId}/rules/resolve?${query.toString()}`)
   );
   return parseJsonOrThrow(response, "Error resolviendo regla Geotab");
 }
 
 export async function inspectGeotabRule(ruleRecordId) {
-  const response = await fetch(`${API_BASE}/api/v1/customers/rules/${ruleRecordId}/inspection`, {
-    credentials: "include",
-  });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/rules/${ruleRecordId}/inspection`));
   return parseJsonOrThrow(response, "Error inspeccionando regla Geotab");
 }
 
 export async function deleteGeotabRule(ruleId) {
-  const response = await fetch(`${API_BASE}/api/v1/customers/rules/${ruleId}`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/rules/${ruleId}`), {
     method: "DELETE",
-    credentials: "include",
   });
   if (!response.ok) {
     throw new Error(`Error eliminando regla Geotab (${response.status})`);
@@ -369,9 +402,8 @@ export async function deleteGeotabRule(ruleId) {
 }
 
 export async function deleteGeotabRuleGroup(groupId) {
-  const response = await fetch(`${API_BASE}/api/v1/customers/rule-groups/${groupId}`, {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/rule-groups/${groupId}`), {
     method: "DELETE",
-    credentials: "include",
   });
   if (!response.ok) {
     throw new Error(`Error eliminando grupo de reglas (${response.status})`);

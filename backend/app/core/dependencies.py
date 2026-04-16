@@ -35,6 +35,15 @@ def get_current_user(access_token: str | None = Cookie(default=None)) -> dict:
     return user
 
 
+def get_current_user_optional(access_token: str | None = Cookie(default=None)) -> dict | None:
+    if not access_token:
+        return None
+    try:
+        return get_current_user(access_token)
+    except HTTPException:
+        return None
+
+
 def require_permission(*perms: str):
     """
     Factory que valida que el usuario tenga al menos uno de los permisos dados.

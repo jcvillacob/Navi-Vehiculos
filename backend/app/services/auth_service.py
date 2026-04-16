@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import re
+import secrets
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 from psycopg.rows import dict_row
@@ -81,6 +86,8 @@ PERMISSION_DESCRIPTIONS: dict[str, str] = {
 }
 
 _PERMISSION_CACHE_TTL_SECONDS = 300
+_MAX_FAILED_LOGIN_ATTEMPTS = 5
+_LOGIN_LOCK_MINUTES = 15
 
 
 def _database_dsn() -> str:
@@ -106,6 +113,31 @@ def hash_password(plain: str) -> str:
 
 def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+
+
+def validate_password_strength(password: str, username: str | None = None) -> list[str]:
+    errors: list[str] = []
+    if len(password) < 10:
+        errors.append("La contrasena debe tener al menos 10 caracteres.")
+    if not re.search(r"[A-Z]", password):
+        errors.append("La contrasena debe incluir al menos una mayuscula.")
+    if not re.search(r"[a-z]", password):
+        errors.append("La contrasena debe incluir al menos una minuscula.")
+    if not re.search(r"\d", password):
+        errors.append("La contrasena debe incluir al menos un numero.")
+    if not re.search(r"[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]", password):
+        errors.append("La contrasena debe incluir al menos un caracter especial.")
+    if username and password.strip().lower() == username.strip().lower():
+        errors.append("La contrasena no puede ser igual al nombre de usuario.")
+    return errors
+
+
+def _utcnow() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+def hash_refresh_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 # ── Redis blacklist ───────────────────────────────────────────────────────────
@@ -199,6 +231,9 @@ def list_users() -> list[dict]:
 
 
 def create_user(username: str, email: str, password: str, role: str = "viewer") -> dict:
+    errors = validate_password_strength(password, username)
+    if errors:
+        raise ValueError(" ".join(errors))
     password_hash = hash_password(password)
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         with conn.cursor() as cur:
@@ -241,6 +276,151 @@ def update_user(user_id: int, email: str | None, role: str | None, is_active: bo
             row = cur.fetchone()
         conn.commit()
     return row
+
+
+def update_user_password(user_id: int, new_password: str) -> dict | None:
+    password_hash = hash_password(new_password)
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    password_hash = %s,
+                    password_changed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (password_hash, user_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return row
+
+
+def record_failed_login(user_id: int) -> None:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    failed_login_attempts = COALESCE(failed_login_attempts, 0) + 1,
+                    locked_until = CASE
+                        WHEN COALESCE(failed_login_attempts, 0) + 1 >= %s
+                            THEN NOW() + (%s * INTERVAL '1 minute')
+                        ELSE locked_until
+                    END,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (_MAX_FAILED_LOGIN_ATTEMPTS, _LOGIN_LOCK_MINUTES, user_id),
+            )
+        conn.commit()
+
+
+def reset_login_state(user_id: int) -> None:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    failed_login_attempts = 0,
+                    locked_until = NULL,
+                    last_login_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (user_id,),
+            )
+        conn.commit()
+
+
+def is_user_locked(user: dict) -> tuple[bool, int]:
+    locked_until = user.get("locked_until")
+    if not locked_until:
+        return (False, 0)
+
+    if locked_until.tzinfo is None:
+        locked_until = locked_until.replace(tzinfo=timezone.utc)
+
+    remaining = int((locked_until - _utcnow()).total_seconds())
+    if remaining > 0:
+        return (True, remaining)
+    return (False, 0)
+
+
+def create_refresh_token(user_id: int) -> tuple[str, datetime]:
+    token = secrets.token_urlsafe(48)
+    token_hash = hash_refresh_token(token)
+    expires_at = _utcnow() + timedelta(days=settings.refresh_token_expire_days)
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked)
+                VALUES (%s, %s, %s, %s, FALSE)
+                """,
+                (str(uuid.uuid4()), user_id, token_hash, expires_at),
+            )
+        conn.commit()
+
+    return token, expires_at
+
+
+def get_refresh_token_record(token: str) -> dict | None:
+    token_hash = hash_refresh_token(token)
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM refresh_tokens
+                WHERE token_hash = %s
+                LIMIT 1
+                """,
+                (token_hash,),
+            )
+            return cur.fetchone()
+
+
+def revoke_refresh_token(token: str) -> None:
+    token_hash = hash_refresh_token(token)
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = %s",
+                (token_hash,),
+            )
+        conn.commit()
+
+
+def revoke_all_refresh_tokens(user_id: int) -> None:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = %s",
+                (user_id,),
+            )
+        conn.commit()
+
+
+def cleanup_expired_refresh_tokens() -> int:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM refresh_tokens
+                WHERE revoked = TRUE OR expires_at < NOW()
+                RETURNING id
+                """
+            )
+            rows = cur.fetchall()
+        conn.commit()
+    return len(rows)
 
 
 # ── Audit logs ────────────────────────────────────────────────────────────────

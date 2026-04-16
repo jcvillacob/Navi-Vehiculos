@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
-const AuthContext = createContext(null);
+import { fetchMe, loginUser, logoutUser } from "../api/vehicleApi";
 
-const API_BASE = import.meta.env.VITE_API_URL || "";
+const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -10,34 +10,32 @@ export function AuthProvider({ children }) {
 
   // Al montar: restaurar sesion desde la cookie httpOnly
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/auth/me`, { credentials: "include" })
-      .then((r) => (r.ok ? r.json() : null))
+    fetchMe()
       .then((data) => setUser(data))
       .catch(() => setUser(null))
       .finally(() => setIsLoading(false));
   }, []);
 
+  useEffect(() => {
+    const handleUpdated = (event) => setUser(event.detail?.user ?? null);
+    const handleExpired = () => setUser(null);
+
+    window.addEventListener("auth:updated", handleUpdated);
+    window.addEventListener("auth:expired", handleExpired);
+    return () => {
+      window.removeEventListener("auth:updated", handleUpdated);
+      window.removeEventListener("auth:expired", handleExpired);
+    };
+  }, []);
+
   const login = useCallback(async (username, password) => {
-    const r = await fetch(`${API_BASE}/api/v1/auth/login`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    if (!r.ok) {
-      const payload = await r.json().catch(() => ({}));
-      throw new Error(payload?.detail ?? "Credenciales incorrectas");
-    }
-    const data = await r.json();
+    const data = await loginUser(username, password);
     setUser(data);
     return data;
   }, []);
 
   const logout = useCallback(async () => {
-    await fetch(`${API_BASE}/api/v1/auth/logout`, {
-      method: "POST",
-      credentials: "include",
-    }).catch(() => {});
+    await logoutUser().catch(() => {});
     setUser(null);
   }, []);
 
