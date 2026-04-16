@@ -9,7 +9,7 @@ from jose import jwt, JWTError
 from app.core.config import settings
 from app.core.dependencies import get_current_user, get_current_user_optional
 from app.core.rate_limit import limiter
-from app.schemas.auth import ChangePasswordRequest, LoginRequest, PermissionListResponse, UserRecord
+from app.schemas.auth import ChangePasswordRequest, LoginRequest, PermissionListResponse, SessionRecord, UserRecord
 from app.services.auth_service import (
     blacklist_token,
     build_user_payload,
@@ -19,7 +19,10 @@ from app.services.auth_service import (
     get_user_by_username,
     get_user_permissions,
     is_user_locked,
+    list_active_sessions,
     record_failed_login,
+    revoke_refresh_session,
+    revoke_other_refresh_sessions,
     reset_login_state,
     revoke_all_refresh_tokens,
     revoke_refresh_token,
@@ -65,6 +68,13 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
     )
 
 
+def _request_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
 def _build_token(user: dict) -> str:
     now = datetime.now(tz=timezone.utc)
     expire = now + timedelta(minutes=settings.jwt_expire_minutes)
@@ -101,7 +111,7 @@ def login(request: Request, payload: LoginRequest, response: Response) -> dict:
     reset_login_state(user["id"])
     user = get_user_by_id(user["id"]) or user
     token = _build_token(user)
-    refresh_token, _expires_at = create_refresh_token(user["id"])
+    refresh_token, _expires_at = create_refresh_token(user["id"], _request_ip(request))
     _set_access_cookie(response, token)
     _set_refresh_cookie(response, refresh_token)
     return build_user_payload(user)
@@ -124,7 +134,7 @@ def refresh(request: Request, response: Response) -> dict:
         raise HTTPException(status_code=401, detail="Usuario inactivo o no encontrado")
 
     revoke_refresh_token(refresh_token)
-    new_refresh_token, _expires_at = create_refresh_token(user["id"])
+    new_refresh_token, _expires_at = create_refresh_token(user["id"], _request_ip(request))
     access_token = _build_token(user)
     _set_access_cookie(response, access_token)
     _set_refresh_cookie(response, new_refresh_token)
@@ -191,7 +201,7 @@ def change_password(
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
     revoke_all_refresh_tokens(user["id"])
-    refresh_token, _expires_at = create_refresh_token(user["id"])
+    refresh_token, _expires_at = create_refresh_token(user["id"], _request_ip(request))
     access_token = _build_token(updated_user)
     _set_access_cookie(response, access_token)
     _set_refresh_cookie(response, refresh_token)
@@ -204,3 +214,55 @@ def change_password(
         ip_address=request.client.host if request.client else None,
     )
     return {"ok": True}
+
+
+@router.get("/sessions", response_model=list[SessionRecord])
+def sessions(
+    request: Request,
+    user_id: int | None = None,
+    user: dict = Depends(get_current_user),
+) -> list[dict]:
+    permissions = get_user_permissions(user["role"])
+    can_manage_other_users = "users.edit" in permissions
+    target_user_id = user_id if user_id is not None and can_manage_other_users else user["id"]
+    current_refresh_token = request.cookies.get(_REFRESH_COOKIE_NAME)
+    current_record = get_refresh_token_record(current_refresh_token) if current_refresh_token else None
+    current_session_id = str(current_record["id"]) if current_record else None
+
+    rows = list_active_sessions(target_user_id)
+    return [
+        {
+            "id": str(row["id"]),
+            "user_id": row["user_id"],
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"],
+            "ip_address": row.get("ip_address"),
+            "is_current": str(row["id"]) == current_session_id,
+        }
+        for row in rows
+    ]
+
+
+@router.delete("/sessions/{session_id}")
+def delete_session(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    permissions = get_user_permissions(user["role"])
+    can_manage_other_users = "users.edit" in permissions
+    revoked = revoke_refresh_session(session_id, None if can_manage_other_users else user["id"])
+    if not revoked:
+        raise HTTPException(status_code=404, detail="Sesion no encontrada")
+    return {"ok": True}
+
+
+@router.delete("/sessions")
+def delete_other_sessions(
+    request: Request,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    current_refresh_token = request.cookies.get(_REFRESH_COOKIE_NAME)
+    current_record = get_refresh_token_record(current_refresh_token) if current_refresh_token else None
+    current_session_id = str(current_record["id"]) if current_record else None
+    revoked = revoke_other_refresh_sessions(user["id"], current_session_id)
+    return {"ok": True, "revoked": revoked}

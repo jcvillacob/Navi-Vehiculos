@@ -352,7 +352,7 @@ def is_user_locked(user: dict) -> tuple[bool, int]:
     return (False, 0)
 
 
-def create_refresh_token(user_id: int) -> tuple[str, datetime]:
+def create_refresh_token(user_id: int, ip_address: str | None = None) -> tuple[str, datetime]:
     token = secrets.token_urlsafe(48)
     token_hash = hash_refresh_token(token)
     expires_at = _utcnow() + timedelta(days=settings.refresh_token_expire_days)
@@ -361,10 +361,10 @@ def create_refresh_token(user_id: int) -> tuple[str, datetime]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked)
-                VALUES (%s, %s, %s, %s, FALSE)
+                INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked, ip_address)
+                VALUES (%s, %s, %s, %s, FALSE, %s)
                 """,
-                (str(uuid.uuid4()), user_id, token_hash, expires_at),
+                (str(uuid.uuid4()), user_id, token_hash, expires_at, ip_address),
             )
         conn.commit()
 
@@ -406,6 +406,82 @@ def revoke_all_refresh_tokens(user_id: int) -> None:
                 (user_id,),
             )
         conn.commit()
+
+
+def list_active_sessions(user_id: int) -> list[dict]:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, user_id, created_at, expires_at, ip_address
+                FROM refresh_tokens
+                WHERE user_id = %s
+                  AND revoked = FALSE
+                  AND expires_at > NOW()
+                ORDER BY created_at DESC
+                """,
+                (user_id,),
+            )
+            return cur.fetchall()
+
+
+def revoke_refresh_session(session_id: str, user_id: int | None = None) -> bool:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            if user_id is None:
+                cur.execute(
+                    """
+                    UPDATE refresh_tokens
+                    SET revoked = TRUE
+                    WHERE id = %s AND revoked = FALSE
+                    RETURNING id
+                    """,
+                    (session_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE refresh_tokens
+                    SET revoked = TRUE
+                    WHERE id = %s AND user_id = %s AND revoked = FALSE
+                    RETURNING id
+                    """,
+                    (session_id, user_id),
+                )
+            row = cur.fetchone()
+        conn.commit()
+    return row is not None
+
+
+def revoke_other_refresh_sessions(user_id: int, current_session_id: str | None) -> int:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            if current_session_id:
+                cur.execute(
+                    """
+                    UPDATE refresh_tokens
+                    SET revoked = TRUE
+                    WHERE user_id = %s
+                      AND id <> %s
+                      AND revoked = FALSE
+                    RETURNING id
+                    """,
+                    (user_id, current_session_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE refresh_tokens
+                    SET revoked = TRUE
+                    WHERE user_id = %s
+                      AND revoked = FALSE
+                    RETURNING id
+                    """,
+                    (user_id,),
+                )
+            rows = cur.fetchall()
+        conn.commit()
+    return len(rows)
 
 
 def cleanup_expired_refresh_tokens() -> int:

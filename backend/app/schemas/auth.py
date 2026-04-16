@@ -29,7 +29,7 @@ class PermissionListResponse(BaseModel):
 class UserCreateRequest(BaseModel):
     username: str = Field(..., min_length=3, description="Nombre de usuario")
     email: str = Field(..., min_length=5, description="Correo electronico")
-    password: str = Field(..., min_length=8, description="Contrasena (min 8 caracteres)")
+    password: str = Field(..., min_length=10, description="Contrasena (min 10 caracteres)")
     role: str = Field(default="viewer", description="admin | editor | viewer")
 
 
@@ -46,6 +46,15 @@ class ChangePasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=10, description="Nueva contrasena")
+
+
+class SessionRecord(BaseModel):
+    id: str
+    user_id: int
+    created_at: datetime
+    expires_at: datetime
+    ip_address: str | None = None
+    is_current: bool = False
 
 
 class AuditLogRecord(BaseModel):

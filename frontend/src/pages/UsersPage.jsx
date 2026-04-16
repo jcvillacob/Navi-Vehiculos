@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import Can from "../components/Can";
-import { listUsers, createUser, resetUserPassword, updateUser } from "../api/vehicleApi";
+import { fetchSessions, listUsers, createUser, resetUserPassword, revokeSession, updateUser } from "../api/vehicleApi";
 import { validatePasswordStrength } from "../utils/passwordValidation";
 
 const ROLE_LABELS = { admin: "Admin", editor: "Editor", viewer: "Viewer" };
@@ -172,6 +172,94 @@ function ResetPasswordModal({ user, loading, onClose, onSubmit }) {
   );
 }
 
+function UserSessionsModal({ user, onClose }) {
+  const [sessions, setSessions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const loadSessions = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await fetchSessions(user.id);
+      setSessions(data);
+    } catch (err) {
+      setError(err.message || "No fue posible cargar sesiones");
+    } finally {
+      setLoading(false);
+    }
+  }, [user.id]);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
+
+  const handleCloseSession = async (sessionId) => {
+    try {
+      await revokeSession(sessionId);
+      await loadSessions();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Sesiones del usuario">
+        <header className="modal-header">
+          <div className="modal-heading">
+            <span className="eyebrow">Seguridad</span>
+            <h3>Sesiones activas: {user.username}</h3>
+          </div>
+          <button type="button" className="icon-button modal-close-button" onClick={onClose}>Cerrar</button>
+        </header>
+        {error ? <div className="notice-banner notice-error">{error}</div> : null}
+        {loading ? (
+          <p>Cargando...</p>
+        ) : (
+          <div className="vehicles-table-shell">
+            <table className="vehicles-table">
+              <thead>
+                <tr>
+                  <th>Creada</th>
+                  <th>Expira</th>
+                  <th>IP</th>
+                  <th>Estado</th>
+                  <th>Accion</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.map((session) => (
+                  <tr key={session.id}>
+                    <td>{new Date(session.created_at).toLocaleString("es-CO")}</td>
+                    <td>{new Date(session.expires_at).toLocaleString("es-CO")}</td>
+                    <td>{session.ip_address || "—"}</td>
+                    <td>{session.is_current ? "Actual" : "Activa"}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="button-secondary button-sm"
+                        onClick={() => handleCloseSession(session.id)}
+                      >
+                        Cerrar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {sessions.length === 0 ? (
+                  <tr>
+                    <td colSpan="5">Sin sesiones activas.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 /* ── Users Page ──────────────────────────────────────────────────────── */
 export default function UsersPage() {
   const [users, setUsers] = useState([]);
@@ -324,6 +412,12 @@ export default function UsersPage() {
                         >
                           Resetear clave
                         </button>
+                        <button
+                          className="button-secondary button-sm"
+                          onClick={() => setModal({ mode: "sessions", user: u })}
+                        >
+                          Sesiones
+                        </button>
                       </div>
                     </Can>
                   </td>
@@ -342,6 +436,9 @@ export default function UsersPage() {
       )}
       {modal?.mode === "reset" && (
         <ResetPasswordModal user={modal.user} loading={saving} onClose={() => setModal(null)} onSubmit={handleResetPassword} />
+      )}
+      {modal?.mode === "sessions" && (
+        <UserSessionsModal user={modal.user} onClose={() => setModal(null)} />
       )}
     </section>
   );

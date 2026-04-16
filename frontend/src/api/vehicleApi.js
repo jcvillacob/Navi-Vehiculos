@@ -104,6 +104,26 @@ export async function changeOwnPassword(payload) {
   return parseJsonOrThrow(response, "Error cambiando contrasena");
 }
 
+export async function fetchSessions(userId = null) {
+  const suffix = userId ? `?user_id=${userId}` : "";
+  const response = await fetchWithAuth(buildUrl(`/api/v1/auth/sessions${suffix}`));
+  return parseJsonOrThrow(response, "Error cargando sesiones");
+}
+
+export async function revokeSession(sessionId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/auth/sessions/${sessionId}`), {
+    method: "DELETE",
+  });
+  return parseJsonOrThrow(response, "Error cerrando sesion");
+}
+
+export async function revokeOtherSessions() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/auth/sessions"), {
+    method: "DELETE",
+  });
+  return parseJsonOrThrow(response, "Error cerrando otras sesiones");
+}
+
 // ── Users (admin) ─────────────────────────────────────────────────────────────
 
 export async function listUsers() {
