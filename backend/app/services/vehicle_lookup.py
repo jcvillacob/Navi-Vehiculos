@@ -4,9 +4,9 @@ import logging
 import re
 
 from app.clients.geotab_client import (
+    extract_vin as extract_geotab_vin,
     get_device_from_plate,
     get_device_from_vin,
-    get_vin_from_plate as get_geotab_vin_from_plate,
 )
 from app.clients.quickserve_client import (
     extract_cpl,
@@ -43,6 +43,8 @@ def _normalize_fenix_details(row: dict | None) -> dict[str, str | None]:
         "engine_number": str(row.get("numero_motor")).strip() if row.get("numero_motor") else None,
         "marca": str(row.get("Marca")).strip() if row.get("Marca") else None,
         "linea": str(row.get("Linea")).strip() if row.get("Linea") else None,
+        "modelo": str(row.get("Modelo")).strip() if row.get("Modelo") else None,
+        "configuracion": str(row.get("Configuracion")).strip() if row.get("Configuracion") else None,
         "ano_modelo": str(row.get("AñoModelo")).strip() if row.get("AñoModelo") else None,
         "tipo_combustible": str(row.get("Tipo de Combustible")).strip() if row.get("Tipo de Combustible") else None,
     }
@@ -113,12 +115,19 @@ def _resolve_vin_from_plate(
 
     try:
         geotab_cfg = load_geotab_config()
-        vin = get_geotab_vin_from_plate(plate, geotab_cfg)
-        if vin:
-            return vin.strip().upper(), "found", {}
-        geotab_status = "not_found"
-        warnings.append("Vehiculo no encontrado en Geotab. Se intentara completar la consulta con SQL.")
+        device = get_device_from_plate(plate, geotab_cfg)
+        if device:
+            geotab_status = "found"
+            vin = extract_geotab_vin(device)
+            if vin:
+                return vin.strip().upper(), "found", {}
+            # Device exists in Geotab but has no VIN stored — fall through to SQL
+            warnings.append("Vehiculo encontrado en Geotab pero sin VIN registrado. Se intentara obtener el VIN desde SQL.")
+        else:
+            geotab_status = "not_found"
+            warnings.append("Vehiculo no encontrado en Geotab. Se intentara completar la consulta con SQL.")
     except Exception:
+        _logger.exception("Geotab error durante _resolve_vin_from_plate para plate=%s", plate)
         warnings.append("No se pudo validar el vehiculo en Geotab.")
 
     fallback_row = get_vehicle_by_plate(plate, load_sql_config())
@@ -143,6 +152,7 @@ def _resolve_geotab_status(plate: str | None, vin: str | None, warnings: list[st
         warnings.append("El vehiculo no existe en Geotab.")
         return "not_found"
     except Exception:
+        _logger.exception("Geotab error durante _resolve_geotab_status para plate=%s vin=%s", plate, vin)
         warnings.append("No se pudo validar la existencia del vehiculo en Geotab.")
         return "unknown"
 
