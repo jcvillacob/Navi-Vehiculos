@@ -202,9 +202,13 @@ function AppShell() {
         <aside className="sidebar">
           <div className="sidebar-panel">
             <div className="brand-block">
-              <span className="brand-kicker">Navi Fleet Intelligence</span>
-              <h1>Navi Vehiculos</h1>
-              <p>Consulta vehiculos, identifica motores y consolida el catalogo tecnico.</p>
+              <div className="sidebar-logo-wrap">
+                <img
+                  className="sidebar-logo"
+                  src="/logo-navitrans.png"
+                  alt="Navitrans"
+                />
+              </div>
             </div>
 
             <nav className="sidebar-nav">
@@ -214,47 +218,45 @@ function AppShell() {
               </NavLink>
               <NavLink to="/consulta-motor">
                 <span>Consulta motor</span>
-                <small>Lookup por placa</small>
-              </NavLink>
-              <NavLink to="/vehiculos">
-                <span>Vehiculos</span>
-                <small>Placas asociadas</small>
+                <small>Individual y lote</small>
               </NavLink>
               <NavLink to="/rendimientos">
                 <span>Rendimientos</span>
                 <small>Kms, horas y consumo</small>
               </NavLink>
-              <NavLink to="/motores">
-                <span>Motores</span>
-                <small>Catalogo tecnico</small>
+              <NavLink to="/vehiculos">
+                <span>Vehiculos</span>
+                <small>Placas asociadas</small>
               </NavLink>
-              <NavLink to="/clientes">
-                <span>Clientes</span>
-                <small>Databases y accesos</small>
-              </NavLink>
-              <Can permission="users.list">
-                <NavLink to="/usuarios">
-                  <span>Usuarios</span>
-                  <small>Roles y accesos</small>
-                </NavLink>
-              </Can>
-              <Can permission="audit.view">
-                <>
-                  <NavLink to="/auditoria">
-                    <span>Auditoria</span>
-                    <small>Logs del sistema</small>
+              <div className="sidebar-group">
+                <div className="sidebar-group-label">
+                  <span>Gestion</span>
+                  <small>Catalogos y control</small>
+                </div>
+                <div className="sidebar-subnav">
+                  <NavLink to="/motores">
+                    <span>Motores</span>
+                    <small>Catalogo tecnico</small>
                   </NavLink>
-                </>
-              </Can>
+                  <NavLink to="/clientes">
+                    <span>Clientes</span>
+                    <small>Databases y accesos</small>
+                  </NavLink>
+                  <Can permission="users.list">
+                    <NavLink to="/usuarios">
+                      <span>Usuarios</span>
+                      <small>Roles y accesos</small>
+                    </NavLink>
+                  </Can>
+                  <Can permission="audit.view">
+                    <NavLink to="/auditoria">
+                      <span>Auditoria</span>
+                      <small>Logs del sistema</small>
+                    </NavLink>
+                  </Can>
+                </div>
+              </div>
             </nav>
-
-            <section className="sidebar-note">
-              <span className="eyebrow">Operativa</span>
-              <p>
-                Registra motores una sola vez y deja que la consulta los clasifique automaticamente.
-              </p>
-            </section>
-
             <div className="sidebar-user">
               <div className="sidebar-user-info">
                 <span className="sidebar-user-name">{user?.username}</span>
@@ -287,6 +289,7 @@ function AppShell() {
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/consulta-motor" element={<EngineLookupPage />} />
+              <Route path="/consulta-lote" element={<Navigate to="/consulta-motor?modo=lote" replace />} />
               <Route path="/motores" element={<MotorsPage />} />
               <Route path="/clientes" element={<CustomersPage />} />
               <Route path="/vehiculos" element={<VehiclesPage />} />

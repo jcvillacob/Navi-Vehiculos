@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import { usePermission } from "../context/AuthContext";
+import BulkLookupPage from "./BulkLookupPage";
 import LookupDetails from "../features/engineLookup/components/LookupDetails";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import { useEngineLookup } from "../features/engineLookup/hooks/useEngineLookup";
@@ -43,6 +44,8 @@ export default function EngineLookupPage() {
   const { customers, loading: customersLoading } = useCustomersCatalog();
   const { motors } = useMotorsCatalog();
   const canEditVehicles = usePermission("vehicles.edit");
+  const canUseBulkLookup = usePermission("engine_lookup.batch");
+  const activeMode = canUseBulkLookup && searchParams.get("modo") === "lote" ? "lote" : "individual";
 
   const {
     loading,
@@ -92,6 +95,16 @@ export default function EngineLookupPage() {
     resetLookup();
   };
 
+  const setMode = (mode) => {
+    const next = new URLSearchParams(searchParams);
+    if (mode === "lote") {
+      next.set("modo", "lote");
+    } else {
+      next.delete("modo");
+    }
+    setSearchParams(next, { replace: true });
+  };
+
   // Auto-search from ?q= param (e.g. from dashboard quick search)
   useEffect(() => {
     const q = searchParams.get("q");
@@ -112,96 +125,124 @@ export default function EngineLookupPage() {
       <header className="page-header">
         <span className="eyebrow">Lookup</span>
         <h2>Consulta de motor</h2>
+        <p>Consulta individual por placa o VIN, y si tienes permiso, tambien procesamiento en lote desde Excel.</p>
       </header>
 
-      <form className="lookup-bar" onSubmit={handleSubmit}>
-        <input
-          id="lookup-identifier"
-          className="lookup-bar-input"
-          value={identifier}
-          onChange={(event) => setIdentifier(event.target.value.toUpperCase())}
-          placeholder="Placa o VIN — Ej: TLK240, 3HSDJAPR6GN123456"
-          minLength={3}
-          maxLength={32}
-        />
-        <button type="submit" disabled={loading || identifier.trim().length < 3}>
-          {loading ? "Buscando..." : "Consultar"}
-        </button>
-        {lookupResult ? (
-          <button type="button" className="button-secondary button-sm" onClick={clearLookup}>
-            Limpiar
+      {canUseBulkLookup ? (
+        <div className="lookup-tabs" role="tablist" aria-label="Modo de consulta de motor">
+          <button
+            type="button"
+            className={activeMode === "individual" ? "lookup-tab is-active" : "lookup-tab"}
+            aria-pressed={activeMode === "individual"}
+            onClick={() => setMode("individual")}
+          >
+            Consulta individual
           </button>
-        ) : null}
-      </form>
-
-      {history.length > 0 && !lookupResult ? (
-        <div className="lookup-history">
-          <span className="lookup-history-label">Recientes</span>
-          {history.map((item) => (
-            <button
-              key={item}
-              type="button"
-              className="lookup-history-chip"
-              onClick={() => doSearch(item)}
-              disabled={loading}
-            >
-              {item}
-            </button>
-          ))}
+          <button
+            type="button"
+            className={activeMode === "lote" ? "lookup-tab is-active" : "lookup-tab"}
+            aria-pressed={activeMode === "lote"}
+            onClick={() => setMode("lote")}
+          >
+            Consulta en lote
+          </button>
         </div>
       ) : null}
 
-      <ToastStack toasts={toasts} />
-      {!customersLoading && customers.length === 0 && lookupResult ? (
-        <p className="notice-banner notice-soft">
-          Crea clientes y databases en Administracion para poder asignarlos a un vehiculo.
-        </p>
-      ) : null}
+      {activeMode === "lote" ? (
+        <BulkLookupPage embedded />
+      ) : (
+        <>
+          <form className="lookup-bar" onSubmit={handleSubmit}>
+            <input
+              id="lookup-identifier"
+              className="lookup-bar-input"
+              value={identifier}
+              onChange={(event) => setIdentifier(event.target.value.toUpperCase())}
+              placeholder="Placa o VIN — Ej: TLK240, 3HSDJAPR6GN123456"
+              minLength={3}
+              maxLength={32}
+            />
+            <button type="submit" disabled={loading || identifier.trim().length < 3}>
+              {loading ? "Buscando..." : "Consultar"}
+            </button>
+            {lookupResult ? (
+              <button type="button" className="button-secondary button-sm" onClick={clearLookup}>
+                Limpiar
+              </button>
+            ) : null}
+          </form>
 
-      {lookupResult ? (
-        <LookupDetails
-          result={lookupResult}
-          loading={loading}
-          canRegister={canRegisterCurrentMotor}
-          canConfigure={canConfigureCurrentVehicle}
-          canManageVehicle={canEditVehicles}
-          isManualAssignment={isManualAssignment}
-          onAction={() => setIsRegisterOpen(true)}
-          onForceSearch={lookupResult.cached ? () => searchVehicle(identifier, { force: true }) : undefined}
-        />
-      ) : !loading ? (
-        <p className="support-copy lookup-empty-hint">
-          Ingresa una placa o VIN para identificar el motor y su configuracion tecnica.
-        </p>
-      ) : null}
+          {history.length > 0 && !lookupResult ? (
+            <div className="lookup-history">
+              <span className="lookup-history-label">Recientes</span>
+              {history.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  className="lookup-history-chip"
+                  onClick={() => doSearch(item)}
+                  disabled={loading}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          ) : null}
 
-      <VehicleAssignmentModal
-        open={isRegisterOpen}
-        loading={loading || customersLoading}
-        title="Detalles del vehiculo"
-        vehicle={{
-          plate: lookupResult?.plate || null,
-          vin: lookupResult?.vin || null,
-          geotab_status: lookupResult?.geotab_status || "unknown",
-          engine_number: lookupResult?.engine_number || null,
-          technical_number: lookupResult?.technical_engine_configuration || null,
-          engine_name: lookupResult?.registered_motor?.engine_name || null,
-          cpl: lookupResult?.cpl || "",
-          client_name: lookupResult?.assigned_database?.client_name || null,
-          database_name: lookupResult?.assigned_database?.database_name || null,
-          database_username: lookupResult?.assigned_database?.database_username || null,
-          geotab_customer_status: lookupResult?.geotab_customer_status || "not_applicable"
-        }}
-        customers={customers}
-        motors={isManualAssignment ? motors : []}
-        initialTechnicalNumber={lookupResult?.technical_engine_configuration || ""}
-        lockTechnicalNumber={!isManualAssignment}
-        registeredMotor={lookupResult?.registered_motor || null}
-        requiresMotorRegistration={!lookupResult?.registered_motor}
-        onClose={() => setIsRegisterOpen(false)}
-        onSubmit={handleRegisterMotor}
-        canEditVehicle={canEditVehicles}
-      />
+          <ToastStack toasts={toasts} />
+          {!customersLoading && customers.length === 0 && lookupResult ? (
+            <p className="notice-banner notice-soft">
+              Crea clientes y databases en Gestion para poder asignarlos a un vehiculo.
+            </p>
+          ) : null}
+
+          {lookupResult ? (
+            <LookupDetails
+              result={lookupResult}
+              loading={loading}
+              canRegister={canRegisterCurrentMotor}
+              canConfigure={canConfigureCurrentVehicle}
+              canManageVehicle={canEditVehicles}
+              isManualAssignment={isManualAssignment}
+              onAction={() => setIsRegisterOpen(true)}
+              onForceSearch={lookupResult.cached ? () => searchVehicle(identifier, { force: true }) : undefined}
+            />
+          ) : !loading ? (
+            <p className="support-copy lookup-empty-hint">
+              Ingresa una placa o VIN para identificar el motor y su configuracion tecnica.
+            </p>
+          ) : null}
+
+          <VehicleAssignmentModal
+            open={isRegisterOpen}
+            loading={loading || customersLoading}
+            title="Detalles del vehiculo"
+            vehicle={{
+              plate: lookupResult?.plate || null,
+              vin: lookupResult?.vin || null,
+              geotab_status: lookupResult?.geotab_status || "unknown",
+              engine_number: lookupResult?.engine_number || null,
+              technical_number: lookupResult?.technical_engine_configuration || null,
+              engine_name: lookupResult?.registered_motor?.engine_name || null,
+              cpl: lookupResult?.cpl || "",
+              client_name: lookupResult?.assigned_database?.client_name || null,
+              database_name: lookupResult?.assigned_database?.database_name || null,
+              database_username: lookupResult?.assigned_database?.database_username || null,
+              geotab_customer_status: lookupResult?.geotab_customer_status || "not_applicable"
+            }}
+            customers={customers}
+            motors={isManualAssignment ? motors : []}
+            initialTechnicalNumber={lookupResult?.technical_engine_configuration || ""}
+            lockTechnicalNumber={!isManualAssignment}
+            registeredMotor={lookupResult?.registered_motor || null}
+            requiresMotorRegistration={!lookupResult?.registered_motor}
+            onClose={() => setIsRegisterOpen(false)}
+            onSubmit={handleRegisterMotor}
+            canEditVehicle={canEditVehicles}
+          />
+        </>
+      )}
     </section>
   );
 }

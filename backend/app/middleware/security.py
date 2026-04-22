@@ -21,8 +21,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "connect-src 'self' ws: http: https:; "
             "style-src 'self' 'unsafe-inline' fonts.googleapis.com; "
-            "font-src fonts.gstatic.com"
+            "font-src 'self' fonts.gstatic.com data:;"
         )
         if settings.is_production:
             response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
