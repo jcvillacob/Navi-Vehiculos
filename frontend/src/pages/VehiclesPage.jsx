@@ -172,7 +172,10 @@ export default function VehiclesPage() {
       }
 
       await assignVehicleDatabase(selectedVehicle.plate, {
-        customer_database_id: payload.customer_database_id
+        customer_database_id: payload.customer_database_id,
+        ...(Object.prototype.hasOwnProperty.call(payload, "provider_vehicle_id")
+          ? { provider_vehicle_id: payload.provider_vehicle_id }
+          : {}),
       });
       pushToast("success", `Vehiculo ${selectedVehicle.plate} actualizado.`);
       setSelectedVehicle(null);

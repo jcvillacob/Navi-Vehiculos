@@ -15,6 +15,9 @@ database_url = os.getenv("DATABASE_URL", "").strip()
 if not database_url:
     raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
+if database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
 config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = None

@@ -142,6 +142,10 @@ class ArtimoConfig:
     month_end_hour_utc: int = 16
 
 
+class ArtimoAuthError(RuntimeError):
+    """Credenciales Artimo invalidas o rechazadas por el servidor."""
+
+
 class ArtimoClient:
     def __init__(self, config: ArtimoConfig):
         self.config = config
@@ -163,6 +167,10 @@ class ArtimoClient:
             json={"userBrowserDetails": {"browser": "Chrome", "os": "Linux"}},
             timeout=30,
         )
+        if response.status_code in (401, 403):
+            raise ArtimoAuthError(
+                "Credenciales Artimo invalidas. Revisa usuario y contrasena de la database."
+            )
         response.raise_for_status()
         payload = response.json()
         token = str(payload.get("token") or "").strip()

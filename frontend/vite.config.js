@@ -4,6 +4,11 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: {
-    allowedHosts: ["frontend", "localhost", "127.0.0.1"]
+    allowedHosts: [
+      "frontend",
+      "localhost",
+      "127.0.0.1",
+      "vehiculos.proyectosnavi.dev"
+    ]
   }
 });

@@ -36,6 +36,13 @@ _PROVIDERS: dict[str, ProviderDefinition] = {
         supports_monthly_performance=True,
         uses_access_url=False,
     ),
+    "frotcom": ProviderDefinition(
+        key="frotcom",
+        label="Frotcom",
+        description="Telematica Frotcom para rendimientos mensuales (credenciales por database).",
+        supports_monthly_performance=True,
+        uses_access_url=True,
+    ),
 }
 
 
@@ -109,6 +116,18 @@ def _looks_like_artimo(
     return "artimo" in api_base_url or "artimo" in auth_base_url
 
 
+def _looks_like_frotcom(
+    *,
+    database_name: str | None = None,
+    access_url: str | None = None,
+) -> bool:
+    if "frotcom" in _normalize_token(database_name):
+        return True
+    if "frotcom" in _normalize_token(access_url):
+        return True
+    return False
+
+
 def infer_provider_key(
     *,
     connection_type: str | None,
@@ -125,6 +144,8 @@ def infer_provider_key(
         provider_config=provider_config,
     ):
         return "artimo"
+    if _looks_like_frotcom(database_name=database_name, access_url=access_url):
+        return "frotcom"
     return normalized
 
 
@@ -167,15 +188,6 @@ def normalize_provider_config(
             16,
         ),
     }
-    binding_source = raw.get("legacy_bindings", existing.get("legacy_bindings"))
-    if isinstance(binding_source, dict):
-        normalized_bindings = {
-            str(plate).strip().upper(): str(provider_vehicle_id).strip()
-            for plate, provider_vehicle_id in binding_source.items()
-            if str(plate).strip() and str(provider_vehicle_id).strip()
-        }
-        if normalized_bindings:
-            normalized["legacy_bindings"] = normalized_bindings
     if username:
         normalized["username"] = username
     elif existing.get("username"):
@@ -199,5 +211,4 @@ def public_provider_config(provider_key: str, provider_config: dict[str, Any] | 
         "month_start_hour_utc": provider_config.get("month_start_hour_utc"),
         "month_end_hour_utc": provider_config.get("month_end_hour_utc"),
         "username": provider_config.get("username"),
-        "legacy_bindings_count": len(provider_config.get("legacy_bindings") or {}),
     }

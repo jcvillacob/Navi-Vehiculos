@@ -1206,7 +1206,9 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     ) AS has_motor_rules,
                     a.created_at,
                     a.updated_at,
-                    a.last_seen_at
+                    a.last_seen_at,
+                    vpb.provider_vehicle_id,
+                    vpb.is_manual AS provider_vehicle_id_is_manual
                 FROM vehicle_motor_assignments a
                 LEFT JOIN motor_catalog m
                     ON m.technical_number = a.technical_number
@@ -1214,6 +1216,14 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     ON c.id = a.customer_id
                 LEFT JOIN customer_databases cd
                     ON cd.id = a.customer_database_id
+                LEFT JOIN LATERAL (
+                    SELECT vpb.provider_vehicle_id, vpb.is_manual, vpb.binding_status
+                    FROM vehicle_provider_bindings vpb
+                    WHERE vpb.plate = a.plate
+                      AND vpb.customer_database_id = a.customer_database_id
+                    ORDER BY vpb.is_manual DESC, vpb.updated_at DESC
+                    LIMIT 1
+                ) vpb ON TRUE
                 {where_clause}
                 ORDER BY a.last_seen_at DESC, a.plate ASC;
                 """,
@@ -1238,6 +1248,8 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
         ]
         payload = dict(row)
         payload["database_connection_type"] = effective_provider if payload.get("database_name") else None
+        payload["provider_vehicle_id"] = row.get("provider_vehicle_id")
+        payload["is_provider_vehicle_id_manual"] = bool(row.get("provider_vehicle_id_is_manual"))
         records.append(
             VehicleAssignmentRecord(
                 **payload,
@@ -2609,7 +2621,6 @@ def assign_vehicle_database(
         if existing_vehicle is None:
             raise ValueError("El vehiculo no existe en la base de asociaciones.")
 
-        # Si no se selecciona database, solo actualizar access_url
         if not payload.customer_database_id:
             with conn.cursor() as cur:
                 cur.execute(
@@ -2621,6 +2632,7 @@ def assign_vehicle_database(
                     """,
                     (normalized_access_url, normalized_plate),
                 )
+            # Sin database: ignoramos provider_vehicle_id (el binding requiere customer_database_id).
             conn.commit()
             return AssignedDatabaseSummary()
 
@@ -2682,6 +2694,52 @@ def assign_vehicle_database(
                     normalized_plate,
                 ),
             )
+
+            from app.services.rendimientos import _ensure_performance_tables
+
+            _ensure_performance_tables(conn)
+
+            provider_key = infer_provider_key(
+                connection_type=selected_database.get("connection_type"),
+                database_name=selected_database.get("database_name"),
+                access_url=selected_database.get("access_url"),
+                provider_config=None,
+            )
+
+            raw_id = (payload.provider_vehicle_id or "").strip() if payload.provider_vehicle_id is not None else None
+
+            if payload.provider_vehicle_id is None:
+                pass
+            elif raw_id == "":
+                cur.execute(
+                    """
+                    DELETE FROM vehicle_provider_bindings
+                    WHERE plate = %s
+                      AND customer_database_id = %s
+                      AND provider = %s
+                      AND is_manual = TRUE;
+                    """,
+                    (normalized_plate, int(selected_database["id"]), provider_key),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO vehicle_provider_bindings (
+                        plate, customer_database_id, provider,
+                        provider_vehicle_id, binding_status,
+                        last_resolved_at, is_manual, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, 'resolved', NOW(), TRUE, NOW())
+                    ON CONFLICT (plate, customer_database_id, provider)
+                    DO UPDATE SET
+                        provider_vehicle_id = EXCLUDED.provider_vehicle_id,
+                        binding_status = 'resolved',
+                        is_manual = TRUE,
+                        last_resolved_at = NOW(),
+                        updated_at = NOW();
+                    """,
+                    (normalized_plate, int(selected_database["id"]), provider_key, raw_id),
+                )
         conn.commit()
 
     result = AssignedDatabaseSummary(

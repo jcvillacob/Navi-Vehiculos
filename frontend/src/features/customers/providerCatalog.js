@@ -28,6 +28,13 @@ export const DATABASE_PROVIDERS = [
     description: "Telematica Artimo para rendimientos mensuales.",
     usesAccessUrl: false,
     supportsMonthlyPerformance: true
+  },
+  {
+    key: "frotcom",
+    label: "Frotcom",
+    description: "Telematica Frotcom (credenciales por database; usa el enlace como visual).",
+    usesAccessUrl: true,
+    supportsMonthlyPerformance: true
   }
 ];
 
@@ -82,4 +89,10 @@ export function getProviderDetailRows(connectionType, providerConfig = {}) {
     ];
   }
   return [];
+}
+
+const PROVIDERS_WITH_MANUAL_ID = new Set(["geotab", "artimo", "frotcom"]);
+
+export function providerSupportsManualVehicleId(connectionType) {
+  return PROVIDERS_WITH_MANUAL_ID.has(connectionType);
 }

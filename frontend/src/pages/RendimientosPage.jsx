@@ -9,6 +9,11 @@ import {
   listCustomers,
   listVehicleAssignments
 } from "../api/vehicleApi";
+import { DATABASE_PROVIDERS } from "../features/customers/providerCatalog";
+
+const PERFORMANCE_PROVIDER_KEYS = new Set(
+  DATABASE_PROVIDERS.filter((provider) => provider.supportsMonthlyPerformance).map((provider) => provider.key)
+);
 
 function getCurrentMonth() {
   return new Date().toISOString().slice(0, 7);
@@ -164,7 +169,7 @@ export default function RendimientosPage() {
         const readyByCustomerId = new Map();
         for (const vehicle of vehicles) {
           const providerType = vehicle.database_connection_type;
-          if ((providerType !== "artimo" && providerType !== "geotab") || !vehicle.customer_id || !vehicle.plate) {
+          if (!PERFORMANCE_PROVIDER_KEYS.has(providerType) || !vehicle.customer_id || !vehicle.plate) {
             continue;
           }
           if (!readyByCustomerId.has(vehicle.customer_id)) {
@@ -178,7 +183,7 @@ export default function RendimientosPage() {
             id: customer.id,
             name: customer.name,
             readyVehicles: readyByCustomerId.get(customer.id)?.size || 0,
-            hasPerformanceDatabase: (customer.databases || []).some((database) => database.connection_type === "artimo" || database.connection_type === "geotab")
+            hasPerformanceDatabase: (customer.databases || []).some((database) => PERFORMANCE_PROVIDER_KEYS.has(database.connection_type))
           }))
           .filter(Boolean)
           .sort((a, b) => a.name.localeCompare(b.name));

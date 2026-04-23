@@ -173,6 +173,14 @@ class VehicleAssignmentRecord(BaseModel):
     attachments: list[MotorAttachmentRecord] = Field(
         default_factory=list, description="Adjuntos del motor asociado"
     )
+    provider_vehicle_id: str | None = Field(
+        default=None,
+        description="ID externo manual del vehiculo para el proveedor GPS de la database asignada (si existe)",
+    )
+    is_provider_vehicle_id_manual: bool = Field(
+        default=False,
+        description="True si el provider_vehicle_id viene de un binding marcado como manual",
+    )
     created_at: datetime = Field(..., description="Fecha de primer registro")
     updated_at: datetime = Field(..., description="Fecha de ultima actualizacion")
     last_seen_at: datetime = Field(..., description="Fecha de ultima consulta exitosa")
@@ -181,6 +189,11 @@ class VehicleAssignmentRecord(BaseModel):
 class VehicleDatabaseAssignmentRequest(BaseModel):
     customer_database_id: int | None = Field(default=None, description="ID de la database seleccionada")
     access_url: str | None = Field(default=None, description="Enlace de acceso externo (para databases no-Geotab)")
+    provider_vehicle_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description="ID externo del vehiculo para el proveedor GPS de la database asignada. None = no modificar el binding manual; string vacio = borrar binding manual; string no vacio = guardar binding manual.",
+    )
 
 
 class ManualVehicleAssignmentRequest(BaseModel):

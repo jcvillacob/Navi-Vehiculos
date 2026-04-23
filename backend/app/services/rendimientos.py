@@ -44,6 +44,28 @@ def _ensure_performance_tables(conn: psycopg.Connection) -> None:
         )
         cur.execute(
             """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'vehicle_provider_bindings_plate_fkey'
+                ) THEN
+                    ALTER TABLE vehicle_provider_bindings
+                    ADD CONSTRAINT vehicle_provider_bindings_plate_fkey
+                    FOREIGN KEY (plate) REFERENCES vehicle_motor_assignments(plate) ON DELETE CASCADE;
+                END IF;
+            END $$;
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE vehicle_provider_bindings
+            ADD COLUMN IF NOT EXISTS is_manual BOOLEAN NOT NULL DEFAULT FALSE;
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS monthly_vehicle_performance (
                 id BIGSERIAL PRIMARY KEY,
                 customer_id BIGINT NULL REFERENCES customers(id),
@@ -263,7 +285,7 @@ def _load_binding_map(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT provider, customer_database_id, plate, provider_vehicle_id, binding_status
+            SELECT provider, customer_database_id, plate, provider_vehicle_id, binding_status, is_manual
             FROM vehicle_provider_bindings
             WHERE provider = ANY(%s)
               AND customer_database_id = ANY(%s)
@@ -276,6 +298,7 @@ def _load_binding_map(
         (str(row["provider"]), int(row["customer_database_id"]), str(row["plate"])): BindingSnapshot(
             provider_vehicle_id=row.get("provider_vehicle_id"),
             binding_status=str(row.get("binding_status") or "unknown"),
+            is_manual=bool(row.get("is_manual")),
         )
         for row in rows
     }
@@ -306,12 +329,21 @@ def _upsert_binding(
             VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, NOW())
             ON CONFLICT (plate, customer_database_id, provider)
             DO UPDATE SET
-                provider_vehicle_id = EXCLUDED.provider_vehicle_id,
+                provider_vehicle_id = CASE
+                    WHEN vehicle_provider_bindings.is_manual THEN vehicle_provider_bindings.provider_vehicle_id
+                    ELSE EXCLUDED.provider_vehicle_id
+                END,
                 provider_plate = EXCLUDED.provider_plate,
                 provider_customer_id = EXCLUDED.provider_customer_id,
-                binding_status = EXCLUDED.binding_status,
+                binding_status = CASE
+                    WHEN vehicle_provider_bindings.is_manual THEN 'resolved'
+                    ELSE EXCLUDED.binding_status
+                END,
                 last_resolved_at = EXCLUDED.last_resolved_at,
-                last_error = EXCLUDED.last_error,
+                last_error = CASE
+                    WHEN vehicle_provider_bindings.is_manual THEN NULL
+                    ELSE EXCLUDED.last_error
+                END,
                 updated_at = NOW();
             """,
             (

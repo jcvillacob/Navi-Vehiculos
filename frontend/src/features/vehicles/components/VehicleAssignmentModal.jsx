@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import FileDropzone from "../../../components/FileDropzone";
-import { getDatabaseTypeLabel } from "../../customers/providerCatalog";
+import { getDatabaseTypeLabel, providerSupportsManualVehicleId } from "../../customers/providerCatalog";
 
 function DataItem({ label, value }) {
   return (
@@ -55,8 +55,10 @@ export default function VehicleAssignmentModal({
   const [attachmentCpl, setAttachmentCpl] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedDatabaseId, setSelectedDatabaseId] = useState("");
-  const [motorMode, setMotorMode] = useState("new"); // "existing" | "new"
+  const [motorMode, setMotorMode] = useState("new");
   const [selectedMotorId, setSelectedMotorId] = useState("");
+  const [providerVehicleId, setProviderVehicleId] = useState("");
+  const [providerVehicleIdTouched, setProviderVehicleIdTouched] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -85,6 +87,8 @@ export default function VehicleAssignmentModal({
         database.username === vehicle?.database_username
     );
     setSelectedDatabaseId(matchingDatabase ? String(matchingDatabase.id) : "");
+    setProviderVehicleId(vehicle?.provider_vehicle_id || "");
+    setProviderVehicleIdTouched(false);
   }, [
     customers,
     initialTechnicalNumber,
@@ -92,7 +96,8 @@ export default function VehicleAssignmentModal({
     vehicle?.client_name,
     vehicle?.cpl,
     vehicle?.database_name,
-    vehicle?.database_username
+    vehicle?.database_username,
+    vehicle?.provider_vehicle_id,
   ]);
 
   const selectedCustomer = useMemo(
@@ -101,6 +106,14 @@ export default function VehicleAssignmentModal({
   );
 
   const availableDatabases = selectedCustomer?.databases || [];
+
+  const selectedDatabase = useMemo(
+    () => availableDatabases.find((db) => String(db.id) === selectedDatabaseId) || null,
+    [availableDatabases, selectedDatabaseId]
+  );
+
+  const showProviderVehicleIdField = !!selectedDatabase &&
+    providerSupportsManualVehicleId(selectedDatabase.connection_type);
 
   useEffect(() => {
     if (!selectedCustomerId) {
@@ -127,13 +140,22 @@ export default function VehicleAssignmentModal({
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    const shouldSendProviderId =
+      providerVehicleIdTouched ||
+      providerVehicleId.trim() !== (vehicle?.provider_vehicle_id || "");
+    const basePayload = {
+      customer_database_id: selectedDatabaseId ? Number(selectedDatabaseId) : null,
+    };
+    if (shouldSendProviderId && showProviderVehicleIdField) {
+      basePayload.provider_vehicle_id = providerVehicleId.trim() || null;
+    }
     if (motors.length > 0 && motorMode === "existing" && selectedExistingMotor) {
       await onSubmit({
         technical_number: selectedExistingMotor.technical_number,
         engine_name: selectedExistingMotor.engine_name,
         attachmentFile: null,
         attachmentCpl: "",
-        customer_database_id: selectedDatabaseId ? Number(selectedDatabaseId) : null
+        ...basePayload,
       });
     } else {
       await onSubmit({
@@ -141,7 +163,7 @@ export default function VehicleAssignmentModal({
         engine_name: engineName.trim(),
         attachmentFile,
         attachmentCpl: attachmentCpl.trim(),
-        customer_database_id: selectedDatabaseId ? Number(selectedDatabaseId) : null
+        ...basePayload,
       });
     }
   };
@@ -190,6 +212,12 @@ export default function VehicleAssignmentModal({
           <DataItem label="Cliente" value={vehicle.client_name || "Sin cliente"} />
           <DataItem label="Database" value={vehicle.database_name || "Sin database"} />
           <DataItem label="Usuario DB" value={vehicle.database_username || "Sin usuario"} />
+          {vehicle.provider_vehicle_id ? (
+            <DataItem
+              label={`ID externo${vehicle.is_provider_vehicle_id_manual ? " (manual)" : ""}`}
+              value={vehicle.provider_vehicle_id}
+            />
+          ) : null}
         </div>
 
         {vehicle.access_url ? (
@@ -354,6 +382,34 @@ export default function VehicleAssignmentModal({
               ))}
             </select>
           </div>
+
+          {showProviderVehicleIdField ? (
+            <div className="form-field">
+              <label htmlFor="assign-provider-vehicle-id">
+                ID externo del vehiculo <span className="form-optional">(opcional)</span>
+              </label>
+              <input
+                id="assign-provider-vehicle-id"
+                value={providerVehicleId}
+                onChange={(event) => {
+                  setProviderVehicleId(event.target.value);
+                  setProviderVehicleIdTouched(true);
+                }}
+                placeholder={
+                  selectedDatabase.connection_type === "geotab"
+                    ? "Ej: b1234 (opcional; por defecto se busca por placa)"
+                    : "Ej: 386804 (opcional; por defecto se resuelve por placa)"
+                }
+                autoComplete="off"
+              />
+              <small className="support-copy">
+                Se usara tal cual para consultar {getDatabaseTypeLabel(selectedDatabase.connection_type)}.
+                {vehicle?.is_provider_vehicle_id_manual
+                  ? " Este vehiculo tiene un ID manual guardado."
+                  : " Deja vacio para que se resuelva automaticamente por placa."}
+              </small>
+            </div>
+          ) : null}
 
           <div className="actions-row modal-actions">
             <button type="submit" disabled={loading}>

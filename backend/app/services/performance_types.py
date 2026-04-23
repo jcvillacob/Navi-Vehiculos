@@ -25,6 +25,7 @@ class PerformanceTarget:
 class BindingSnapshot:
     provider_vehicle_id: str | None
     binding_status: str
+    is_manual: bool = False
 
 
 @dataclass(frozen=True)

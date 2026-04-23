@@ -249,6 +249,17 @@ export async function manualAssignVehicle(plate, payload) {
   return parseJsonOrThrow(response, "Error registrando asignacion manual del vehiculo");
 }
 
+/**
+ * Asigna una database a un vehiculo.
+ * @param {string} plate
+ * @param {object} payload
+ * @param {number|null} payload.customer_database_id
+ * @param {string|null} payload.access_url
+ * @param {string|null} [payload.provider_vehicle_id] - ID externo manual del vehiculo para el
+ *   proveedor GPS (geotab, artimo, frotcom). Si es un string no vacio se persiste como manual.
+ *   Si es string vacio se elimina el binding manual existente.
+ *   Si es undefined/null no se modifica el binding (comportamiento existente).
+ */
 export async function assignVehicleDatabase(plate, payload) {
   const normalizedPlate = plate.trim().toUpperCase();
   const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/database`), {

@@ -4,6 +4,7 @@ from datetime import time as dt_time, timedelta
 from typing import Protocol
 
 from app.clients.artimo_client import (
+    ArtimoAuthError,
     ArtimoClient,
     ArtimoConfig,
     extract_consumption_liters,
@@ -17,6 +18,18 @@ from app.clients.artimo_client import (
     sort_rows_by_timestamp,
 )
 from app.schemas.vehicle import MonthlyPerformanceRecord
+from app.clients.frotcom_client import (
+    FrotcomAuthError,
+    FrotcomConfig,
+    find_vehicle_id_by_plate as find_frotcom_vehicle_id_by_plate,
+    find_first_reading as find_frotcom_first_reading,
+    find_last_reading as find_frotcom_last_reading,
+    get_frotcom_month_range,
+    get_mileage_and_time as get_frotcom_mileage_and_time,
+    hours_from_seconds,
+    liters_to_gallons,
+    list_vehicles as list_frotcom_vehicles,
+)
 from app.clients.geotab_client import (
     find_device_by_plate,
     get_authenticated_client,
@@ -24,7 +37,6 @@ from app.clients.geotab_client import (
     get_status_data_for_month,
     get_trips_for_month,
 )
-from app.services.legacy_provider_bootstrap import get_legacy_provider_vehicle_id
 from app.services.performance_types import (
     BindingSnapshot,
     BindingUpsert,
@@ -200,6 +212,22 @@ def _calculate_vehicle_record(
     )
 
 
+def _select_binding(
+    *,
+    bindings: dict[tuple[str, int, str], "BindingSnapshot"],
+    target: "PerformanceTarget",
+) -> tuple[str | None, bool]:
+    """Devuelve (provider_vehicle_id, is_manual) desde el mapa de bindings.
+
+    - Si no hay binding para el target, devuelve (None, False).
+    - is_manual solo es True cuando el binding vino marcado como manual.
+    """
+    snapshot = bindings.get((target.provider_key, target.customer_database_id, target.plate))
+    if not snapshot:
+        return None, False
+    return snapshot.provider_vehicle_id, getattr(snapshot, "is_manual", False)
+
+
 class ArtimoMonthlyPerformanceProvider:
     key = "artimo"
 
@@ -256,35 +284,50 @@ class ArtimoMonthlyPerformanceProvider:
         previous_month_number = int(previous_month[-2:])
         previous_start, previous_end = artimo.get_month_range(previous_year, previous_month_number)
 
-        current_trips = {
-            plate: row
-            for row in artimo.get_report("trips", current_start, current_end)
-            if (plate := extract_plate(row))
-        }
-        previous_trips = {
-            plate: row
-            for row in artimo.get_report("trips", previous_start, previous_end)
-            if (plate := extract_plate(row))
-        }
+        try:
+            current_trips = {
+                plate: row
+                for row in artimo.get_report("trips", current_start, current_end)
+                if (plate := extract_plate(row))
+            }
+            previous_trips = {
+                plate: row
+                for row in artimo.get_report("trips", previous_start, previous_end)
+                if (plate := extract_plate(row))
+            }
+        except ArtimoAuthError as exc:
+            message = str(exc)
+            for target in targets:
+                binding_updates.append(
+                    BindingUpsert(
+                        target=target,
+                        provider_vehicle_id=None,
+                        binding_status="error",
+                        last_error=message,
+                    )
+                )
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="error",
+                        warnings=[message],
+                    )
+                )
+            return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 
         for target in targets:
-            key = (target.provider_key, target.customer_database_id, target.plate)
             current_trip = current_trips.get(target.plate)
             previous_trip = previous_trips.get(target.plate)
-            existing_binding = bindings.get(key)
-            legacy_bindings = (
-                target.provider_config.get("legacy_bindings")
-                if isinstance(target.provider_config.get("legacy_bindings"), dict)
-                else {}
-            )
-            legacy_provider_vehicle_id = str(legacy_bindings.get(target.plate) or "").strip() or None
-            provider_vehicle_id = (
-                (existing_binding.provider_vehicle_id if existing_binding else None)
-                or legacy_provider_vehicle_id
-                or get_legacy_provider_vehicle_id(target)
-                or extract_provider_vehicle_id(current_trip)
-                or extract_provider_vehicle_id(previous_trip)
-            )
+            bound_id, is_manual = _select_binding(bindings=bindings, target=target)
+            if is_manual:
+                provider_vehicle_id = bound_id
+            else:
+                provider_vehicle_id = (
+                    bound_id
+                    or extract_provider_vehicle_id(current_trip)
+                    or extract_provider_vehicle_id(previous_trip)
+                )
 
             if not provider_vehicle_id:
                 binding_updates.append(
@@ -549,13 +592,14 @@ class GeotabMonthlyPerformanceProvider:
         binding_updates: list[BindingUpsert] = []
 
         for target in targets:
-            binding_key = ("geotab", target.customer_database_id, target.plate)
-            existing_binding = bindings.get(binding_key)
-            device_id = existing_binding.provider_vehicle_id if existing_binding else None
-
-            if not device_id:
-                device = find_device_by_plate(api, target.plate)
-                device_id = str(device.get("id") or "").strip() if device else None
+            bound_id, is_manual = _select_binding(bindings=bindings, target=target)
+            if is_manual:
+                device_id = bound_id
+            else:
+                device_id = bound_id
+                if not device_id:
+                    device = find_device_by_plate(api, target.plate)
+                    device_id = str(device.get("id") or "").strip() if device else None
 
             if not device_id:
                 binding_updates.append(
@@ -610,9 +654,283 @@ class GeotabMonthlyPerformanceProvider:
         return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 
 
+# ==============================================================================
+# FROTCOM MONTHLY PERFORMANCE PROVIDER
+# ==============================================================================
+
+
+def _calculate_frotcom_vehicle_record(
+    *,
+    target: PerformanceTarget,
+    config: FrotcomConfig,
+    month: str,
+    vehicle_id: str,
+    df_iso: str,
+    dt_iso: str,
+    month_start,
+    month_end,
+    previous_record: MonthlyPerformanceRecord | None,
+) -> MonthlyPerformanceRecord:
+    warnings: list[str] = []
+
+    summary = get_frotcom_mileage_and_time(config, vehicle_id, df_iso, dt_iso) or {}
+    first_reading = find_frotcom_first_reading(config, vehicle_id, month_start, month_end)
+    last_reading = find_frotcom_last_reading(config, vehicle_id, month_start, month_end)
+
+    if not summary and first_reading is None and last_reading is None:
+        return _build_status_record(
+            target=target,
+            month=month,
+            status="no_data",
+            warnings=["No se encontraron datos de Frotcom para el mes solicitado."],
+            provider_vehicle_id=vehicle_id,
+        )
+
+    if previous_record and previous_record.odo_end is not None:
+        odo_start = previous_record.odo_end
+    else:
+        odo_start = first_reading.odometer if first_reading else None
+        if odo_start is not None:
+            warnings.append("Odometro inicial tomado de la primera lectura CAN del mes (sin registro previo).")
+
+    odo_end = last_reading.odometer if last_reading else None
+    kms_ecm = max(0.0, odo_end - odo_start) if odo_start is not None and odo_end is not None else None
+
+    kms_gps_raw = summary.get("mileageGpsKms") if isinstance(summary, dict) else None
+    try:
+        kms_gps = float(kms_gps_raw) if kms_gps_raw is not None else None
+    except (TypeError, ValueError):
+        kms_gps = None
+
+    hours_gps = hours_from_seconds(summary.get("drivingTimeSeconds") if isinstance(summary, dict) else None)
+
+    fuel_start = first_reading.total_fuel_used if first_reading else None
+    fuel_end = last_reading.total_fuel_used if last_reading else None
+    fuel_gallons: float | None = None
+    if fuel_start is not None and fuel_end is not None and (fuel_end - fuel_start) >= 0:
+        fuel_gallons = liters_to_gallons(max(0.0, fuel_end - fuel_start))
+    else:
+        warnings.append("No se pudo determinar el consumo de combustible en Frotcom para el mes.")
+
+    all_present = all(
+        value is not None
+        for value in (odo_start, odo_end, fuel_gallons, kms_gps, hours_gps)
+    )
+    status = "calculated" if all_present else "partial"
+
+    return MonthlyPerformanceRecord(
+        customer_id=target.customer_id,
+        customer_database_id=target.customer_database_id,
+        client_name=target.client_name,
+        database_name=target.database_name,
+        source_provider=target.provider_key,
+        plate=target.plate,
+        provider_vehicle_id=vehicle_id,
+        technical_number=target.technical_number,
+        engine_name=target.engine_name,
+        period_month=month,
+        odo_start=odo_start,
+        odo_end=odo_end,
+        horo_start=None,
+        horo_end=None,
+        kms_ecm=kms_ecm,
+        kms_gps=kms_gps,
+        hours_ecm=None,
+        hours_gps=hours_gps,
+        fuel_gallons=fuel_gallons,
+        calculation_status=status,
+        warnings=warnings,
+    )
+
+
+def _build_frotcom_config(target: PerformanceTarget) -> FrotcomConfig:
+    if not target.username or not target.password:
+        raise ValueError(
+            f"La database {target.database_name or target.customer_database_id} no tiene credenciales Frotcom completas."
+        )
+    return FrotcomConfig(username=target.username, password=target.password)
+
+
+class FrotcomMonthlyPerformanceProvider:
+    key = "frotcom"
+
+    def calculate_database_rows(
+        self,
+        *,
+        month: str,
+        year: int,
+        month_number: int,
+        previous_month: str,
+        targets: list[PerformanceTarget],
+        previous_records: dict[tuple[int, str], MonthlyPerformanceRecord],
+        bindings: dict[tuple[str, int, str], BindingSnapshot],
+    ) -> ProviderCalculationResult:
+        if not targets:
+            return ProviderCalculationResult(records=[], binding_updates=[])
+
+        df_iso, dt_iso, month_start, month_end = get_frotcom_month_range(year, month_number)
+
+        rows: list[MonthlyPerformanceRecord] = []
+        binding_updates: list[BindingUpsert] = []
+
+        vehicles_cache: dict[tuple[str, str, str], list[dict]] = {}
+        vehicles_list_failures: dict[tuple[str, str, str], str] = {}
+
+        for target in targets:
+            try:
+                config = _build_frotcom_config(target)
+            except ValueError as exc:
+                binding_updates.append(
+                    BindingUpsert(
+                        target=target,
+                        provider_vehicle_id=None,
+                        binding_status="error",
+                        last_error=str(exc),
+                    )
+                )
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="error",
+                        warnings=[str(exc)],
+                    )
+                )
+                continue
+
+            cache_key = config.cache_key()
+            if cache_key in vehicles_list_failures:
+                message = vehicles_list_failures[cache_key]
+                binding_updates.append(
+                    BindingUpsert(
+                        target=target,
+                        provider_vehicle_id=None,
+                        binding_status="error",
+                        last_error=message,
+                    )
+                )
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="error",
+                        warnings=[message],
+                    )
+                )
+                continue
+
+            bound_id, is_manual = _select_binding(bindings=bindings, target=target)
+
+            if is_manual:
+                vehicle_id = bound_id
+            else:
+                vehicle_id = bound_id
+                if not vehicle_id:
+                    cached = vehicles_cache.get(cache_key)
+                    if cached is None and cache_key not in vehicles_list_failures:
+                        try:
+                            cached = list_frotcom_vehicles(config)
+                            vehicles_cache[cache_key] = cached
+                        except FrotcomAuthError as exc:
+                            vehicles_list_failures[cache_key] = str(exc)
+                            cached = []
+                        except Exception as exc:
+                            vehicles_list_failures[cache_key] = (
+                                f"No fue posible listar vehiculos en Frotcom: {exc}"
+                            )
+                            cached = []
+                    if cache_key in vehicles_list_failures:
+                        message = vehicles_list_failures[cache_key]
+                        binding_updates.append(
+                            BindingUpsert(
+                                target=target,
+                                provider_vehicle_id=None,
+                                binding_status="error",
+                                last_error=message,
+                            )
+                        )
+                        rows.append(
+                            _build_status_record(
+                                target=target,
+                                month=month,
+                                status="error",
+                                warnings=[message],
+                            )
+                        )
+                        continue
+                    vehicle_id = find_frotcom_vehicle_id_by_plate(target.plate, config, cached)
+
+            if not vehicle_id:
+                binding_updates.append(
+                    BindingUpsert(
+                        target=target,
+                        provider_vehicle_id=None,
+                        binding_status="unbound",
+                        last_error="No fue posible resolver el ID del vehiculo en Frotcom para esta placa.",
+                    )
+                )
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="unbound",
+                        warnings=["No fue posible resolver el ID del vehiculo en Frotcom para esta placa."],
+                    )
+                )
+                continue
+
+            binding_updates.append(
+                BindingUpsert(
+                    target=target,
+                    provider_vehicle_id=vehicle_id,
+                    binding_status="resolved",
+                    last_error=None,
+                )
+            )
+
+            try:
+                record = _calculate_frotcom_vehicle_record(
+                    target=target,
+                    config=config,
+                    month=month,
+                    vehicle_id=vehicle_id,
+                    df_iso=df_iso,
+                    dt_iso=dt_iso,
+                    month_start=month_start,
+                    month_end=month_end,
+                    previous_record=previous_records.get((target.customer_database_id, target.plate)),
+                )
+                rows.append(record)
+            except FrotcomAuthError as exc:
+                message = str(exc)
+                vehicles_list_failures[cache_key] = message
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="error",
+                        provider_vehicle_id=vehicle_id,
+                        warnings=[message],
+                    )
+                )
+            except Exception as exc:
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="error",
+                        provider_vehicle_id=vehicle_id,
+                        warnings=[f"Error calculando la placa en Frotcom: {exc}"],
+                    )
+                )
+
+        return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
+
+
 _MONTHLY_PERFORMANCE_PROVIDERS: dict[str, MonthlyPerformanceProvider] = {
     "artimo": ArtimoMonthlyPerformanceProvider(),
     "geotab": GeotabMonthlyPerformanceProvider(),
+    "frotcom": FrotcomMonthlyPerformanceProvider(),
 }
 
 
