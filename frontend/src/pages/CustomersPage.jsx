@@ -129,6 +129,7 @@ function CreateDatabaseModal({ customers, loading, preselectedCustomerId, onClos
   const providerDefinition = getProviderDefinition(connectionType);
   const showAccessUrl = providerUsesAccessUrl(connectionType);
   const showArtimoFields = connectionType === "artimo";
+  const showLogitracsFields = connectionType === "logitracs_triton";
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -319,6 +320,37 @@ function CreateDatabaseModal({ customers, loading, preselectedCustomerId, onClos
             </>
           ) : null}
 
+          {showLogitracsFields ? (
+            <>
+              <div className="form-field">
+                <label htmlFor="create-db-logitracs-codigo">Codigo empresa LogiTracs</label>
+                <input
+                  id="create-db-logitracs-codigo"
+                  value={providerConfigState.codigoEmpresa || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, codigoEmpresa: event.target.value }))
+                  }
+                  placeholder="Opcional, ej. GRUPOK"
+                />
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="create-db-logitracs-password-web">
+                  Password web LogiVIM <span className="form-optional">(opcional)</span>
+                </label>
+                <input
+                  id="create-db-logitracs-password-web"
+                  type="password"
+                  value={providerConfigState.passwordWeb || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, passwordWeb: event.target.value }))
+                  }
+                  placeholder="Si se omite, usa la password principal"
+                />
+              </div>
+            </>
+          ) : null}
+
           {showAccessUrl ? (
             <div className="form-field">
               <label htmlFor="create-db-access-url">
@@ -373,6 +405,7 @@ function EditDatabaseModal({ database, loading, onClose, onSubmit }) {
   const providerDefinition = getProviderDefinition(connectionType);
   const showAccessUrl = providerUsesAccessUrl(connectionType);
   const showArtimoFields = connectionType === "artimo";
+  const showLogitracsFields = connectionType === "logitracs_triton";
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -540,6 +573,37 @@ function EditDatabaseModal({ database, loading, onClose, onSubmit }) {
                     required
                   />
                 </div>
+              </div>
+            </>
+          ) : null}
+
+          {showLogitracsFields ? (
+            <>
+              <div className="form-field">
+                <label htmlFor="edit-db-logitracs-codigo">Codigo empresa LogiTracs</label>
+                <input
+                  id="edit-db-logitracs-codigo"
+                  value={providerConfigState.codigoEmpresa || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, codigoEmpresa: event.target.value }))
+                  }
+                  placeholder="Opcional, ej. GRUPOK"
+                />
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="edit-db-logitracs-password-web">
+                  Password web LogiVIM <span className="form-optional">(opcional)</span>
+                </label>
+                <input
+                  id="edit-db-logitracs-password-web"
+                  type="password"
+                  value={providerConfigState.passwordWeb || ""}
+                  onChange={(event) =>
+                    setProviderConfigState((current) => ({ ...current, passwordWeb: event.target.value }))
+                  }
+                  placeholder="Si se omite, usa la password principal"
+                />
               </div>
             </>
           ) : null}

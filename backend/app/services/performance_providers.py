@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import time as dt_time, timedelta
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.clients.artimo_client import (
     ArtimoAuthError,
@@ -36,6 +36,16 @@ from app.clients.geotab_client import (
     get_geotab_month_range,
     get_status_data_for_month,
     get_trips_for_month,
+)
+from app.clients.logitracs_triton_client import (
+    LogitracsTritonAuthError,
+    LogitracsTritonClient,
+    LogitracsTritonConfig,
+    extract_engine_hours as extract_triton_engine_hours,
+    extract_fuel_liters as extract_triton_fuel_liters,
+    extract_kms_period,
+    extract_odometer_end,
+    extract_plate as extract_triton_plate,
 )
 from app.services.performance_types import (
     BindingSnapshot,
@@ -927,10 +937,294 @@ class FrotcomMonthlyPerformanceProvider:
         return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 
 
+# ==============================================================================
+# LOGITRACS TRITON MONTHLY PERFORMANCE PROVIDER
+# ==============================================================================
+
+
+def _normalize_logitracs_plate(value: str | None) -> str:
+    return str(value or "").strip().upper()
+
+
+def _build_logitracs_error_result(
+    *,
+    month: str,
+    targets: list[PerformanceTarget],
+    message: str,
+) -> ProviderCalculationResult:
+    return ProviderCalculationResult(
+        records=[
+            _build_status_record(
+                target=target,
+                month=month,
+                status="error",
+                warnings=[message],
+            )
+            for target in targets
+        ],
+        binding_updates=[
+            BindingUpsert(
+                target=target,
+                provider_vehicle_id=None,
+                binding_status="error",
+                last_error=message,
+            )
+            for target in targets
+        ],
+    )
+
+
+def _calculate_logitracs_vehicle_record(
+    *,
+    target: PerformanceTarget,
+    month: str,
+    provider_vehicle_id: str,
+    current_row: dict[str, Any] | None,
+    previous_row: dict[str, Any] | None,
+    previous_record: MonthlyPerformanceRecord | None,
+) -> MonthlyPerformanceRecord:
+    warnings: list[str] = []
+
+    if current_row is None and previous_row is None:
+        return _build_status_record(
+            target=target,
+            month=month,
+            status="no_data",
+            warnings=["No hay datos LogiTracs para el mes solicitado."],
+            provider_vehicle_id=provider_vehicle_id,
+        )
+
+    kms_period = extract_kms_period(current_row)
+    odo_end = extract_odometer_end(current_row)
+    if odo_end is not None and odo_end <= 0 and (kms_period or 0) > 0:
+        warnings.append(
+            "Odometro final reportado en 0 por LogiTracs; se estimara usando el kilometraje del periodo."
+        )
+        odo_end = None
+
+    if previous_record and previous_record.odo_end is not None:
+        odo_start = previous_record.odo_end
+    elif previous_row is not None:
+        odo_start = extract_odometer_end(previous_row)
+        if odo_start is not None:
+            warnings.append("Odometro inicial tomado del cierre LogiTracs del mes anterior.")
+    elif odo_end is not None:
+        if kms_period is not None:
+            odo_start = max(0.0, odo_end - kms_period)
+            warnings.append("Odometro inicial estimado a partir del kilometraje del mes actual.")
+        else:
+            odo_start = None
+    else:
+        odo_start = None
+
+    if odo_end is None and odo_start is not None and kms_period is not None:
+        odo_end = odo_start + kms_period
+        warnings.append("Odometro final estimado a partir del cierre previo mas el kilometraje del periodo.")
+
+    if odo_start is not None and odo_end is not None:
+        kms_ecm = max(0.0, odo_end - odo_start)
+    else:
+        kms_ecm = kms_period
+        if kms_ecm is not None:
+            warnings.append("Kilometraje mensual tomado del reporte LogiTracs al no poder derivar ambos odometros.")
+
+    hours_gps = extract_triton_engine_hours(current_row)
+    fuel_gallons = extract_triton_fuel_liters(current_row)
+
+    if fuel_gallons is not None:
+        warnings.append("LogiTracs 'Combustible' interpretado como galones (unidad por confirmar).")
+
+    all_present = all(v is not None for v in (odo_start, odo_end, kms_ecm, hours_gps, fuel_gallons))
+    status = "calculated" if all_present else "partial"
+
+    return MonthlyPerformanceRecord(
+        customer_id=target.customer_id,
+        customer_database_id=target.customer_database_id,
+        client_name=target.client_name,
+        database_name=target.database_name,
+        source_provider=target.provider_key,
+        plate=target.plate,
+        provider_vehicle_id=provider_vehicle_id,
+        technical_number=target.technical_number,
+        engine_name=target.engine_name,
+        period_month=month,
+        odo_start=odo_start,
+        odo_end=odo_end,
+        horo_start=None,
+        horo_end=None,
+        kms_ecm=kms_ecm,
+        kms_gps=None,
+        hours_ecm=None,
+        hours_gps=hours_gps,
+        fuel_gallons=fuel_gallons,
+        calculation_status=status,
+        warnings=warnings,
+    )
+
+
+class LogitracsTritonMonthlyPerformanceProvider:
+    key = "logitracs_triton"
+
+    def _build_config(self, target: PerformanceTarget) -> LogitracsTritonConfig:
+        provider_config = target.provider_config if isinstance(target.provider_config, dict) else {}
+        if not target.username or not target.password:
+            raise ValueError(
+                f"La database {target.database_name or target.customer_database_id} no tiene credenciales LogiTracs Triton completas."
+            )
+        codigo_empresa = str(provider_config.get("codigo_empresa") or "").strip()
+        if not codigo_empresa:
+            raise ValueError(
+                f"La database {target.database_name or target.customer_database_id} no tiene codigo_empresa de LogiTracs Triton."
+            )
+        password_web = str(provider_config.get("password_web") or "").strip() or target.password
+        return LogitracsTritonConfig(
+            username=target.username,
+            password=target.password,
+            password_web=password_web,
+            codigo_empresa=codigo_empresa,
+            triton_base_url=str(provider_config.get("triton_login_url") or "https://triton.logitracs.com/Logitracs.Triton").strip().rstrip("/"),
+            logivim_base_url=str(provider_config.get("logivim_base_url") or "https://triton.logitracs.com/LogiVIMwebTriton/public").strip().rstrip("/"),
+        )
+
+    def calculate_database_rows(
+        self,
+        *,
+        month: str,
+        year: int,
+        month_number: int,
+        previous_month: str,
+        targets: list[PerformanceTarget],
+        previous_records: dict[tuple[int, str], MonthlyPerformanceRecord],
+        bindings: dict[tuple[str, int, str], BindingSnapshot],
+    ) -> ProviderCalculationResult:
+        if not targets:
+            return ProviderCalculationResult(records=[], binding_updates=[])
+
+        try:
+            client = LogitracsTritonClient(self._build_config(targets[0]))
+        except ValueError as exc:
+            return _build_logitracs_error_result(month=month, targets=targets, message=str(exc))
+
+        prev_year = int(previous_month[:4])
+        prev_month_num = int(previous_month[-2:])
+
+        def flat_month(year: int, month: int) -> tuple[str, str]:
+            import calendar
+            last_day = calendar.monthrange(year, month)[1]
+            start = f"{year:04d}-{month:02d}-01"
+            end = f"{year:04d}-{month:02d}-{last_day:02d}"
+            return start, end
+
+        start_date, end_date = flat_month(year, month_number)
+        prev_start, prev_end = flat_month(prev_year, prev_month_num)
+
+        try:
+            current_rows_raw = client.get_fleet_operational_report(start_date, end_date)
+            previous_rows_raw = client.get_fleet_operational_report(prev_start, prev_end)
+        except LogitracsTritonAuthError as exc:
+            return _build_logitracs_error_result(month=month, targets=targets, message=str(exc))
+        except RuntimeError as exc:
+            logger.exception("Error fetching LogiTracs Triton report")
+            return _build_logitracs_error_result(month=month, targets=targets, message=str(exc))
+
+        current_rows = {
+            plate: row
+            for row in current_rows_raw
+            if (plate := _normalize_logitracs_plate(extract_triton_plate(row)))
+        }
+        previous_rows = {
+            plate: row
+            for row in previous_rows_raw
+            if (plate := _normalize_logitracs_plate(extract_triton_plate(row)))
+        }
+
+        rows: list[MonthlyPerformanceRecord] = []
+        binding_updates: list[BindingUpsert] = []
+
+        for target in targets:
+            plate_key = _normalize_logitracs_plate(target.plate)
+            current_row = current_rows.get(plate_key)
+            previous_row = previous_rows.get(plate_key)
+
+            bound_id, is_manual = _select_binding(bindings=bindings, target=target)
+            if is_manual and bound_id:
+                provider_vehicle_id = bound_id
+            elif current_row or previous_row:
+                provider_vehicle_id = plate_key
+            else:
+                provider_vehicle_id = None
+
+            if provider_vehicle_id is None:
+                binding_updates.append(
+                    BindingUpsert(
+                        target=target,
+                        provider_vehicle_id=None,
+                        binding_status="unbound",
+                        last_error="La placa no aparece en el informe operacional de LogiTracs para el mes.",
+                    )
+                )
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="unbound",
+                        warnings=["La placa no aparece en el informe operacional de LogiTracs para el mes."],
+                    )
+                )
+                continue
+
+            if current_row or previous_row:
+                binding_updates.append(
+                    BindingUpsert(
+                        target=target,
+                        provider_vehicle_id=provider_vehicle_id,
+                        binding_status="resolved",
+                        last_error=None,
+                    )
+                )
+
+            try:
+                prev_rec = previous_records.get((target.customer_database_id, target.plate))
+                rows.append(
+                    _calculate_logitracs_vehicle_record(
+                        target=target,
+                        month=month,
+                        provider_vehicle_id=provider_vehicle_id,
+                        current_row=current_row,
+                        previous_row=previous_row,
+                        previous_record=prev_rec,
+                    )
+                )
+            except LogitracsTritonAuthError as exc:
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="error",
+                        provider_vehicle_id=provider_vehicle_id,
+                        warnings=[str(exc)],
+                    )
+                )
+            except Exception as exc:
+                logger.exception("Error calculating LogiTracs Triton record")
+                rows.append(
+                    _build_status_record(
+                        target=target,
+                        month=month,
+                        status="error",
+                        provider_vehicle_id=provider_vehicle_id,
+                        warnings=[f"Error calculando la placa en LogiTracs Triton: {exc}"],
+                    )
+                )
+
+        return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
+
+
 _MONTHLY_PERFORMANCE_PROVIDERS: dict[str, MonthlyPerformanceProvider] = {
     "artimo": ArtimoMonthlyPerformanceProvider(),
     "geotab": GeotabMonthlyPerformanceProvider(),
     "frotcom": FrotcomMonthlyPerformanceProvider(),
+    "logitracs_triton": LogitracsTritonMonthlyPerformanceProvider(),
 }
 
 

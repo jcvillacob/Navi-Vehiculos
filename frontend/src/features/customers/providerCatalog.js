@@ -7,6 +7,13 @@ const ARTIMO_DEFAULTS = {
   monthEndHourUtc: "16"
 };
 
+const LOGITRACS_TRITON_DEFAULTS = {
+  codigoEmpresa: "",
+  passwordWeb: "",
+  tritonLoginUrl: "https://triton.logitracs.com/Logitracs.Triton/api/Usuarios/Login",
+  logivimBaseUrl: "https://triton.logitracs.com/LogiVIMwebTriton/public"
+};
+
 export const DATABASE_PROVIDERS = [
   {
     key: "database",
@@ -35,6 +42,13 @@ export const DATABASE_PROVIDERS = [
     description: "Telematica Frotcom (credenciales por database; usa el enlace como visual).",
     usesAccessUrl: true,
     supportsMonthlyPerformance: true
+  },
+  {
+    key: "logitracs_triton",
+    label: "LogiTracs Triton",
+    description: "Informe operacional de flota mensual.",
+    usesAccessUrl: false,
+    supportsMonthlyPerformance: true
   }
 ];
 
@@ -62,6 +76,15 @@ export function getInitialProviderConfig(connectionType, providerConfig = {}) {
       monthEndHourUtc: String(providerConfig.month_end_hour_utc ?? ARTIMO_DEFAULTS.monthEndHourUtc)
     };
   }
+  if (connectionType === "logitracs_triton") {
+    return {
+      ...LOGITRACS_TRITON_DEFAULTS,
+      codigoEmpresa: providerConfig.codigo_empresa || LOGITRACS_TRITON_DEFAULTS.codigoEmpresa,
+      passwordWeb: providerConfig.password_web || LOGITRACS_TRITON_DEFAULTS.passwordWeb,
+      tritonLoginUrl: providerConfig.triton_login_url || LOGITRACS_TRITON_DEFAULTS.tritonLoginUrl,
+      logivimBaseUrl: providerConfig.logivim_base_url || LOGITRACS_TRITON_DEFAULTS.logivimBaseUrl
+    };
+  }
   return {};
 }
 
@@ -76,6 +99,17 @@ export function buildProviderConfigPayload(connectionType, providerState) {
       month_end_hour_utc: Number(providerState.monthEndHourUtc || 16)
     };
   }
+  if (connectionType === "logitracs_triton") {
+    const payload = {
+      codigo_empresa: (providerState.codigoEmpresa || "").trim(),
+      triton_login_url: LOGITRACS_TRITON_DEFAULTS.tritonLoginUrl,
+      logivim_base_url: LOGITRACS_TRITON_DEFAULTS.logivimBaseUrl
+    };
+    if ((providerState.passwordWeb || "").trim()) {
+      payload.password_web = providerState.passwordWeb.trim();
+    }
+    return payload;
+  }
   return {};
 }
 
@@ -88,10 +122,13 @@ export function getProviderDetailRows(connectionType, providerConfig = {}) {
       { label: "Auth base", value: providerConfig.auth_base_url || "-" }
     ];
   }
+  if (connectionType === "logitracs_triton") {
+    return [];
+  }
   return [];
 }
 
-const PROVIDERS_WITH_MANUAL_ID = new Set(["geotab", "artimo", "frotcom"]);
+const PROVIDERS_WITH_MANUAL_ID = new Set(["geotab", "artimo", "frotcom", "logitracs_triton"]);
 
 export function providerSupportsManualVehicleId(connectionType) {
   return PROVIDERS_WITH_MANUAL_ID.has(connectionType);

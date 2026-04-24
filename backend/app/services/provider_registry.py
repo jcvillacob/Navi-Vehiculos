@@ -43,6 +43,13 @@ _PROVIDERS: dict[str, ProviderDefinition] = {
         supports_monthly_performance=True,
         uses_access_url=True,
     ),
+    "logitracs_triton": ProviderDefinition(
+        key="logitracs_triton",
+        label="LogiTracs Triton",
+        description="Telematica LogiTracs Triton (informe operacional de flota mensual).",
+        supports_monthly_performance=True,
+        uses_access_url=False,
+    ),
 }
 
 
@@ -128,6 +135,26 @@ def _looks_like_frotcom(
     return False
 
 
+def _looks_like_logitracs_triton(
+    *,
+    database_name: str | None = None,
+    access_url: str | None = None,
+    provider_config: dict[str, Any] | None = None,
+) -> bool:
+    config = provider_config if isinstance(provider_config, dict) else {}
+    if "logitracs" in _normalize_token(database_name):
+        return True
+    if "triton" in _normalize_token(database_name):
+        return True
+    if "logitracs" in _normalize_token(access_url):
+        return True
+    if "triton" in _normalize_token(access_url):
+        return True
+    if _normalize_optional_text(config.get("codigo_empresa")):
+        return True
+    return False
+
+
 def infer_provider_key(
     *,
     connection_type: str | None,
@@ -146,6 +173,12 @@ def infer_provider_key(
         return "artimo"
     if _looks_like_frotcom(database_name=database_name, access_url=access_url):
         return "frotcom"
+    if _looks_like_logitracs_triton(
+        database_name=database_name,
+        access_url=access_url,
+        provider_config=provider_config,
+    ):
+        return "logitracs_triton"
     return normalized
 
 
@@ -161,54 +194,81 @@ def normalize_provider_config(
     existing = existing_provider_config if isinstance(existing_provider_config, dict) else {}
     normalized_provider_key = normalize_provider_key(provider_key)
 
-    if normalized_provider_key != "artimo":
-        return {}
+    if normalized_provider_key == "artimo":
+        normalized = {
+            "api_base_url": _normalize_optional_text(
+                raw.get("api_base_url") or existing.get("api_base_url")
+            )
+            or "https://api.artimo.com.co",
+            "auth_base_url": _normalize_optional_text(
+                raw.get("auth_base_url") or existing.get("auth_base_url")
+            )
+            or "https://apifront.artimo.com.co",
+            "customer_id": _normalize_optional_text(
+                raw.get("customer_id") or existing.get("customer_id")
+            ),
+            "group_name": _normalize_optional_text(
+                raw.get("group_name") or existing.get("group_name")
+            ),
+            "month_start_hour_utc": _normalize_optional_int(
+                raw.get("month_start_hour_utc", existing.get("month_start_hour_utc")),
+                5,
+            ),
+            "month_end_hour_utc": _normalize_optional_int(
+                raw.get("month_end_hour_utc", existing.get("month_end_hour_utc")),
+                16,
+            ),
+        }
+        if username:
+            normalized["username"] = username
+        elif existing.get("username"):
+            normalized["username"] = existing["username"]
+        if password:
+            normalized["password"] = password
+        elif existing.get("password"):
+            normalized["password"] = existing["password"]
+        return normalized
 
-    normalized = {
-        "api_base_url": _normalize_optional_text(
-            raw.get("api_base_url") or existing.get("api_base_url")
+    if normalized_provider_key == "logitracs_triton":
+        normalized = {
+            "codigo_empresa": _normalize_optional_text(raw.get("codigo_empresa")) or "",
+            "triton_login_url": _normalize_optional_text(
+                raw.get("triton_login_url") or existing.get("triton_login_url")
+            )
+            or "https://triton.logitracs.com/Logitracs.Triton/api/Usuarios/Login",
+            "logivim_base_url": _normalize_optional_text(
+                raw.get("logivim_base_url") or existing.get("logivim_base_url")
+            )
+            or "https://triton.logitracs.com/LogiVIMwebTriton/public",
+        }
+        pw_web = _normalize_optional_text(raw.get("password_web")) or _normalize_optional_text(
+            existing.get("password_web")
         )
-        or "https://api.artimo.com.co",
-        "auth_base_url": _normalize_optional_text(
-            raw.get("auth_base_url") or existing.get("auth_base_url")
-        )
-        or "https://apifront.artimo.com.co",
-        "customer_id": _normalize_optional_text(
-            raw.get("customer_id") or existing.get("customer_id")
-        ),
-        "group_name": _normalize_optional_text(
-            raw.get("group_name") or existing.get("group_name")
-        ),
-        "month_start_hour_utc": _normalize_optional_int(
-            raw.get("month_start_hour_utc", existing.get("month_start_hour_utc")),
-            5,
-        ),
-        "month_end_hour_utc": _normalize_optional_int(
-            raw.get("month_end_hour_utc", existing.get("month_end_hour_utc")),
-            16,
-        ),
-    }
-    if username:
-        normalized["username"] = username
-    elif existing.get("username"):
-        normalized["username"] = existing["username"]
-    if password:
-        normalized["password"] = password
-    elif existing.get("password"):
-        normalized["password"] = existing["password"]
-    return normalized
+        if pw_web:
+            normalized["password_web"] = pw_web
+        return normalized
+
+    return {}
 
 
 def public_provider_config(provider_key: str, provider_config: dict[str, Any] | None) -> dict[str, Any]:
     normalized_provider_key = normalize_provider_key(provider_key)
-    if normalized_provider_key != "artimo" or not isinstance(provider_config, dict):
+    if not isinstance(provider_config, dict):
         return {}
-    return {
-        "api_base_url": provider_config.get("api_base_url"),
-        "auth_base_url": provider_config.get("auth_base_url"),
-        "customer_id": provider_config.get("customer_id"),
-        "group_name": provider_config.get("group_name"),
-        "month_start_hour_utc": provider_config.get("month_start_hour_utc"),
-        "month_end_hour_utc": provider_config.get("month_end_hour_utc"),
-        "username": provider_config.get("username"),
-    }
+    if normalized_provider_key == "artimo":
+        return {
+            "api_base_url": provider_config.get("api_base_url"),
+            "auth_base_url": provider_config.get("auth_base_url"),
+            "customer_id": provider_config.get("customer_id"),
+            "group_name": provider_config.get("group_name"),
+            "month_start_hour_utc": provider_config.get("month_start_hour_utc"),
+            "month_end_hour_utc": provider_config.get("month_end_hour_utc"),
+            "username": provider_config.get("username"),
+        }
+    if normalized_provider_key == "logitracs_triton":
+        return {
+            "codigo_empresa": provider_config.get("codigo_empresa"),
+            "triton_login_url": provider_config.get("triton_login_url"),
+            "logivim_base_url": provider_config.get("logivim_base_url"),
+        }
+    return {}

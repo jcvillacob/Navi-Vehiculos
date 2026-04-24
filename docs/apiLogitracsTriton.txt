@@ -1,0 +1,355 @@
+!pip install beautifulsoup4 lxml requests-toolbelt --quiet
+
+import requests
+import urllib.parse
+import re
+import json
+import base64
+import pandas as pd
+from bs4 import BeautifulSoup
+from pathlib import Path
+from requests_toolbelt.multipart.encoder import MultipartEncoder
+
+# ── URLs ────────────────────────────────────────────────────────────────────
+TRITON_LOGIN_PAGE = "https://triton.logitracs.com/Logitracs.Triton/Login"
+TRITON_API_LOGIN  = "https://triton.logitracs.com/Logitracs.Triton/api/Usuarios/Login"
+LOGIVIM_SSO_URL   = "https://triton.logitracs.com/LogiVIMwebTriton/public/loginLogitracs/usuario/{email}"
+LOGIVIM_LOGIN_URL = "https://triton.logitracs.com/LogiVIMwebTriton/public/login"
+VER_INFO_URL      = "https://triton.logitracs.com/LogiVIMwebTriton/public/ver-informacion-especifica"
+INFORME_URL       = "https://triton.logitracs.com/LogiVIMwebTriton/public/informeOperacionalFlota"
+
+# ── Credenciales Triton ─────────────────────────────────────────────────────
+USERNAME       = "JULIANU"
+PASSWORD       = "JULI4NURR3A*"
+CODIGO_EMPRESA = "GRUPOK"
+
+# ── Credenciales LogiVIM Web (Laravel) ──────────────────────────────────────
+# El email sale del JWT. La contraseña debes obtenerla (prueba la misma de Triton,
+# o '123456', o la que sea que tengas para el login web de LogiVIM)
+PASSWORD_WEB = "123456"   # ← AJUSTA si no es ésta
+
+# ── Filtros del informe ─────────────────────────────────────────────────────
+FECHA_INICIO = "2026-03-01"
+FECHA_FIN    = "2026-03-31"
+
+OUTPUT_HTML = "informe_operacional_flota.html"
+OUTPUT_CSV  = "informe_operacional_flota.csv"
+OUTPUT_XLSX = "informe_operacional_flota.xlsx"
+
+# ─────────────────────────────────────────────────────────────────────────────
+session = requests.Session()
+session.headers.update({
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    "Accept-Language": "es-ES,es;q=0.9",
+})
+
+
+def get_xsrf():
+    t = session.cookies.get("XSRF-TOKEN")
+    return urllib.parse.unquote(t) if t else None
+
+def inject_xsrf():
+    x = get_xsrf()
+    if x:
+        session.headers["X-XSRF-TOKEN"] = x
+
+def decode_jwt_payload(jwt):
+    p = jwt.split(".")[1]
+    p += "=" * (-len(p) % 4)
+    return json.loads(base64.urlsafe_b64decode(p))
+
+def csrf_from_html(html):
+    soup = BeautifulSoup(html, "lxml")
+    inp = soup.find("input", {"name": "_token"})
+    if inp and inp.get("value"):
+        return inp["value"]
+    meta = soup.find("meta", {"name": "csrf-token"})
+    return meta["content"] if meta and meta.get("content") else None
+
+def looks_like_login(html):
+    return ('name="password"' in html) or ('type="password"' in html)
+
+
+# ── PASO 1: Cookies iniciales de Triton ─────────────────────────────────────
+print("[1/6] Cookies iniciales Triton...")
+session.get(TRITON_LOGIN_PAGE).raise_for_status()
+inject_xsrf()
+
+
+# ── PASO 2: Login API Triton ────────────────────────────────────────────────
+print("[2/6] Login API Triton...")
+session.headers.update({
+    "Content-Type": "application/json;charset=UTF-8",
+    "Accept":       "application/json, text/plain, */*",
+    "Origin":       "https://triton.logitracs.com",
+    "Referer":      TRITON_LOGIN_PAGE,
+})
+r = session.post(TRITON_API_LOGIN, json={
+    "username": USERNAME, "password": PASSWORD, "codigoEmpresa": CODIGO_EMPRESA
+})
+r.raise_for_status()
+jwt = r.json()["token"]
+email_usuario = decode_jwt_payload(jwt)["EmailUsuario"]
+print(f"    ✅ Email LogiVIM: {email_usuario}")
+
+
+# ── PASO 3: SSO + ver-informacion-especifica ────────────────────────────────
+print("[3/6] SSO LogiVIM + ver-informacion-especifica...")
+session.headers.pop("Content-Type", None)
+session.headers.update({
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer":         "https://triton.logitracs.com/Logitracs.Triton/LogiVim",
+    "Sec-Fetch-Dest":  "iframe",
+    "Sec-Fetch-Mode":  "navigate",
+    "Sec-Fetch-Site":  "same-origin",
+    "Upgrade-Insecure-Requests": "1",
+})
+sso_url = LOGIVIM_SSO_URL.format(email=urllib.parse.quote(email_usuario, safe="@"))
+resp_sso = session.get(sso_url, allow_redirects=True)
+resp_sso.raise_for_status()
+inject_xsrf()
+
+session.headers["Referer"] = resp_sso.url
+session.get(VER_INFO_URL, allow_redirects=True).raise_for_status()
+inject_xsrf()
+
+
+# ── PASO 4: Login web Laravel (POST /login con email+password) ──────────────
+print("[4/6] Login web Laravel...")
+
+# Si resp_sso ya trae el form de login, úsalo. Si no, GET a /login
+if looks_like_login(resp_sso.text):
+    login_html = resp_sso.text
+    login_page_url = resp_sso.url
+else:
+    r_login = session.get(LOGIVIM_LOGIN_URL, allow_redirects=True)
+    r_login.raise_for_status()
+    login_html = r_login.text
+    login_page_url = r_login.url
+    inject_xsrf()
+
+token_login = csrf_from_html(login_html)
+if not token_login:
+    Path("login_page.html").write_text(login_html, encoding="utf-8")
+    raise RuntimeError("No encontré _token en la página de login. Guardé login_page.html")
+
+print(f"    _token login: {token_login[:30]}...")
+
+login_payload = {
+    "_token":   token_login,
+    "email":    email_usuario,
+    "password": PASSWORD_WEB,
+}
+r_do_login = session.post(
+    LOGIVIM_LOGIN_URL,
+    data=login_payload,
+    headers={"Origin": "https://triton.logitracs.com", "Referer": login_page_url},
+    allow_redirects=True,
+)
+inject_xsrf()
+
+if looks_like_login(r_do_login.text):
+    Path("login_failed.html").write_bytes(r_do_login.content)
+    raise RuntimeError(
+        "Login web falló — sigo en la página de login. "
+        "Verifica PASSWORD_WEB. Guardado en login_failed.html"
+    )
+print(f"    ✅ Login web OK. URL final: {r_do_login.url}")
+
+
+# ── PASO 5: GET al informe para _token ──────────────────────────────────────
+print("[5/6] GET informe para _token...")
+r_informe = session.get(INFORME_URL, allow_redirects=True)
+r_informe.raise_for_status()
+inject_xsrf()
+
+if looks_like_login(r_informe.text):
+    raise RuntimeError("Tras login me devuelve al login. Sesión no autenticada.")
+
+token_informe = csrf_from_html(r_informe.text)
+if not token_informe:
+    Path("informe_page.html").write_text(r_informe.text, encoding="utf-8")
+    raise RuntimeError("No encontré _token del informe. Guardado en informe_page.html")
+print(f"    ✅ _token: {token_informe[:30]}...")
+
+
+# ── PASO 6: POST al informe + parseo ────────────────────────────────────────
+print(f"[6/6] POST informe ({FECHA_INICIO} → {FECHA_FIN})...")
+payload = {
+    "_token":            token_informe,
+    "fechaInicioFiltro": FECHA_INICIO,
+    "fechaFinFiltro":    FECHA_FIN,
+    "idCobertura":       "0",
+    "lgOperacion":       "0",
+    "lgFrente":          "0",
+    "id":                "",
+}
+common_headers = {
+    "Origin":  "https://triton.logitracs.com",
+    "Referer": INFORME_URL,
+    "Accept":  "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+resp = session.post(INFORME_URL, data=payload, headers=common_headers, timeout=60)
+
+if (resp.status_code in (400, 415, 419)
+    or "TokenMismatch" in resp.text
+    or looks_like_login(resp.text)):
+    print("    ↻ Reintentando con multipart...")
+    m = MultipartEncoder(fields=payload)
+    resp = session.post(
+        INFORME_URL, data=m,
+        headers={**common_headers, "Content-Type": m.content_type},
+        timeout=60,
+    )
+
+print(f"    Status: {resp.status_code}")
+
+if resp.status_code != 200 or looks_like_login(resp.text):
+    Path("error_response.html").write_bytes(resp.content)
+    raise RuntimeError("POST del informe falló. Guardado en error_response.html")
+
+Path(OUTPUT_HTML).write_bytes(resp.content)
+print(f"    ✅ HTML: {OUTPUT_HTML}")
+
+
+# ── Parseo de la tabla ──────────────────────────────────────────────────────
+print("\nParseando tabla del informe...")
+soup = BeautifulSoup(resp.text, "lxml")
+tabla = soup.find("table", {"id": "order-listingFleet"}) or soup.find("table")
+if tabla is None:
+    raise ValueError("No se encontró <table> en el HTML.")
+
+headers_row = [re.sub(r"\s+", " ", th.get_text(" ", strip=True)).strip()
+               for th in tabla.find("thead").find_all("th")]
+
+num_re = re.compile(r"^-?\d+(\.\d+)?$")
+def parse_cell(txt):
+    if txt is None: return None
+    txt = txt.replace("\xa0", " ").strip()
+    txt = re.sub(r"\s+", " ", txt)
+    if txt == "" or txt in ("-", "—"): return None
+    if txt.endswith("%"):
+        try: return float(txt.rstrip("%").replace(",", ""))
+        except: return txt
+    t2 = txt.replace(",", "")
+    if num_re.match(t2):
+        try: return float(t2)
+        except: pass
+    return txt
+
+rows = []
+for tr in tabla.find("tbody").find_all("tr"):
+    cells = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+    cells += [None] * (len(headers_row) - len(cells))
+    rows.append(cells[:len(headers_row)])
+
+df = pd.DataFrame(rows, columns=headers_row).applymap(parse_cell)
+print(f"✅ {len(df)} filas × {len(df.columns)} columnas\n")
+print(df.head(10))
+
+df.to_csv(OUTPUT_CSV,  index=False, encoding="utf-8-sig")
+df.to_excel(OUTPUT_XLSX, index=False)
+print(f"\n✅ CSV:  {OUTPUT_CSV}")
+print(f"✅ XLSX: {OUTPUT_XLSX}")
+
+
+
+
+
+RESPONSE:
+
+[1/6] Cookies iniciales Triton...
+[2/6] Login API Triton...
+    ✅ Email LogiVIM: JULIANUGRUPOK2@logitracs.com
+[3/6] SSO LogiVIM + ver-informacion-especifica...
+[4/6] Login web Laravel...
+    _token login: 69KT696J00FlxL8ioe801FIwDMhMwF...
+    ✅ Login web OK. URL final: https://triton.logitracs.com/LogiVIMwebTriton/public/informeOperacionalFlota
+[5/6] GET informe para _token...
+    ✅ _token: BYLesjh7LiXCWRlJgwGMy67CeuPaL3...
+[6/6] POST informe (2026-03-01 → 2026-03-31)...
+    Status: 200
+    ✅ HTML: informe_operacional_flota.html
+
+Parseando tabla del informe...
+✅ 19 filas × 44 columnas
+
+  Detalle   Placa Tipo motor  Kilometraje  Combustible  Combustible Ralenti  \
+0     Ver  LJX019   ISG12460      5173.00       838.77                26.55   
+1     Ver  LJX020   ISG12460      4310.75       743.51                47.42   
+2     Ver  LJX021   ISG12460      6127.21      1009.40                21.27   
+3     Ver  LJX023   ISG12460      5086.32       740.61                15.72   
+4     Ver  LJX024   ISG12460      6460.84       899.64                25.23   
+5     Ver  LJX025   ISG12460      2966.07       499.55                16.91   
+6     Ver  LJX026   ISG12460      5556.76       796.21                35.40   
+7     Ver  LJX053   ISG12460        28.41        13.21                 7.00   
+8     Ver  LJX054   ISG12460      1139.64       248.19                27.47   
+9     Ver  LJX055   ISG12460      6007.45      1045.06                24.57   
+
+   Rendimiento  Rendimiento Horas          Tiempo Encendido  \
+0         6.17               4.34   8 días, 1 horas, 20 min   
+1         5.80               4.14  7 días, 11 horas, 22 min   
+2         6.07               5.88   7 días, 3 horas, 47 min   
+3         6.87               4.60   6 días, 17 horas, 1 min   
+4         7.18               4.16    9 días, 0 horas, 4 min   
+5         5.94               3.96    5 días, 6 horas, 0 min   
+6         6.98               3.56   9 días, 7 horas, 39 min   
+7         2.15               0.39   1 días, 9 horas, 56 min   
+8         4.59               2.88  3 días, 14 horas, 13 min   
+9         5.75               4.73   9 días, 4 horas, 48 min   
+
+   Tiempo Encendido(h)  ... Consumo de urea  Relacion urea (%)  \
+0               193.34  ...          25.361               3.02   
+1               179.38  ...          22.072               2.97   
+2               171.79  ...          30.279               3.00   
+3               161.02  ...          22.198               3.00   
+4               216.07  ...          26.988               3.00   
+5               126.01  ...          14.812               2.97   
+6               223.65  ...          23.773               2.99   
+7                33.94  ...           0.402               3.04   
+8                86.22  ...           7.421               2.99   
+9               220.80  ...          31.310               3.00   
+
+  Tiempo taller(h)  Tiempo taller  Kilometraje Vo  Odometro final  \
+0              0.0           None         5283.20        238328.0   
+1              0.0           None         4360.55        289684.0   
+2              0.0           None         6228.08        268747.0   
+3              0.0           None         4577.62        258636.0   
+4              0.0           None         6029.95        274837.0   
+5              0.0           None         2708.50        278532.0   
+6              0.0           None         6141.10        355825.0   
+7              0.0           None           25.11        228821.0   
+8              0.0           None         1166.80        207218.0   
+9              0.0           None         6082.45        307214.0   
+
+   Consumo Gas(kilos)  Rendimiento Gas Veces frenada larga  \
+0                 0.0              0.0                 0.0   
+1                 0.0              0.0              1018.0   
+2                 0.0              0.0              1057.0   
+3                 0.0              0.0              1113.0   
+4                 0.0              0.0              1883.0   
+5                 0.0              0.0              1165.0   
+6                 0.0              0.0              1795.0   
+7                 0.0              0.0                 5.0   
+8                 0.0              0.0               619.0   
+9                 0.0              0.0              1289.0   
+
+              Frenada larga  
+0                      None  
+1   0 días, 6 horas, 36 min  
+2   0 días, 2 horas, 56 min  
+3    0 días, 9 horas, 9 min  
+4  0 días, 16 horas, 44 min  
+5  0 días, 15 horas, 46 min  
+6  0 días, 10 horas, 53 min  
+7    0 días, 0 horas, 1 min  
+8   0 días, 4 horas, 29 min  
+9   0 días, 7 horas, 59 min  
+
+[10 rows x 44 columns]
+
+✅ CSV:  informe_operacional_flota.csv
+✅ XLSX: informe_operacional_flota.xlsx
+/tmp/ipykernel_1635/2775156207.py:247: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  df = pd.DataFrame(rows, columns=headers_row).applymap(parse_cell)
