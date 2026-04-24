@@ -14,6 +14,13 @@ import { DATABASE_PROVIDERS } from "../features/customers/providerCatalog";
 const PERFORMANCE_PROVIDER_KEYS = new Set(
   DATABASE_PROVIDERS.filter((provider) => provider.supportsMonthlyPerformance).map((provider) => provider.key)
 );
+const STATUS_FILTER_OPTIONS = [
+  { key: "calculated", label: "Calculadas", className: "is-calculated" },
+  { key: "partial", label: "Parciales", className: "is-partial" },
+  { key: "unbound", label: "Sin binding", className: "is-unbound" },
+  { key: "no_data", label: "Sin datos", className: "is-no-data" },
+  { key: "error", label: "Error", className: "is-error" }
+];
 
 function getCurrentMonth() {
   return new Date().toISOString().slice(0, 7);
@@ -25,6 +32,7 @@ function buildOptions(rows, getValue) {
 
 function filterRows(rows, filters, omit = "") {
   return rows.filter((row) => {
+    if (omit !== "status" && filters.status && row.calculation_status !== filters.status) return false;
     if (omit !== "client" && filters.client && row.client_name !== filters.client) return false;
     if (omit !== "database" && filters.database && row.database_name !== filters.database) return false;
     if (omit !== "motorGroup" && filters.motorGroup && (row.engine_name || "Sin catalogar") !== filters.motorGroup) {
@@ -124,6 +132,7 @@ export default function RendimientosPage() {
   const [loading, setLoading] = useState(false);
   const [payload, setPayload] = useState({ month: getCurrentMonth(), summary: null, rows: [] });
   const [filters, setFilters] = useState({
+    status: "",
     client: "",
     database: "",
     motorGroup: "",
@@ -247,6 +256,15 @@ export default function RendimientosPage() {
   }, [filters.motorGroup, motorGroupOptions]);
 
   const filteredRows = useMemo(() => filterRows(payload.rows, filters), [filters, payload.rows]);
+  const statusCounts = useMemo(() => {
+    const counts = Object.fromEntries(STATUS_FILTER_OPTIONS.map((option) => [option.key, 0]));
+    for (const row of filterRows(payload.rows, filters, "status")) {
+      if (counts[row.calculation_status] !== undefined) {
+        counts[row.calculation_status] += 1;
+      }
+    }
+    return counts;
+  }, [filters, payload.rows]);
 
   const sortedRows = useMemo(() => {
     if (!sortConfig.key) return filteredRows;
@@ -350,7 +368,14 @@ export default function RendimientosPage() {
   };
 
   const handleClear = () => {
-    setFilters({ client: "", database: "", motorGroup: "", plateSearch: "" });
+    setFilters({ status: "", client: "", database: "", motorGroup: "", plateSearch: "" });
+  };
+
+  const handleStatusChipClick = (status) => {
+    setFilters((current) => ({
+      ...current,
+      status: current.status === status ? "" : status
+    }));
   };
 
   const handleSort = (key) => {
@@ -422,6 +447,7 @@ export default function RendimientosPage() {
       const filterRowsSheet = [
         { Filtro: "Desde", Valor: monthFrom || "Todos" },
         { Filtro: "Hasta", Valor: monthTo || "Todos" },
+        { Filtro: "Estado", Valor: filters.status ? getStatusLabel(filters.status) : "Todos" },
         { Filtro: "Cliente", Valor: filters.client || "Todos" },
         { Filtro: "Database", Valor: filters.database || "Todas" },
         { Filtro: "Grupo de motor", Valor: filters.motorGroup || "Todos" },
@@ -595,11 +621,21 @@ export default function RendimientosPage() {
         </header>
 
         <div className="rendimientos-status-strip">
-          <span className="status-chip is-calculated">Calculadas: {payload.summary?.calculated ?? 0}</span>
-          <span className="status-chip is-partial">Parciales: {payload.summary?.partial ?? 0}</span>
-          <span className="status-chip is-unbound">Sin binding: {payload.summary?.unbound ?? 0}</span>
-          <span className="status-chip is-no-data">Sin datos: {payload.summary?.no_data ?? 0}</span>
-          <span className="status-chip is-error">Error: {payload.summary?.error ?? 0}</span>
+          {STATUS_FILTER_OPTIONS.map((option) => {
+            const isActive = filters.status === option.key;
+            return (
+              <button
+                key={option.key}
+                type="button"
+                className={`status-chip ${option.className} ${isActive ? "is-active" : ""}`}
+                onClick={() => handleStatusChipClick(option.key)}
+                aria-pressed={isActive}
+                title={isActive ? `Quitar filtro ${option.label}` : `Filtrar por ${option.label}`}
+              >
+                {option.label}: {statusCounts[option.key] ?? 0}
+              </button>
+            );
+          })}
         </div>
 
         <div className="rendimientos-range-bar">

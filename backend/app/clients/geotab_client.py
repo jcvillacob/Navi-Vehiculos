@@ -468,6 +468,9 @@ def vehicle_exists_for_plate(plate: str, cfg: GeotabConfig) -> bool:
 
 _SESSION_CACHE: dict[str, mygeotab.API] = {}
 _SESSION_LOCK = threading.Lock()
+_DEVICE_CACHE_TTL_SECONDS = 300
+_DEVICE_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_DEVICE_CACHE_LOCK = threading.Lock()
 
 
 def get_authenticated_client(username: str, password: str, database: str) -> mygeotab.API:
@@ -499,6 +502,51 @@ def _invalidate_session(username: str, database: str) -> None:
     """Remove a stale cached session so the next call re-authenticates."""
     with _SESSION_LOCK:
         _SESSION_CACHE.pop(f"{database}:{username}", None)
+
+
+def _device_cache_key(username: str, database: str) -> str:
+    return f"{database}:{username}:devices"
+
+
+def invalidate_device_cache(username: str, database: str) -> None:
+    with _DEVICE_CACHE_LOCK:
+        _DEVICE_CACHE.pop(_device_cache_key(username, database), None)
+
+
+def get_cached_devices(username: str, password: str, database: str) -> list[dict[str, Any]]:
+    cache_key = _device_cache_key(username, database)
+    now = _time.time()
+
+    with _DEVICE_CACHE_LOCK:
+        cached = _DEVICE_CACHE.get(cache_key)
+        if cached is not None:
+            expires_at, devices = cached
+            if expires_at > now:
+                return devices
+            _DEVICE_CACHE.pop(cache_key, None)
+
+    with _DEVICE_CACHE_LOCK:
+        cached = _DEVICE_CACHE.get(cache_key)
+        if cached is not None:
+            expires_at, devices = cached
+            if expires_at > _time.time():
+                return devices
+            _DEVICE_CACHE.pop(cache_key, None)
+
+        client = get_authenticated_client(username, password, database)
+        devices = _get_all_devices(client)
+        _DEVICE_CACHE[cache_key] = (_time.time() + _DEVICE_CACHE_TTL_SECONDS, devices)
+        return devices
+
+
+def get_cached_device_from_plate(plate: str, cfg: GeotabConfig) -> dict | None:
+    devices = get_cached_devices(cfg.username, cfg.password, cfg.database)
+    return _find_device_in_collection(devices, plate=plate)
+
+
+def get_cached_device_from_vin(vin: str, cfg: GeotabConfig) -> dict | None:
+    devices = get_cached_devices(cfg.username, cfg.password, cfg.database)
+    return _find_device_in_collection(devices, vin=vin)
 
 
 # ==============================================================================

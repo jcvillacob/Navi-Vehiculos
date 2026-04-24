@@ -2476,7 +2476,7 @@ def _validate_vehicle_in_customer_geotab(
     password: str,
 ) -> str:
     try:
-        from app.clients.geotab_client import get_device_from_plate, get_device_from_vin
+        from app.clients.geotab_client import get_cached_device_from_plate, get_cached_device_from_vin
         from app.core.config import GeotabConfig
 
         customer_geotab_cfg = GeotabConfig(
@@ -2484,9 +2484,9 @@ def _validate_vehicle_in_customer_geotab(
             password=password,
             database=database_name,
         )
-        if plate and get_device_from_plate(plate, customer_geotab_cfg):
+        if plate and get_cached_device_from_plate(plate, customer_geotab_cfg):
             return "found"
-        if vin and get_device_from_vin(vin, customer_geotab_cfg):
+        if vin and get_cached_device_from_vin(vin, customer_geotab_cfg):
             return "found"
         return "not_found"
     except Exception:

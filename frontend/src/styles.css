@@ -2599,6 +2599,33 @@ input[readonly] {
   flex-wrap: nowrap;
 }
 
+.bulk-selection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.bulk-selection-meta {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.bulk-selection-meta strong {
+  color: var(--text);
+}
+
+.bulk-selection-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
 /* ── Bulk refresh progress bar ── */
 
 .bulk-progress-bar-container {
@@ -2688,6 +2715,10 @@ input[readonly] {
 
 .vehicles-table tbody tr:hover td {
   background: var(--bg);
+}
+
+.vehicles-table tbody tr.is-selected td {
+  background: rgba(31, 143, 95, 0.07);
 }
 
 .vehicles-table td strong {
@@ -2852,6 +2883,23 @@ input[readonly] {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+.status-chip:hover {
+  transform: translateY(-1px);
+}
+
+.status-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(53, 69, 80, 0.14);
+}
+
+.status-chip.is-active {
+  border-color: currentColor;
+  box-shadow: inset 0 0 0 1px currentColor;
 }
 
 .status-chip.is-calculated {
@@ -3397,6 +3445,11 @@ input[readonly] {
 
   .vehicles-filter-actions {
     flex-wrap: wrap;
+  }
+
+  .bulk-selection-toolbar {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 

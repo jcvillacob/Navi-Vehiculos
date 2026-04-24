@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import Can from "../components/Can";
 import ToastStack from "../components/ToastStack";
@@ -8,6 +8,7 @@ import { useBulkRefresh } from "../context/BulkRefreshContext";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicleAssignments";
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
+import BulkVehicleAssignmentModal from "../features/vehicles/components/BulkVehicleAssignmentModal";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
 import { assignVehicleDatabase, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab } from "../api/vehicleApi";
 
@@ -38,10 +39,14 @@ function AttachmentIcon({ contentType }) {
 
 export default function VehiclesPage() {
   const [selectedVehicle, setSelectedVehicle] = useState(null);
+  const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
+  const [bulkAssigning, setBulkAssigning] = useState(false);
+  const [selectedPlates, setSelectedPlates] = useState(() => new Set());
   const [refreshingPlates, setRefreshingPlates] = useState(new Set());
   const [filterClient, setFilterClient] = useState("");
   const [filterMotor, setFilterMotor] = useState("");
   const [filterDatabase, setFilterDatabase] = useState("");
+  const selectAllRef = useRef(null);
   const { loading, vehicles, error, search, setSearch, loadVehicles } = useVehicleAssignments();
   const { customers, loading: customersLoading } = useCustomersCatalog();
   const { motors, loading: motorsLoading } = useMotorsCatalog();
@@ -130,6 +135,42 @@ export default function VehiclesPage() {
     return result;
   }, [vehicles, filterClient, filterMotor, filterDatabase]);
 
+  useEffect(() => {
+    const visiblePlates = new Set(filteredVehicles.map((vehicle) => vehicle.plate));
+    setSelectedPlates((current) => {
+      const next = new Set([...current].filter((plate) => visiblePlates.has(plate)));
+      if (
+        next.size === current.size &&
+        [...next].every((plate) => current.has(plate))
+      ) {
+        return current;
+      }
+      return next;
+    });
+  }, [filteredVehicles]);
+
+  const selectedVehicles = useMemo(
+    () => filteredVehicles.filter((vehicle) => selectedPlates.has(vehicle.plate)),
+    [filteredVehicles, selectedPlates]
+  );
+
+  const allVisibleSelected =
+    filteredVehicles.length > 0 && filteredVehicles.every((vehicle) => selectedPlates.has(vehicle.plate));
+  const someVisibleSelected =
+    !allVisibleSelected && filteredVehicles.some((vehicle) => selectedPlates.has(vehicle.plate));
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someVisibleSelected;
+    }
+  }, [someVisibleSelected]);
+
+  useEffect(() => {
+    if (bulkAssignOpen && selectedVehicles.length === 0) {
+      setBulkAssignOpen(false);
+    }
+  }, [bulkAssignOpen, selectedVehicles.length]);
+
   const summary = useMemo(() => {
     const registered = filteredVehicles.filter((vehicle) => vehicle.engine_name).length;
     const withRules = filteredVehicles.filter((vehicle) => vehicle.has_motor_rules).length;
@@ -145,6 +186,32 @@ export default function VehiclesPage() {
     setFilterClient("");
     setFilterMotor("");
     setFilterDatabase("");
+    setSelectedPlates(new Set());
+    setBulkAssignOpen(false);
+  };
+
+  const handleToggleVehicleSelection = (plate) => {
+    setSelectedPlates((current) => {
+      const next = new Set(current);
+      if (next.has(plate)) {
+        next.delete(plate);
+      } else {
+        next.add(plate);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleVisibleSelection = () => {
+    setSelectedPlates((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) {
+        filteredVehicles.forEach((vehicle) => next.delete(vehicle.plate));
+      } else {
+        filteredVehicles.forEach((vehicle) => next.add(vehicle.plate));
+      }
+      return next;
+    });
   };
 
   const handleUpdateVehicle = async (payload) => {
@@ -219,6 +286,43 @@ export default function VehiclesPage() {
     }
   };
 
+  const handleBulkAssignVehicles = async (payload) => {
+    const plates = selectedVehicles.map((vehicle) => vehicle.plate);
+    if (!plates.length) return;
+
+    setBulkAssigning(true);
+    try {
+      const failedPlates = [];
+      for (const plate of plates) {
+        try {
+          await assignVehicleDatabase(plate, payload);
+        } catch {
+          failedPlates.push(plate);
+        }
+      }
+
+      await loadVehicles(search);
+
+      if (failedPlates.length) {
+        setSelectedPlates(new Set(failedPlates));
+        const sample = failedPlates.slice(0, 5).join(", ");
+        pushToast(
+          "error",
+          `Se actualizaron ${plates.length - failedPlates.length} vehiculos y fallaron ${failedPlates.length}: ${sample}${failedPlates.length > 5 ? "..." : ""}`
+        );
+      } else {
+        setSelectedPlates(new Set());
+        pushToast("success", `${plates.length} vehiculos actualizados correctamente.`);
+      }
+
+      setBulkAssignOpen(false);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "No fue posible aplicar la asignacion masiva");
+    } finally {
+      setBulkAssigning(false);
+    }
+  };
+
   return (
     <section className="panel">
       <ToastStack toasts={toasts} />
@@ -260,6 +364,16 @@ export default function VehiclesPage() {
             <button type="button" className="button-secondary button-sm" onClick={handleClear} disabled={loading}>
               Limpiar
             </button>
+            <Can permission="vehicles.edit">
+              <button
+                type="button"
+                className="button-secondary button-sm"
+                onClick={() => setBulkAssignOpen(true)}
+                disabled={loading || bulkAssigning || selectedVehicles.length === 0}
+              >
+                Asignar seleccionados ({selectedVehicles.length})
+              </button>
+            </Can>
             <Can permission="vehicles.refresh">
               <button
                 type="button"
@@ -328,6 +442,30 @@ export default function VehiclesPage() {
 
         </div>
 
+        <div className="bulk-selection-toolbar">
+          <span className="bulk-selection-meta">
+            Seleccionados: <strong>{selectedVehicles.length}</strong> de {filteredVehicles.length} visibles
+          </span>
+          <div className="actions-row">
+            <button
+              type="button"
+              className="button-secondary button-sm"
+              onClick={handleToggleVisibleSelection}
+              disabled={filteredVehicles.length === 0}
+            >
+              {allVisibleSelected ? "Quitar visibles" : `Seleccionar visibles (${filteredVehicles.length})`}
+            </button>
+            <button
+              type="button"
+              className="button-secondary button-sm"
+              onClick={() => setSelectedPlates(new Set())}
+              disabled={selectedVehicles.length === 0}
+            >
+              Limpiar seleccion
+            </button>
+          </div>
+        </div>
+
         {/* ── Bulk refresh progress ── */}
         {bulkRefresh?.status === "running" ? (
           <div className="bulk-progress-bar-container">
@@ -378,6 +516,15 @@ export default function VehiclesPage() {
             <table className="vehicles-table">
               <thead>
                 <tr>
+                  <th>
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={handleToggleVisibleSelection}
+                      aria-label="Seleccionar vehiculos visibles"
+                    />
+                  </th>
                   <th>Placa</th>
                   <th>Marca</th>
                   <th>Linea</th>
@@ -398,7 +545,15 @@ export default function VehiclesPage() {
               </thead>
               <tbody>
                 {filteredVehicles.map((vehicle) => (
-                  <tr key={vehicle.plate}>
+                  <tr key={vehicle.plate} className={selectedPlates.has(vehicle.plate) ? "is-selected" : ""}>
+                    <td data-label="Seleccion">
+                      <input
+                        type="checkbox"
+                        checked={selectedPlates.has(vehicle.plate)}
+                        onChange={() => handleToggleVehicleSelection(vehicle.plate)}
+                        aria-label={`Seleccionar ${vehicle.plate}`}
+                      />
+                    </td>
                     <td data-label="Placa">
                       <strong>{vehicle.plate}</strong>
                     </td>
@@ -520,6 +675,15 @@ export default function VehiclesPage() {
         onRevalidateCustomerGeotab={handleRevalidateCustomerGeotab}
         canEditVehicle={canEditVehicles}
         canRevalidateCustomerGeotab={canRefreshVehicles}
+      />
+
+      <BulkVehicleAssignmentModal
+        open={bulkAssignOpen}
+        loading={bulkAssigning || loading || customersLoading}
+        customers={customers}
+        vehicles={selectedVehicles}
+        onClose={() => setBulkAssignOpen(false)}
+        onSubmit={handleBulkAssignVehicles}
       />
     </section>
   );
