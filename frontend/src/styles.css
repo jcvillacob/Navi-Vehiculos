@@ -2776,6 +2776,46 @@ input[readonly] {
   background: var(--border);
 }
 
+.db-status-connected {
+  background: var(--status-ok-bg);
+  color: var(--status-ok-text);
+  border: 1px solid var(--status-ok-border);
+}
+
+.db-status-disconnected {
+  background: var(--status-partial-bg);
+  color: var(--status-partial-text);
+  border: 1px solid var(--status-partial-border);
+}
+
+.db-status-not-found,
+.db-status-error {
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+  border: 1px solid var(--status-error-border);
+}
+
+.db-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.db-status-dot-ok {
+  background: #2f8c2f;
+}
+
+.db-status-dot-warn {
+  background: #d18c00;
+}
+
+.db-status-dot-error {
+  background: #c52b2b;
+}
+
 .vehicles-empty-state {
   gap: 8px;
 }

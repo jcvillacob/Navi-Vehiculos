@@ -10,7 +10,7 @@ import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicle
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
 import BulkVehicleAssignmentModal from "../features/vehicles/components/BulkVehicleAssignmentModal";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
-import { assignVehicleDatabase, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab } from "../api/vehicleApi";
+import { assignVehicleDatabase, checkVehicleConnections, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab } from "../api/vehicleApi";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
@@ -37,15 +37,74 @@ function AttachmentIcon({ contentType }) {
   );
 }
 
+function DbConnectionBadge({ vehicle, result, checking }) {
+  const dbType = vehicle.database_connection_type;
+  const eligible = dbType === "geotab" || !vehicle.customer_database_id;
+  const dbTypeKey = dbType || (vehicle.customer_database_id ? "unknown" : "none");
+  const dbLabel = dbType ? dbType.toUpperCase() : vehicle.customer_database_id ? "?" : "GEOTAB";
+
+  if (!eligible) {
+    return (
+      <span
+        className={`status geotab-badge db-type-badge db-type-${dbTypeKey}`}
+        title={`Tipo: ${dbType || "desconocido"} (no aplica revision Geotab)`}
+      >
+        {dbLabel}
+      </span>
+    );
+  }
+
+  const status = result?.status;
+  const statusToClass = {
+    connected: "db-status-connected",
+    disconnected: "db-status-disconnected",
+    not_found: "db-status-not-found",
+    error: "db-status-error",
+  };
+  const statusToTitle = {
+    connected: "Conectado (comunicacion en las ultimas 24h)",
+    disconnected: "Encontrado en Geotab pero sin comunicacion reciente",
+    not_found: "No encontrado en Geotab",
+    error: "Error revisando la conexion",
+  };
+  const statusToDot = {
+    connected: "db-status-dot-ok",
+    disconnected: "db-status-dot-warn",
+    not_found: "db-status-dot-error",
+    error: "db-status-dot-error",
+  };
+
+  const baseClass = status ? statusToClass[status] : `db-type-${dbTypeKey}`;
+  const title = status
+    ? statusToTitle[status]
+    : checking
+      ? "Revisando conexion..."
+      : `${dbType ? "Geotab del cliente" : "Geotab global"} (sin revisar)`;
+  const dotClass = status ? statusToDot[status] : null;
+
+  return (
+    <span
+      className={`status geotab-badge db-type-badge ${baseClass}`}
+      title={title}
+    >
+      {dotClass ? <span className={`db-status-dot ${dotClass}`} aria-hidden /> : null}
+      {dbLabel}
+    </span>
+  );
+}
+
 export default function VehiclesPage() {
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [selectedPlates, setSelectedPlates] = useState(() => new Set());
   const [refreshingPlates, setRefreshingPlates] = useState(new Set());
+  const [checkingConnections, setCheckingConnections] = useState(false);
+  const [connectionResults, setConnectionResults] = useState({});
   const [filterClient, setFilterClient] = useState("");
   const [filterMotor, setFilterMotor] = useState("");
   const [filterDatabase, setFilterDatabase] = useState("");
+  const [filterConnection, setFilterConnection] = useState("");
   const selectAllRef = useRef(null);
   const { loading, vehicles, error, search, setSearch, loadVehicles } = useVehicleAssignments();
   const { customers, loading: customersLoading } = useCustomersCatalog();
@@ -132,8 +191,19 @@ export default function VehiclesPage() {
     if (filterDatabase) {
       result = result.filter((v) => v.database_name === filterDatabase);
     }
+    if (filterConnection) {
+      result = result.filter((v) => {
+        const eligible = v.database_connection_type === "geotab" || !v.customer_database_id;
+        const status = eligible ? connectionResults[v.plate]?.status : "not_applicable";
+        if (filterConnection === "active") return status === "connected";
+        if (filterConnection === "inactive") return status === "disconnected" || status === "not_found";
+        if (filterConnection === "unchecked") return eligible && !status;
+        if (filterConnection === "not_applicable") return !eligible;
+        return true;
+      });
+    }
     return result;
-  }, [vehicles, filterClient, filterMotor, filterDatabase]);
+  }, [vehicles, filterClient, filterMotor, filterDatabase, filterConnection, connectionResults]);
 
   useEffect(() => {
     const visiblePlates = new Set(filteredVehicles.map((vehicle) => vehicle.plate));
@@ -186,6 +256,7 @@ export default function VehiclesPage() {
     setFilterClient("");
     setFilterMotor("");
     setFilterDatabase("");
+    setFilterConnection("");
     setSelectedPlates(new Set());
     setBulkAssignOpen(false);
   };
@@ -286,6 +357,25 @@ export default function VehiclesPage() {
     }
   };
 
+  const handleCheckConnections = async () => {
+    setCheckingConnections(true);
+    try {
+      const result = await checkVehicleConnections();
+      setConnectionResults(result.results || {});
+      const parts = [
+        `${result.connected || 0} conectado(s)`,
+        `${result.disconnected || 0} desconectado(s)`,
+        `${result.not_found || 0} no encontrado(s)`,
+      ];
+      if (result.errors) parts.push(`${result.errors} error(es)`);
+      pushToast(result.errors > 0 ? "warning" : "success", `Conexiones revisadas: ${parts.join(", ")}.`);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "No fue posible revisar conexiones");
+    } finally {
+      setCheckingConnections(false);
+    }
+  };
+
   const handleBulkAssignVehicles = async (payload) => {
     const plates = selectedVehicles.map((vehicle) => vehicle.plate);
     if (!plates.length) return;
@@ -378,6 +468,16 @@ export default function VehiclesPage() {
               <button
                 type="button"
                 className="button button-sm"
+                onClick={handleCheckConnections}
+                disabled={loading || checkingConnections}
+              >
+                {checkingConnections ? "Revisando..." : "Revisar conexión"}
+              </button>
+            </Can>
+            <Can permission="vehicles.refresh">
+              <button
+                type="button"
+                className="button button-sm"
                 onClick={() => startBulkRefresh(filteredVehicles.map((v) => v.plate))}
                 disabled={loading || Boolean(bulkRefresh) || filteredVehicles.length === 0}
               >
@@ -437,6 +537,21 @@ export default function VehiclesPage() {
               {databaseOptions.map((name) => (
                 <option key={name} value={name}>{name}</option>
               ))}
+            </select>
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="vehicles-filter-connection">Conexion</label>
+            <select
+              id="vehicles-filter-connection"
+              value={filterConnection}
+              onChange={(event) => setFilterConnection(event.target.value)}
+            >
+              <option value="">Todas</option>
+              <option value="active">Activos</option>
+              <option value="inactive">Inactivos</option>
+              <option value="unchecked">Sin revisar</option>
+              <option value="not_applicable">No aplica</option>
             </select>
           </div>
 
@@ -563,14 +678,11 @@ export default function VehiclesPage() {
                     <td data-label="VIN">{vehicle.vin || "Sin VIN"}</td>
                     <td data-label="CPL">{vehicle.cpl || "Sin CPL"}</td>
                     <td data-label="DB">
-                      <span
-                        className={`status geotab-badge db-type-badge db-type-${vehicle.database_connection_type || "unknown"}`}
-                        title={`Tipo: ${vehicle.database_connection_type || "desconocido"}`}
-                      >
-                        {vehicle.database_connection_type
-                          ? vehicle.database_connection_type.toUpperCase()
-                          : "?"}
-                      </span>
+                      <DbConnectionBadge
+                        vehicle={vehicle}
+                        result={connectionResults[vehicle.plate]}
+                        checking={checkingConnections}
+                      />
                     </td>
                     <td data-label="Motor">{vehicle.engine_name || "Sin catalogar"}</td>
                     <td data-label="TEC#">{vehicle.technical_number}</td>

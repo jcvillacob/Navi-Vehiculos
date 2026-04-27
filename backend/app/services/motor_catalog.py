@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +51,6 @@ from app.services.provider_registry import (
     public_provider_config,
     uses_access_url,
 )
-import logging
 
 _logger = logging.getLogger(__name__)
 
@@ -2822,3 +2823,149 @@ def get_dashboard_summary() -> DashboardSummary:
         recent_motors=recent_motors,
         recent_vehicles=recent_vehicles,
     )
+
+
+def check_all_geotab_connections() -> dict[str, Any]:
+    from app.clients.geotab_client import (
+        _device_matches_plate,
+        _get_all_devices,
+        _parse_geotab_datetime,
+        _search_entities,
+        build_client,
+    )
+    from app.core.config import load_geotab_config
+
+    now = datetime.now(timezone.utc)
+    recently_threshold = timedelta(hours=24)
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    a.plate,
+                    a.customer_database_id,
+                    cd.database_name,
+                    cd.username,
+                    cd.password,
+                    cd.connection_type
+                FROM vehicle_motor_assignments a
+                LEFT JOIN customer_databases cd
+                    ON cd.id = a.customer_database_id;
+                """
+            )
+            vehicles = cur.fetchall()
+
+    counters = {
+        "connected": 0,
+        "disconnected": 0,
+        "not_found": 0,
+        "not_applicable": 0,
+        "errors": 0,
+    }
+    results_by_plate: dict[str, dict[str, Any]] = {}
+
+    main_geotab_cfg: GeotabConfig | None = None
+    try:
+        main_geotab_cfg = load_geotab_config()
+    except Exception:
+        _logger.warning("No fue posible cargar la configuracion de Geotab global", exc_info=True)
+
+    snapshot_cache: dict[tuple[str, str, str], tuple[list[dict], dict[str, dict]] | None] = {}
+
+    def _snapshot_for(cfg: GeotabConfig) -> tuple[list[dict], dict[str, dict]] | None:
+        key = (cfg.database, cfg.username, cfg.password)
+        if key in snapshot_cache:
+            return snapshot_cache[key]
+        try:
+            client = build_client(cfg)
+            devices = _get_all_devices(client)
+            status_rows = _search_entities(client, "DeviceStatusInfo", None)
+        except Exception:
+            _logger.warning(
+                "No fue posible obtener Devices/DeviceStatusInfo de Geotab (db=%s, user=%s)",
+                cfg.database,
+                cfg.username,
+                exc_info=True,
+            )
+            snapshot_cache[key] = None
+            return None
+        status_by_device_id: dict[str, dict] = {}
+        for status in status_rows:
+            device_ref = status.get("device")
+            if isinstance(device_ref, dict):
+                device_id = device_ref.get("id")
+                if device_id:
+                    status_by_device_id[str(device_id)] = status
+        snapshot_cache[key] = (devices, status_by_device_id)
+        return snapshot_cache[key]
+
+    for vehicle in vehicles:
+        plate = str(vehicle["plate"]).strip().upper()
+        connection_type = vehicle["connection_type"]
+        customer_db_id = vehicle["customer_database_id"]
+
+        if customer_db_id and connection_type != "geotab":
+            counters["not_applicable"] += 1
+            results_by_plate[plate] = {"status": "not_applicable"}
+            continue
+
+        if customer_db_id and connection_type == "geotab":
+            password = str(vehicle["password"] or "").strip()
+            username = str(vehicle["username"] or "").strip()
+            database_name = str(vehicle["database_name"] or "").strip()
+            if not password or not username or not database_name:
+                counters["errors"] += 1
+                results_by_plate[plate] = {"status": "error"}
+                continue
+            cfg = GeotabConfig(username=username, password=password, database=database_name)
+        else:
+            if main_geotab_cfg is None:
+                counters["errors"] += 1
+                results_by_plate[plate] = {"status": "error"}
+                continue
+            cfg = main_geotab_cfg
+
+        snapshot = _snapshot_for(cfg)
+        if snapshot is None:
+            counters["errors"] += 1
+            results_by_plate[plate] = {"status": "error"}
+            continue
+
+        devices, status_by_device_id = snapshot
+
+        device = next((d for d in devices if _device_matches_plate(d, plate)), None)
+        if device is None:
+            counters["not_found"] += 1
+            results_by_plate[plate] = {"status": "not_found"}
+            continue
+
+        device_id = device.get("id")
+        status_info = status_by_device_id.get(str(device_id)) if device_id else None
+        last_comm_raw = (status_info or {}).get("dateTime")
+
+        if last_comm_raw:
+            try:
+                last_comm = _parse_geotab_datetime(last_comm_raw)
+            except Exception:
+                counters["errors"] += 1
+                results_by_plate[plate] = {"status": "error"}
+                _logger.warning("No fue posible parsear dateTime para %s", plate, exc_info=True)
+                continue
+            is_recent = (now - last_comm) <= recently_threshold
+        else:
+            is_recent = bool((status_info or {}).get("isDeviceCommunicating"))
+
+        if is_recent:
+            counters["connected"] += 1
+            results_by_plate[plate] = {"status": "connected"}
+        else:
+            counters["disconnected"] += 1
+            results_by_plate[plate] = {"status": "disconnected"}
+
+    return {
+        "total": len(vehicles),
+        **counters,
+        "results": results_by_plate,
+    }

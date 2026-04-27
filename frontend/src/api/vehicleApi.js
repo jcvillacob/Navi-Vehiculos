@@ -286,6 +286,13 @@ export async function revalidateCustomerGeotab(plate) {
   return parseJsonOrThrow(response, "Error revalidando Geotab del cliente");
 }
 
+export async function checkVehicleConnections() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/vehicle/check-connections"), {
+    method: "POST",
+  });
+  return parseJsonOrThrow(response, "Error revisando conexiones de vehiculos");
+}
+
 // ── Motors ────────────────────────────────────────────────────────────────────
 
 export async function listMotors() {

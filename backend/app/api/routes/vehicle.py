@@ -10,6 +10,7 @@ from app.schemas.vehicle import (
 )
 from app.services.motor_catalog import (
     assign_vehicle_database,
+    check_all_geotab_connections,
     list_vehicle_assignments,
     register_vehicle_assignment,
     revalidate_vehicle_customer_geotab,
@@ -96,3 +97,13 @@ def revalidate_customer_geotab(
     except ValueError as exc:
         status_code = 404 if "no existe" in str(exc).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.post(
+    "/check-connections",
+    description="Revisa el estado de conexion en Geotab para todos los vehiculos elegibles",
+)
+def check_vehicle_connections(
+    _user: dict = Depends(require_permission("vehicles.refresh")),
+) -> dict:
+    return check_all_geotab_connections()
