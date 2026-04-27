@@ -532,8 +532,7 @@ export default function VehiclesPage() {
                   <th>Combustible</th>
                   <th>VIN</th>
                   <th>CPL</th>
-                  <th>Navitrans</th>
-                  <th>Cliente</th>
+                  <th>DB</th>
                   <th>Motor</th>
                   <th>TEC#</th>
                   <th>Cliente</th>
@@ -563,27 +562,15 @@ export default function VehiclesPage() {
                     <td data-label="Combustible">{vehicle.tipo_combustible || "-"}</td>
                     <td data-label="VIN">{vehicle.vin || "Sin VIN"}</td>
                     <td data-label="CPL">{vehicle.cpl || "Sin CPL"}</td>
-                    <td data-label="Navitrans">
-                      <span className={`status geotab-badge geotab-${vehicle.geotab_status}`}>
-                        {vehicle.geotab_status === "found"
-                          ? "OK"
-                          : vehicle.geotab_status === "not_found"
-                            ? "NO"
-                            : "?"}
+                    <td data-label="DB">
+                      <span
+                        className={`status geotab-badge db-type-badge db-type-${vehicle.database_connection_type || "unknown"}`}
+                        title={`Tipo: ${vehicle.database_connection_type || "desconocido"}`}
+                      >
+                        {vehicle.database_connection_type
+                          ? vehicle.database_connection_type.toUpperCase()
+                          : "?"}
                       </span>
-                    </td>
-                    <td data-label="Cliente">
-                      {vehicle.geotab_customer_status === "not_applicable" ? (
-                        <span className="status geotab-badge geotab-na">N/A</span>
-                      ) : (
-                        <span className={`status geotab-badge geotab-${vehicle.geotab_customer_status}`}>
-                          {vehicle.geotab_customer_status === "found"
-                            ? "OK"
-                            : vehicle.geotab_customer_status === "not_found"
-                              ? "NO"
-                              : "?"}
-                        </span>
-                      )}
                     </td>
                     <td data-label="Motor">{vehicle.engine_name || "Sin catalogar"}</td>
                     <td data-label="TEC#">{vehicle.technical_number}</td>

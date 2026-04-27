@@ -1306,6 +1306,36 @@ input[readonly] {
   opacity: 0.7;
 }
 
+.db-type-badge {
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+
+.db-type-geotab {
+  background: var(--status-ok-bg);
+  color: var(--status-ok-text);
+  border: 1px solid var(--status-ok-border);
+}
+
+.db-type-database {
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+  border: 1px solid var(--status-error-border);
+}
+
+.db-type-artimo {
+  background: var(--status-warn-bg);
+  color: var(--status-warn-text);
+  border: 1px solid var(--status-warn-border);
+}
+
+.db-type-unknown,
+.db-type-null {
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+}
+
 .geotab-type-label {
   margin-left: 6px;
   font-size: 9px;
