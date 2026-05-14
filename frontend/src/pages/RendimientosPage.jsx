@@ -5,6 +5,7 @@ import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import {
   calculateMonthlyPerformance,
+  fetchConnectionStats,
   fetchMonthlyPerformance,
   listCustomers,
   listVehicleAssignments
@@ -155,6 +156,7 @@ export default function RendimientosPage() {
     plateSearch: ""
   });
   const [sortConfig, setSortConfig] = useState({ key: "", direction: "asc" });
+  const [connStats, setConnStats] = useState({});
 
   const isRange = monthFrom !== monthTo;
   const pickerRef = useRef(null);
@@ -237,6 +239,35 @@ export default function RendimientosPage() {
   useEffect(() => {
     loadRecords(monthFrom, monthTo).catch(() => {});
   }, [monthFrom, monthTo, loadRecords]);
+
+  // Load connection stats for current visible month range
+  useEffect(() => {
+    const months = generateMonthRange(
+      monthFrom <= monthTo ? monthFrom : monthTo,
+      monthFrom <= monthTo ? monthTo : monthFrom
+    );
+    Promise.all(months.map((m) => fetchConnectionStats(m).catch(() => [])))
+      .then((results) => {
+        const merged = {};
+        for (const rows of results) {
+          for (const row of rows) {
+            const prev = merged[row.plate];
+            if (!prev) {
+              merged[row.plate] = { ...row };
+            } else {
+              prev.days_checked += row.days_checked;
+              prev.days_connected += row.days_connected;
+              prev.days_disconnected += row.days_disconnected;
+              prev.connection_pct = prev.days_checked > 0
+                ? Math.round(prev.days_connected / prev.days_checked * 1000) / 10
+                : 0;
+              prev.consecutive_disconnected = Math.max(prev.consecutive_disconnected, row.consecutive_disconnected);
+            }
+          }
+        }
+        setConnStats(merged);
+      });
+  }, [monthFrom, monthTo]);
 
   const clientOptions = useMemo(() => {
     const subset = filterRows(payload.rows, filters, "client");
@@ -324,6 +355,8 @@ export default function RendimientosPage() {
             return row.hours_ecm > 0 && row.fuel_gallons !== null && row.fuel_gallons !== undefined
               ? row.fuel_gallons / row.hours_ecm
               : null;
+          case "conn_pct":
+            return connStats[row.plate]?.connection_pct ?? -1;
           default:
             return "";
         }
@@ -338,7 +371,7 @@ export default function RendimientosPage() {
       if (comparison !== 0) return comparison;
       return compareValues(left.plate || "", right.plate || "", "asc");
     });
-  }, [filteredRows, sortConfig]);
+  }, [filteredRows, sortConfig, connStats]);
 
   const sortableColumns = [
     { key: "status", label: "Estado" },
@@ -356,7 +389,8 @@ export default function RendimientosPage() {
     { key: "hours_gps", label: "Hrs GPS" },
     { key: "fuel_gallons", label: "Galones" },
     { key: "kpg", label: "KPG" },
-    { key: "gph", label: "GPH" }
+    { key: "gph", label: "GPH" },
+    { key: "conn_pct", label: "Conexion %" }
   ];
 
   const visibleSummary = useMemo(() => {
@@ -454,6 +488,7 @@ export default function RendimientosPage() {
           ? row.fuel_gallons / row.hours_ecm
           : null;
 
+        const cs = connStats[row.plate];
         return {
           Mes: row.period_month || "",
           Estado: getStatusLabel(row.calculation_status),
@@ -471,7 +506,11 @@ export default function RendimientosPage() {
           "Hrs GPS": row.hours_gps,
           Galones: row.fuel_gallons,
           KPG: kpg,
-          GPH: gph
+          GPH: gph,
+          "Conexion %": cs ? cs.connection_pct : null,
+          "Dias conectado": cs ? cs.days_connected : null,
+          "Dias revisados": cs ? cs.days_checked : null,
+          "Dias desconectado consecutivos": cs ? cs.consecutive_disconnected : null
         };
       });
 
@@ -831,6 +870,25 @@ export default function RendimientosPage() {
                       <td data-label="Galones">{formatMetric(row.fuel_gallons, 0)}</td>
                       <td data-label="KPG">{formatMetric(kpg, 2)}</td>
                       <td data-label="GPH">{formatMetric(gph, 2)}</td>
+                      <td data-label="Conexion %">
+                        {(() => {
+                          const cs = connStats[row.plate];
+                          if (!cs) return <span className="conn-pct-badge conn-pct-none">--</span>;
+                          const level = cs.connection_pct >= 80 ? "good" : cs.connection_pct >= 50 ? "warn" : "bad";
+                          const alert = cs.consecutive_disconnected >= 3;
+                          return (
+                            <span
+                              className={`conn-pct-badge conn-pct-${level}${alert ? " conn-pct-alert" : ""}`}
+                              title={`${cs.days_connected}/${cs.days_checked} dias conectado${alert ? ` | ${cs.consecutive_disconnected} dias seguidos desconectado` : ""}`}
+                            >
+                              <span className="conn-pct-bar">
+                                <span className="conn-pct-fill" style={{ width: `${cs.connection_pct}%` }} />
+                              </span>
+                              <span className="conn-pct-label">{Math.round(cs.connection_pct)}%</span>
+                            </span>
+                          );
+                        })()}
+                      </td>
                     </tr>
                   );
                 })}

@@ -539,6 +539,18 @@ def _ensure_motor_tables(conn: psycopg.Connection) -> None:
             END $$;
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vehicle_connection_log (
+                id BIGSERIAL PRIMARY KEY,
+                plate VARCHAR(10) NOT NULL REFERENCES vehicle_motor_assignments(plate),
+                check_date DATE NOT NULL,
+                status TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (plate, check_date)
+            );
+            """
+        )
     _sync_inferred_provider_types(conn)
 
 
@@ -2969,3 +2981,109 @@ def check_all_geotab_connections() -> dict[str, Any]:
         **counters,
         "results": results_by_plate,
     }
+
+
+def save_connection_snapshot() -> dict[str, Any]:
+    """Run connection check and persist results to vehicle_connection_log."""
+    from datetime import timedelta, timezone as tz
+
+    col_tz = tz(timedelta(hours=-5))
+    today_col = datetime.now(col_tz).date()
+
+    result = check_all_geotab_connections()
+    results_by_plate: dict[str, dict] = result.get("results", {})
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            for plate, info in results_by_plate.items():
+                if info["status"] == "not_applicable":
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO vehicle_connection_log (plate, check_date, status)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (plate, check_date)
+                    DO UPDATE SET status = EXCLUDED.status;
+                    """,
+                    (plate, today_col, info["status"]),
+                )
+        conn.commit()
+
+    return result
+
+
+def get_connection_stats(month: str) -> list[dict[str, Any]]:
+    """Return per-vehicle connection stats for a given month (YYYY-MM)."""
+    month_start = f"{month}-01"
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    plate,
+                    COUNT(*) AS days_checked,
+                    COUNT(*) FILTER (WHERE status = 'connected') AS days_connected
+                FROM vehicle_connection_log
+                WHERE check_date >= %s::date
+                  AND check_date < (%s::date + INTERVAL '1 month')
+                GROUP BY plate;
+                """,
+                (month_start, month_start),
+            )
+            agg_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT DISTINCT ON (plate) plate, check_date, status
+                FROM vehicle_connection_log
+                WHERE check_date >= %s::date
+                  AND check_date < (%s::date + INTERVAL '1 month')
+                ORDER BY plate, check_date DESC;
+                """,
+                (month_start, month_start),
+            )
+            latest_by_plate = {row["plate"]: row for row in cur.fetchall()}
+
+            streak_plates = [
+                p for p, row in latest_by_plate.items() if row["status"] != "connected"
+            ]
+            streaks: dict[str, int] = {}
+            for plate in streak_plates:
+                cur.execute(
+                    """
+                    SELECT status
+                    FROM vehicle_connection_log
+                    WHERE plate = %s
+                      AND check_date >= %s::date
+                      AND check_date < (%s::date + INTERVAL '1 month')
+                    ORDER BY check_date DESC;
+                    """,
+                    (plate, month_start, month_start),
+                )
+                count = 0
+                for row in cur.fetchall():
+                    if row["status"] != "connected":
+                        count += 1
+                    else:
+                        break
+                streaks[plate] = count
+
+    stats = []
+    for row in agg_rows:
+        plate = row["plate"]
+        days_checked = row["days_checked"]
+        days_connected = row["days_connected"]
+        pct = round(days_connected / days_checked * 100, 1) if days_checked > 0 else 0
+        stats.append({
+            "plate": plate,
+            "days_checked": days_checked,
+            "days_connected": days_connected,
+            "days_disconnected": days_checked - days_connected,
+            "connection_pct": pct,
+            "consecutive_disconnected": streaks.get(plate, 0),
+        })
+
+    return stats

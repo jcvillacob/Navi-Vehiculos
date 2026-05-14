@@ -16,6 +16,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from app.schemas.vehicle import MonthlyPerformanceCalculateRequest
+from app.services.motor_catalog import save_connection_snapshot
 from app.services.rendimientos import calculate_monthly_performance
 
 logging.basicConfig(
@@ -42,6 +43,22 @@ def _run() -> None:
 
     months_to_calculate.append(current_month)
 
+    # --- Connection snapshot ---
+    logger.info("Running Geotab connection snapshot for %s ...", now.strftime("%Y-%m-%d"))
+    try:
+        snap = save_connection_snapshot()
+        logger.info(
+            "Connection snapshot done — total: %d, connected: %d, disconnected: %d, not_found: %d, errors: %d",
+            snap.get("total", 0),
+            snap.get("connected", 0),
+            snap.get("disconnected", 0),
+            snap.get("not_found", 0),
+            snap.get("errors", 0),
+        )
+    except Exception:
+        logger.exception("Connection snapshot failed — continuing with performance calculation")
+
+    # --- Performance calculation ---
     logger.info(
         "Starting daily performance calculation — months: %s (Colombia date: %s)",
         months_to_calculate,

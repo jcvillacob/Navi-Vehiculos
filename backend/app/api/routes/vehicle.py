@@ -11,6 +11,7 @@ from app.schemas.vehicle import (
 from app.services.motor_catalog import (
     assign_vehicle_database,
     check_all_geotab_connections,
+    get_connection_stats,
     list_vehicle_assignments,
     register_vehicle_assignment,
     revalidate_vehicle_customer_geotab,
@@ -107,3 +108,14 @@ def check_vehicle_connections(
     _user: dict = Depends(require_permission("vehicles.refresh")),
 ) -> dict:
     return check_all_geotab_connections()
+
+
+@router.get(
+    "/connection-stats",
+    description="Estadisticas de conexion por vehiculo para un mes dado",
+)
+def vehicle_connection_stats(
+    month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="Mes en formato YYYY-MM"),
+    _user: dict = Depends(require_permission("rendimientos.view")),
+) -> list[dict]:
+    return get_connection_stats(month)

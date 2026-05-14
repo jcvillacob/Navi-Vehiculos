@@ -293,6 +293,11 @@ export async function checkVehicleConnections() {
   return parseJsonOrThrow(response, "Error revisando conexiones de vehiculos");
 }
 
+export async function fetchConnectionStats(month) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/connection-stats?month=${month}`));
+  return parseJsonOrThrow(response, "Error obteniendo estadisticas de conexion");
+}
+
 // ── Motors ────────────────────────────────────────────────────────────────────
 
 export async function listMotors() {
