@@ -95,6 +95,20 @@ function formatMonthLabel(monthStr) {
   return `${names[parseInt(m, 10) - 1]} ${year}`;
 }
 
+function generateMonthRange(from, to) {
+  const months = [];
+  const [startYear, startMonth] = from.split("-").map(Number);
+  const [endYear, endMonth] = to.split("-").map(Number);
+  let y = startYear;
+  let m = startMonth;
+  while (y < endYear || (y === endYear && m <= endMonth)) {
+    months.push(`${y}-${String(m).padStart(2, "0")}`);
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return months;
+}
+
 function buildExportFileName(monthFrom, monthTo) {
   const range = monthFrom === monthTo ? monthFrom : `${monthFrom}_a_${monthTo}`;
   return `rendimientos_${range}.xlsx`;
@@ -120,8 +134,10 @@ export default function RendimientosPage() {
   const { toasts, pushToast } = useToasts();
 
   // ── Calculation controls (header) ──
-  const [calcMonth, setCalcMonth] = useState(getCurrentMonth);
+  const [calcMonthFrom, setCalcMonthFrom] = useState(getCurrentMonth);
+  const [calcMonthTo, setCalcMonthTo] = useState(getCurrentMonth);
   const [calculating, setCalculating] = useState(false);
+  const [calcProgress, setCalcProgress] = useState({ current: 0, total: 0, currentMonth: "" });
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [eligibleClients, setEligibleClients] = useState([]);
   const [selectedCustomerIds, setSelectedCustomerIds] = useState([]);
@@ -388,23 +404,38 @@ export default function RendimientosPage() {
   };
 
   const handleCalculate = async () => {
+    const from = calcMonthFrom <= calcMonthTo ? calcMonthFrom : calcMonthTo;
+    const to = calcMonthFrom <= calcMonthTo ? calcMonthTo : calcMonthFrom;
+    const months = generateMonthRange(from, to);
     setCalculating(true);
-    try {
-      await calculateMonthlyPerformance({
-        month: calcMonth,
-        customer_ids: selectedCustomerIds,
-        force_recalculate: true
-      });
-      pushToast("success", `Rendimientos calculados para ${formatMonthLabel(calcMonth)}.`);
-      // Reload the table if the calculated month falls within the visible range
-      if (calcMonth >= monthFrom && calcMonth <= monthTo) {
-        await loadRecords(monthFrom, monthTo);
+    setCalcProgress({ current: 0, total: months.length, currentMonth: "" });
+
+    let errors = 0;
+    for (let i = 0; i < months.length; i++) {
+      const m = months[i];
+      setCalcProgress({ current: i + 1, total: months.length, currentMonth: m });
+      try {
+        await calculateMonthlyPerformance({
+          month: m,
+          customer_ids: selectedCustomerIds,
+          force_recalculate: true
+        });
+      } catch (err) {
+        errors++;
+        pushToast("error", `Error en ${formatMonthLabel(m)}: ${err instanceof Error ? err.message : "Error desconocido"}`);
       }
-    } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : "No fue posible calcular rendimientos");
-    } finally {
-      setCalculating(false);
     }
+
+    const ok = months.length - errors;
+    if (ok > 0) {
+      pushToast("success", `Rendimientos calculados: ${ok} de ${months.length} mes(es).`);
+    }
+    // Reload table if any calculated month overlaps with visible range
+    if (to >= monthFrom && from <= monthTo) {
+      await loadRecords(monthFrom, monthTo);
+    }
+    setCalculating(false);
+    setCalcProgress({ current: 0, total: 0, currentMonth: "" });
   };
 
   const handleExport = async () => {
@@ -482,12 +513,23 @@ export default function RendimientosPage() {
 
         <div className="rendimientos-month-actions">
           <div className="form-field">
-            <label htmlFor="rendimientos-calc-month">Mes a calcular</label>
+            <label htmlFor="rendimientos-calc-month-from">Desde</label>
             <input
-              id="rendimientos-calc-month"
+              id="rendimientos-calc-month-from"
               type="month"
-              value={calcMonth}
-              onChange={(event) => setCalcMonth(event.target.value)}
+              value={calcMonthFrom}
+              onChange={(event) => setCalcMonthFrom(event.target.value)}
+              disabled={calculating}
+            />
+          </div>
+          <div className="form-field">
+            <label htmlFor="rendimientos-calc-month-to">Hasta</label>
+            <input
+              id="rendimientos-calc-month-to"
+              type="month"
+              value={calcMonthTo}
+              onChange={(event) => setCalcMonthTo(event.target.value)}
+              disabled={calculating}
             />
           </div>
 
@@ -550,11 +592,30 @@ export default function RendimientosPage() {
           </details>
 
           <Can permission="rendimientos.refresh">
-            <button type="button" onClick={handleCalculate} disabled={calculating || !calcMonth}>
+            <button type="button" onClick={handleCalculate} disabled={calculating || !calcMonthFrom || !calcMonthTo}>
               {calculating ? "Calculando..." : "Calcular"}
             </button>
           </Can>
         </div>
+
+        {calculating && calcProgress.total > 0 && (
+          <div className="bulk-progress-bar-container" style={{ marginTop: 8 }}>
+            <div className="bulk-progress-header">
+              <span className="bulk-progress-label">
+                Calculando {formatMonthLabel(calcProgress.currentMonth)} ({calcProgress.current} de {calcProgress.total})
+              </span>
+              <span className="bulk-progress-percent">
+                {Math.round((calcProgress.current / calcProgress.total) * 100)}%
+              </span>
+            </div>
+            <div className="bulk-progress-track">
+              <div
+                className="bulk-progress-fill"
+                style={{ width: `${(calcProgress.current / calcProgress.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
       </header>
 
       <ToastStack toasts={toasts} />
