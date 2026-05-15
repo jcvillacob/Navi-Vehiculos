@@ -63,13 +63,18 @@ def _search_diagnostics(client, search: dict | None = None) -> list[dict]:
     return _search_entities(client, "Diagnostic", search)
 
 
-def _device_matches_plate(device: dict, plate: str) -> bool:
+def _device_matches_plate(device: dict, plate: str, plate_prefix: str | None = None) -> bool:
     normalized_plate = _normalize_plate(plate)
     if not normalized_plate:
         return False
 
+    candidates = [normalized_plate]
+    if plate_prefix:
+        candidates.append(plate_prefix.upper() + normalized_plate)
+
     for key in ("licensePlate", "name"):
-        if _normalize_plate(device.get(key)) == normalized_plate:
+        device_value = _normalize_plate(device.get(key))
+        if device_value and device_value in candidates:
             return True
     return False
 
@@ -82,10 +87,10 @@ def _device_matches_vin(device: dict, vin: str) -> bool:
 
 
 def _find_device_in_collection(
-    devices: list[dict], *, plate: str | None = None, vin: str | None = None
+    devices: list[dict], *, plate: str | None = None, vin: str | None = None, plate_prefix: str | None = None
 ) -> dict | None:
     for device in devices:
-        if plate and _device_matches_plate(device, plate):
+        if plate and _device_matches_plate(device, plate, plate_prefix=plate_prefix):
             return device
         if vin and _device_matches_vin(device, vin):
             return device
@@ -96,16 +101,21 @@ def _get_all_devices(client) -> list[dict]:
     return _search_devices(client)
 
 
-def find_device(client, *, plate: str | None = None, vin: str | None = None) -> dict | None:
+def find_device(client, *, plate: str | None = None, vin: str | None = None, plate_prefix: str | None = None) -> dict | None:
     normalized_plate = _normalize_plate(plate)
     normalized_vin = _normalize_vin(vin)
 
     if normalized_plate:
-        for field in ("licensePlate", "name"):
-            devices = _search_devices(client, {field: normalized_plate})
-            match = _find_device_in_collection(devices, plate=normalized_plate)
-            if match:
-                return match
+        search_values = [normalized_plate]
+        if plate_prefix:
+            search_values.append(plate_prefix.upper() + normalized_plate)
+
+        for search_plate in search_values:
+            for field in ("licensePlate", "name"):
+                devices = _search_devices(client, {field: search_plate})
+                match = _find_device_in_collection(devices, plate=normalized_plate, plate_prefix=plate_prefix)
+                if match:
+                    return match
 
     all_devices: list[dict] | None = None
 
@@ -118,15 +128,15 @@ def find_device(client, *, plate: str | None = None, vin: str | None = None) -> 
     if normalized_plate:
         if all_devices is None:
             all_devices = _get_all_devices(client)
-        match = _find_device_in_collection(all_devices, plate=normalized_plate)
+        match = _find_device_in_collection(all_devices, plate=normalized_plate, plate_prefix=plate_prefix)
         if match:
             return match
 
     return None
 
 
-def find_device_by_plate(client, plate: str) -> dict | None:
-    return find_device(client, plate=plate)
+def find_device_by_plate(client, plate: str, plate_prefix: str | None = None) -> dict | None:
+    return find_device(client, plate=plate, plate_prefix=plate_prefix)
 
 
 def extract_vin(device: dict) -> str | None:
@@ -440,17 +450,17 @@ def build_rule_inspection(cfg: GeotabConfig, rule_id: str, *, fallback_name: str
     return build_rule_inspection_with_client(client, rule_id, fallback_name=fallback_name)
 
 
-def get_vin_from_plate(plate: str, cfg: GeotabConfig) -> str | None:
+def get_vin_from_plate(plate: str, cfg: GeotabConfig, plate_prefix: str | None = None) -> str | None:
     client = build_client(cfg)
-    device = find_device_by_plate(client, plate)
+    device = find_device_by_plate(client, plate, plate_prefix=plate_prefix)
     if not device:
         return None
     return extract_vin(device)
 
 
-def get_device_from_plate(plate: str, cfg: GeotabConfig) -> dict | None:
+def get_device_from_plate(plate: str, cfg: GeotabConfig, plate_prefix: str | None = None) -> dict | None:
     client = build_client(cfg)
-    return find_device_by_plate(client, plate)
+    return find_device_by_plate(client, plate, plate_prefix=plate_prefix)
 
 
 def get_device_from_vin(vin: str, cfg: GeotabConfig) -> dict | None:
@@ -539,9 +549,9 @@ def get_cached_devices(username: str, password: str, database: str) -> list[dict
         return devices
 
 
-def get_cached_device_from_plate(plate: str, cfg: GeotabConfig) -> dict | None:
+def get_cached_device_from_plate(plate: str, cfg: GeotabConfig, plate_prefix: str | None = None) -> dict | None:
     devices = get_cached_devices(cfg.username, cfg.password, cfg.database)
-    return _find_device_in_collection(devices, plate=plate)
+    return _find_device_in_collection(devices, plate=plate, plate_prefix=plate_prefix)
 
 
 def get_cached_device_from_vin(vin: str, cfg: GeotabConfig) -> dict | None:

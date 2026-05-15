@@ -2880,6 +2880,37 @@ input[readonly] {
   50% { opacity: 0.3; }
 }
 
+/* Password input toggle */
+.password-input-wrapper {
+  position: relative;
+  display: flex;
+}
+
+.password-input-wrapper input {
+  padding-right: 40px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: color 130ms ease;
+}
+
+.password-toggle:hover {
+  color: var(--text);
+}
+
 /* ─────────────────────────────
    PERFORMANCE TABLE
 ───────────────────────────── */

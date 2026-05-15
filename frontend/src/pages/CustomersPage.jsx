@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import Can from "../components/Can";
+import PasswordInput from "../components/PasswordInput";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import { usePermission } from "../context/AuthContext";
@@ -198,9 +199,8 @@ function CreateDatabaseModal({ customers, loading, preselectedCustomerId, onClos
 
           <div className="form-field">
             <label htmlFor="create-db-password">Contrasena</label>
-            <input
+            <PasswordInput
               id="create-db-password"
-              type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="Ej: ********"
@@ -338,9 +338,8 @@ function CreateDatabaseModal({ customers, loading, preselectedCustomerId, onClos
                 <label htmlFor="create-db-logitracs-password-web">
                   Password web LogiVIM <span className="form-optional">(opcional)</span>
                 </label>
-                <input
+                <PasswordInput
                   id="create-db-logitracs-password-web"
-                  type="password"
                   value={providerConfigState.passwordWeb || ""}
                   onChange={(event) =>
                     setProviderConfigState((current) => ({ ...current, passwordWeb: event.target.value }))
@@ -460,9 +459,8 @@ function EditDatabaseModal({ database, loading, onClose, onSubmit }) {
             <label htmlFor="edit-db-password">
               Contrasena <span className="form-optional">(dejar vacio para no cambiar)</span>
             </label>
-            <input
+            <PasswordInput
               id="edit-db-password"
-              type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="********"
@@ -595,9 +593,8 @@ function EditDatabaseModal({ database, loading, onClose, onSubmit }) {
                 <label htmlFor="edit-db-logitracs-password-web">
                   Password web LogiVIM <span className="form-optional">(opcional)</span>
                 </label>
-                <input
+                <PasswordInput
                   id="edit-db-logitracs-password-web"
-                  type="password"
                   value={providerConfigState.passwordWeb || ""}
                   onChange={(event) =>
                     setProviderConfigState((current) => ({ ...current, passwordWeb: event.target.value }))

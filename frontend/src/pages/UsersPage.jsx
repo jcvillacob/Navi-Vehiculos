@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Can from "../components/Can";
 import { fetchSessions, listUsers, createUser, resetUserPassword, revokeSession, updateUser } from "../api/vehicleApi";
+import PasswordInput from "../components/PasswordInput";
 import { validatePasswordStrength } from "../utils/passwordValidation";
 
 const ROLE_LABELS = { admin: "Admin", editor: "Editor", viewer: "Viewer" };
@@ -45,7 +46,7 @@ function CreateUserModal({ loading, onClose, onSubmit }) {
           </div>
           <div className="form-field">
             <label htmlFor="cu-password">Contrasena</label>
-            <input id="cu-password" type="password" value={form.password} onChange={set("password")} placeholder="min 8 caracteres" required />
+            <PasswordInput id="cu-password" value={form.password} onChange={set("password")} placeholder="min 8 caracteres" required />
           </div>
           {form.password && passwordErrors.length ? (
             <div className="notice-banner notice-soft">{passwordErrors.join(" ")}</div>
@@ -155,7 +156,7 @@ function ResetPasswordModal({ user, loading, onClose, onSubmit }) {
         <form className="register-form" onSubmit={handleSubmit}>
           <div className="form-field">
             <label htmlFor="reset-password">Nueva contrasena</label>
-            <input id="reset-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+            <PasswordInput id="reset-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
           </div>
           {password && errors.length ? (
             <div className="notice-banner notice-soft">{errors.join(" ")}</div>

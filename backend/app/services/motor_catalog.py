@@ -2487,6 +2487,7 @@ def _validate_vehicle_in_customer_geotab(
     database_name: str,
     username: str,
     password: str,
+    plate_prefix: str | None = None,
 ) -> str:
     try:
         from app.clients.geotab_client import get_cached_device_from_plate, get_cached_device_from_vin
@@ -2497,7 +2498,7 @@ def _validate_vehicle_in_customer_geotab(
             password=password,
             database=database_name,
         )
-        if plate and get_cached_device_from_plate(plate, customer_geotab_cfg):
+        if plate and get_cached_device_from_plate(plate, customer_geotab_cfg, plate_prefix=plate_prefix):
             return "found"
         if vin and get_cached_device_from_vin(vin, customer_geotab_cfg):
             return "found"
@@ -2541,9 +2542,10 @@ def _validate_and_store_customer_geotab(
     username: str,
     password: str,
     customer_database_id: int,
+    plate_prefix: str | None = None,
 ) -> None:
     status = _validate_vehicle_in_customer_geotab(
-        plate, vin, database_name, username, password
+        plate, vin, database_name, username, password, plate_prefix=plate_prefix
     )
     _update_geotab_customer_status(plate, status, customer_database_id)
 
@@ -2565,7 +2567,8 @@ def revalidate_vehicle_customer_geotab(plate: str) -> dict[str, Any]:
                     cd.database_name,
                     cd.username,
                     cd.password,
-                    cd.connection_type
+                    cd.connection_type,
+                    cd.provider_config
                 FROM vehicle_motor_assignments a
                 LEFT JOIN customer_databases cd
                     ON cd.id = a.customer_database_id
@@ -2593,12 +2596,17 @@ def revalidate_vehicle_customer_geotab(plate: str) -> dict[str, Any]:
             "message": "La database asignada no es de tipo Geotab.",
         }
 
+    prov_cfg = row.get("provider_config") or {}
+    if isinstance(prov_cfg, str):
+        import json as _json
+        prov_cfg = _json.loads(prov_cfg)
     status = _validate_vehicle_in_customer_geotab(
         normalized_plate,
         row.get("vin"),
         row["database_name"],
         row["username"],
         row["password"],
+        plate_prefix=prov_cfg.get("plate_prefix"),
     )
     db_id = int(row["customer_database_id"])
     _update_geotab_customer_status(normalized_plate, status, db_id)
@@ -2661,6 +2669,7 @@ def assign_vehicle_database(
                     cd.access_url,
                     cd.password,
                     cd.connection_type,
+                    cd.provider_config,
                     (cd.password IS NOT NULL AND cd.password <> '') AS has_database_password
                 FROM customer_databases cd
                 INNER JOIN customers c
@@ -2763,6 +2772,10 @@ def assign_vehicle_database(
     )
 
     if is_geotab_db:
+        db_prov_cfg = selected_database.get("provider_config") or {}
+        if isinstance(db_prov_cfg, str):
+            import json as _json
+            db_prov_cfg = _json.loads(db_prov_cfg)
         try:
             _validate_and_store_customer_geotab(
                 normalized_plate,
@@ -2771,6 +2784,7 @@ def assign_vehicle_database(
                 selected_database["database_username"],
                 selected_database["password"],
                 int(selected_database["id"]),
+                plate_prefix=db_prov_cfg.get("plate_prefix"),
             )
         except Exception:
             _logger.warning(
@@ -2861,7 +2875,8 @@ def check_all_geotab_connections() -> dict[str, Any]:
                     cd.database_name,
                     cd.username,
                     cd.password,
-                    cd.connection_type
+                    cd.connection_type,
+                    cd.provider_config
                 FROM vehicle_motor_assignments a
                 LEFT JOIN customer_databases cd
                     ON cd.id = a.customer_database_id;
@@ -2917,6 +2932,11 @@ def check_all_geotab_connections() -> dict[str, Any]:
         plate = str(vehicle["plate"]).strip().upper()
         connection_type = vehicle["connection_type"]
         customer_db_id = vehicle["customer_database_id"]
+        prov_config = vehicle["provider_config"] if vehicle["provider_config"] else {}
+        if isinstance(prov_config, str):
+            import json as _json
+            prov_config = _json.loads(prov_config)
+        plate_prefix = prov_config.get("plate_prefix")
 
         if customer_db_id and connection_type != "geotab":
             counters["not_applicable"] += 1
@@ -2947,7 +2967,7 @@ def check_all_geotab_connections() -> dict[str, Any]:
 
         devices, status_by_device_id = snapshot
 
-        device = next((d for d in devices if _device_matches_plate(d, plate)), None)
+        device = next((d for d in devices if _device_matches_plate(d, plate, plate_prefix=plate_prefix)), None)
         if device is None:
             counters["not_found"] += 1
             results_by_plate[plate] = {"status": "not_found"}

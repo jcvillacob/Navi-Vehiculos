@@ -5,6 +5,7 @@ import Can from "./components/Can";
 import { changeOwnPassword, fetchSessions, revokeOtherSessions, revokeSession } from "./api/vehicleApi";
 import { useAuth } from "./context/AuthContext";
 import { BulkRefreshProvider } from "./context/BulkRefreshContext";
+import PasswordInput from "./components/PasswordInput";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { validatePasswordStrength } from "./utils/passwordValidation";
 import LoginPage from "./pages/LoginPage";
@@ -55,11 +56,11 @@ function ChangePasswordModal({ user, onClose }) {
         <form className="register-form" onSubmit={handleSubmit}>
           <div className="form-field">
             <label htmlFor="current-password">Contrasena actual</label>
-            <input id="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
+            <PasswordInput id="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
           </div>
           <div className="form-field">
             <label htmlFor="new-password">Nueva contrasena</label>
-            <input id="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+            <PasswordInput id="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
           </div>
           {newPassword && errors.length ? (
             <div className="notice-banner notice-soft">{errors.join(" ")}</div>

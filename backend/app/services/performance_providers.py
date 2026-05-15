@@ -608,7 +608,7 @@ class GeotabMonthlyPerformanceProvider:
             else:
                 device_id = bound_id
                 if not device_id:
-                    device = find_device_by_plate(api, target.plate)
+                    device = find_device_by_plate(api, target.plate, plate_prefix=target.provider_config.get("plate_prefix"))
                     device_id = str(device.get("id") or "").strip() if device else None
 
             if not device_id:
