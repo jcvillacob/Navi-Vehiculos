@@ -5,8 +5,11 @@ import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import {
   calculateMonthlyPerformance,
+  fetchActivePerformanceJobs,
   fetchConnectionStats,
   fetchMonthlyPerformance,
+  fetchPerformanceJob,
+  fetchRecentPerformanceJobs,
   listCustomers,
   listVehicleAssignments
 } from "../api/vehicleApi";
@@ -138,10 +141,18 @@ export default function RendimientosPage() {
   const [calcMonthFrom, setCalcMonthFrom] = useState(getCurrentMonth);
   const [calcMonthTo, setCalcMonthTo] = useState(getCurrentMonth);
   const [calculating, setCalculating] = useState(false);
-  const [calcProgress, setCalcProgress] = useState({ current: 0, total: 0, currentMonth: "" });
+  const [calcProgress, setCalcProgress] = useState({
+    current: 0,
+    total: 0,
+    currentMonth: "",
+    processedTargets: 0,
+    totalTargets: 0,
+    jobId: null
+  });
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [eligibleClients, setEligibleClients] = useState([]);
   const [selectedCustomerIds, setSelectedCustomerIds] = useState([]);
+  const pollingCancelledRef = useRef(false);
 
   // ── Table range controls ──
   const [monthFrom, setMonthFrom] = useState(getCurrentMonth);
@@ -157,6 +168,9 @@ export default function RendimientosPage() {
   });
   const [sortConfig, setSortConfig] = useState({ key: "", direction: "asc" });
   const [connStats, setConnStats] = useState({});
+  const [recentJobs, setRecentJobs] = useState([]);
+  const [recentJobsLoading, setRecentJobsLoading] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const isRange = monthFrom !== monthTo;
   const pickerRef = useRef(null);
@@ -170,6 +184,91 @@ export default function RendimientosPage() {
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Cancel any in-flight polling cuando se desmonta la página
+  useEffect(() => {
+    return () => {
+      pollingCancelledRef.current = true;
+    };
+  }, []);
+
+  const reloadRecentJobs = useCallback(async () => {
+    setRecentJobsLoading(true);
+    try {
+      const jobs = await fetchRecentPerformanceJobs(50);
+      setRecentJobs(jobs);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "No fue posible cargar el historial");
+    } finally {
+      setRecentJobsLoading(false);
+    }
+  }, [pushToast]);
+
+  // Carga inicial del historial
+  useEffect(() => {
+    reloadRecentJobs().catch(() => {});
+  }, [reloadRecentJobs]);
+
+  // Refresca el historial cada 5s mientras hay un cálculo en curso
+  useEffect(() => {
+    if (!calculating) return;
+    const id = setInterval(() => { reloadRecentJobs().catch(() => {}); }, 5000);
+    return () => clearInterval(id);
+  }, [calculating, reloadRecentJobs]);
+
+  // Refresca el historial cuando termina un cálculo
+  useEffect(() => {
+    if (calculating) return;
+    reloadRecentJobs().catch(() => {});
+  }, [calculating, reloadRecentJobs]);
+
+  // Resume polling si al entrar a la página hay un job activo
+  // (ej.: el usuario disparó un cálculo, navegó a otra página, y volvió)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const activeJobs = await fetchActivePerformanceJobs();
+        if (cancelled || activeJobs.length === 0) return;
+        // Tomamos el job activo más reciente. Si hay varios para el mismo
+        // disparo en cadena, solo retomamos visualmente el que está corriendo.
+        const job = activeJobs[0];
+        if (calculating) return; // ya hay polling propio en curso
+        pollingCancelledRef.current = false;
+        setCalculating(true);
+        setCalcProgress({
+          current: 1,
+          total: 1,
+          currentMonth: job.month,
+          processedTargets: job.processed_targets || 0,
+          totalTargets: job.total_targets || 0,
+          jobId: job.id
+        });
+        const finalJob = await pollJobUntilDone(job.id, job.month, 0, 1);
+        if (!finalJob || cancelled) return;
+        if (finalJob.status === "done") {
+          const s = finalJob.summary || {};
+          pushToast(
+            "success",
+            `Rendimiento ${formatMonthLabel(finalJob.month)} listo (${s.calculated || 0} de ${s.total || 0} placas).`
+          );
+          fireBrowserNotification(
+            `Rendimiento ${formatMonthLabel(finalJob.month)} listo`,
+            `${s.calculated || 0} calculadas / ${s.total || 0} placas`
+          );
+          await loadRecords(monthFrom, monthTo);
+        } else if (finalJob.status === "error") {
+          pushToast("error", `Error en ${formatMonthLabel(finalJob.month)}: ${finalJob.error_message || "Error desconocido"}`);
+        }
+        setCalculating(false);
+        setCalcProgress({ current: 0, total: 0, currentMonth: "", processedTargets: 0, totalTargets: 0, jobId: null });
+      } catch {
+        // silencioso: si la API no responde el listado de jobs, no hacemos nada
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadRecords = useCallback(async (from, to) => {
@@ -437,19 +536,76 @@ export default function RendimientosPage() {
     });
   };
 
+  const ensureNotificationPermission = useCallback(async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) return "unsupported";
+    if (Notification.permission === "granted" || Notification.permission === "denied") {
+      return Notification.permission;
+    }
+    try {
+      return await Notification.requestPermission();
+    } catch {
+      return "denied";
+    }
+  }, []);
+
+  const fireBrowserNotification = useCallback((title, body) => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+    try {
+      const n = new Notification(title, { body, tag: "rendimientos-job" });
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch {
+      // ignore — algunos navegadores requieren contexto de usuario fresco
+    }
+  }, []);
+
+  const pollJobUntilDone = useCallback(async (jobId, monthLabel, monthIndex, monthsTotal) => {
+    const intervalMs = 3000;
+    while (!pollingCancelledRef.current) {
+      let job;
+      try {
+        job = await fetchPerformanceJob(jobId);
+      } catch (err) {
+        // Reintentamos suavemente ante errores transitorios
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        continue;
+      }
+      setCalcProgress({
+        current: monthIndex + 1,
+        total: monthsTotal,
+        currentMonth: monthLabel,
+        processedTargets: job.processed_targets || 0,
+        totalTargets: job.total_targets || 0,
+        jobId: job.id
+      });
+      if (job.status === "done" || job.status === "error") {
+        return job;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    return null;
+  }, []);
+
   const handleCalculate = async () => {
     const from = calcMonthFrom <= calcMonthTo ? calcMonthFrom : calcMonthTo;
     const to = calcMonthFrom <= calcMonthTo ? calcMonthTo : calcMonthFrom;
     const months = generateMonthRange(from, to);
+    pollingCancelledRef.current = false;
     setCalculating(true);
-    setCalcProgress({ current: 0, total: months.length, currentMonth: "" });
+    setCalcProgress({ current: 0, total: months.length, currentMonth: "", processedTargets: 0, totalTargets: 0, jobId: null });
+
+    // Pedimos permiso para notificaciones del navegador la primera vez
+    await ensureNotificationPermission();
 
     let errors = 0;
     for (let i = 0; i < months.length; i++) {
+      if (pollingCancelledRef.current) break;
       const m = months[i];
-      setCalcProgress({ current: i + 1, total: months.length, currentMonth: m });
+      setCalcProgress({ current: i + 1, total: months.length, currentMonth: m, processedTargets: 0, totalTargets: 0, jobId: null });
+
+      let createResponse;
       try {
-        await calculateMonthlyPerformance({
+        createResponse = await calculateMonthlyPerformance({
           month: m,
           customer_ids: selectedCustomerIds,
           force_recalculate: true
@@ -457,19 +613,42 @@ export default function RendimientosPage() {
       } catch (err) {
         errors++;
         pushToast("error", `Error en ${formatMonthLabel(m)}: ${err instanceof Error ? err.message : "Error desconocido"}`);
+        continue;
+      }
+
+      const { job: createdJob, reused } = createResponse;
+      if (reused) {
+        pushToast("info", `Ya hay un cálculo en curso para ${formatMonthLabel(m)} — siguiendo el job existente.`);
+      }
+
+      const finalJob = await pollJobUntilDone(createdJob.id, m, i, months.length);
+      if (!finalJob) break; // polling cancelado
+
+      if (finalJob.status === "error") {
+        errors++;
+        pushToast("error", `Error en ${formatMonthLabel(m)}: ${finalJob.error_message || "Error desconocido"}`);
+        fireBrowserNotification(
+          `Rendimiento ${formatMonthLabel(m)} falló`,
+          finalJob.error_message || "Revisa los logs"
+        );
+      } else if (finalJob.status === "done") {
+        const s = finalJob.summary || {};
+        fireBrowserNotification(
+          `Rendimiento ${formatMonthLabel(m)} listo`,
+          `${s.calculated || 0} calculadas / ${s.total || 0} placas`
+        );
       }
     }
 
     const ok = months.length - errors;
-    if (ok > 0) {
+    if (!pollingCancelledRef.current && ok > 0) {
       pushToast("success", `Rendimientos calculados: ${ok} de ${months.length} mes(es).`);
     }
-    // Reload table if any calculated month overlaps with visible range
-    if (to >= monthFrom && from <= monthTo) {
+    if (!pollingCancelledRef.current && to >= monthFrom && from <= monthTo) {
       await loadRecords(monthFrom, monthTo);
     }
     setCalculating(false);
-    setCalcProgress({ current: 0, total: 0, currentMonth: "" });
+    setCalcProgress({ current: 0, total: 0, currentMonth: "", processedTargets: 0, totalTargets: 0, jobId: null });
   };
 
   const handleExport = async () => {
@@ -637,24 +816,39 @@ export default function RendimientosPage() {
           </Can>
         </div>
 
-        {calculating && calcProgress.total > 0 && (
-          <div className="bulk-progress-bar-container" style={{ marginTop: 8 }}>
-            <div className="bulk-progress-header">
-              <span className="bulk-progress-label">
-                Calculando {formatMonthLabel(calcProgress.currentMonth)} ({calcProgress.current} de {calcProgress.total})
-              </span>
-              <span className="bulk-progress-percent">
-                {Math.round((calcProgress.current / calcProgress.total) * 100)}%
-              </span>
+        {calculating && calcProgress.total > 0 && (() => {
+          const monthsPct = (calcProgress.current / calcProgress.total) * 100;
+          const withinMonthPct = calcProgress.totalTargets > 0
+            ? (calcProgress.processedTargets / calcProgress.totalTargets) * 100
+            : 0;
+          // Progreso global = meses completos + fracción del mes en curso
+          const completedMonths = Math.max(0, calcProgress.current - 1);
+          const currentMonthFraction = calcProgress.totalTargets > 0
+            ? calcProgress.processedTargets / calcProgress.totalTargets
+            : 0;
+          const overallPct = ((completedMonths + currentMonthFraction) / calcProgress.total) * 100;
+          return (
+            <div className="bulk-progress-bar-container rendimientos-progress" style={{ marginTop: 8 }}>
+              <div className="bulk-progress-header">
+                <span className="bulk-progress-label">
+                  Calculando {formatMonthLabel(calcProgress.currentMonth)} ({calcProgress.current} de {calcProgress.total})
+                  {calcProgress.totalTargets > 0 && (
+                    <> — {calcProgress.processedTargets} / {calcProgress.totalTargets} placas ({Math.round(withinMonthPct)}%)</>
+                  )}
+                </span>
+                <span className="bulk-progress-percent">
+                  {Math.round(overallPct || monthsPct)}%
+                </span>
+              </div>
+              <div className="bulk-progress-track">
+                <div
+                  className="bulk-progress-fill"
+                  style={{ width: `${overallPct || monthsPct}%` }}
+                />
+              </div>
             </div>
-            <div className="bulk-progress-track">
-              <div
-                className="bulk-progress-fill"
-                style={{ width: `${(calcProgress.current / calcProgress.total) * 100}%` }}
-              />
-            </div>
-          </div>
-        )}
+          );
+        })()}
       </header>
 
       <ToastStack toasts={toasts} />
@@ -895,6 +1089,126 @@ export default function RendimientosPage() {
               </tbody>
             </table>
           </div>
+        )}
+      </section>
+
+      <section className="card rendimientos-history-card">
+        <header className="section-heading">
+          <div>
+            <span className="eyebrow">Historial</span>
+            <h3>Últimos cálculos</h3>
+          </div>
+          <div className="actions-row section-heading-actions">
+            <button
+              type="button"
+              className="button-secondary button-sm"
+              onClick={() => setHistoryOpen((v) => !v)}
+            >
+              {historyOpen ? "Ocultar" : "Mostrar"}
+            </button>
+            <button
+              type="button"
+              className="button-secondary button-sm"
+              onClick={() => reloadRecentJobs()}
+              disabled={recentJobsLoading}
+            >
+              {recentJobsLoading ? "Cargando..." : "Recargar"}
+            </button>
+          </div>
+        </header>
+
+        {historyOpen && (
+          recentJobs.length === 0 ? (
+            <p className="support-copy">No hay cálculos registrados todavía.</p>
+          ) : (
+            <div className="rendimientos-table-shell">
+              <table className="rendimientos-table">
+                <thead>
+                  <tr>
+                    <th>Estado</th>
+                    <th>Mes</th>
+                    <th>Disparado por</th>
+                    <th>Inicio</th>
+                    <th>Fin</th>
+                    <th>Duración</th>
+                    <th>Placas</th>
+                    <th>Resumen / Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentJobs.map((job) => {
+                    const status = job.status;
+                    const statusClass = status === "done"
+                      ? "status-ok"
+                      : status === "error"
+                        ? "status-error"
+                        : status === "running"
+                          ? "status-soft"
+                          : "status-partial";
+                    const statusLabel = status === "done"
+                      ? "Listo"
+                      : status === "error"
+                        ? "Error"
+                        : status === "running"
+                          ? "Corriendo"
+                          : status === "queued"
+                            ? "En cola"
+                            : status;
+                    const startedAt = job.started_at ? new Date(job.started_at) : null;
+                    const finishedAt = job.finished_at ? new Date(job.finished_at) : null;
+                    const duration = (startedAt && finishedAt)
+                      ? `${Math.max(1, Math.round((finishedAt - startedAt) / 1000))} s`
+                      : (startedAt && !finishedAt ? "—" : "—");
+                    const s = job.summary || {};
+                    const totalLabel = job.total_targets > 0
+                      ? `${job.processed_targets}/${job.total_targets}`
+                      : (s.total ? `${s.calculated || 0}/${s.total}` : "—");
+                    return (
+                      <tr key={job.id}>
+                        <td data-label="Estado">
+                          <span className={`status-dot ${statusClass}`} title={statusLabel} />
+                          <span style={{ marginLeft: 8 }}>{statusLabel}</span>
+                        </td>
+                        <td data-label="Mes">{formatMonthLabel(job.month)}</td>
+                        <td data-label="Disparado por">
+                          {job.triggered_by === "cron" ? (
+                            <span className="trigger-chip trigger-chip-cron" title="Ejecucion automatica del scheduler (05:00 Colombia)">
+                              <span aria-hidden="true">⏱</span> Cron
+                            </span>
+                          ) : (
+                            <span className="trigger-chip trigger-chip-ui">Manual</span>
+                          )}
+                        </td>
+                        <td data-label="Inicio">
+                          {startedAt ? startedAt.toLocaleString("es-CO") : "—"}
+                        </td>
+                        <td data-label="Fin">
+                          {finishedAt ? finishedAt.toLocaleString("es-CO") : "—"}
+                        </td>
+                        <td data-label="Duración">{duration}</td>
+                        <td data-label="Placas">{totalLabel}</td>
+                        <td data-label="Resumen / Error">
+                          {status === "error" && job.error_message ? (
+                            <span title={job.error_message} style={{ color: "var(--red)" }}>
+                              {job.error_message.length > 120
+                                ? job.error_message.slice(0, 120) + "…"
+                                : job.error_message}
+                            </span>
+                          ) : status === "done" && job.summary ? (
+                            <span>
+                              calc {s.calculated || 0} · parcial {s.partial || 0} · sin binding {s.unbound || 0} · sin datos {s.no_data || 0} · err {s.error || 0}
+                            </span>
+                          ) : (
+                            <span className="support-copy">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )
         )}
       </section>
     </section>

@@ -2933,6 +2933,12 @@ input[readonly] {
   min-width: 180px;
 }
 
+/* Barra de progreso del cálculo: ocupa el ancho completo del header grid */
+.rendimientos-progress {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
 .client-picker {
   position: relative;
 }
@@ -3208,6 +3214,39 @@ input[readonly] {
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text);
+}
+
+.rendimientos-history-card {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.trigger-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-family: "Poppins", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.trigger-chip-cron {
+  background: rgba(24, 89, 121, 0.10);
+  color: var(--blue);
+  border-color: rgba(24, 89, 121, 0.35);
+}
+
+.trigger-chip-ui {
+  background: var(--bg);
+  color: var(--text-muted);
+  border-color: var(--border-strong);
 }
 
 .table-subcopy {

@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.schemas.vehicle import MonthlyPerformanceCalculateRequest
 from app.services.motor_catalog import save_connection_snapshot
-from app.services.rendimientos import calculate_monthly_performance
+from app.services.rendimientos_jobs import JobAlreadyRunning, create_job, run_job
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,26 +67,50 @@ def _run() -> None:
 
     for month in months_to_calculate:
         logger.info("Calculating month %s ...", month)
+        payload = MonthlyPerformanceCalculateRequest(month=month, force_recalculate=True)
         try:
-            result = calculate_monthly_performance(
-                MonthlyPerformanceCalculateRequest(
-                    month=month,
-                    force_recalculate=True,
-                )
-            )
-            s = result.summary
-            logger.info(
-                "Month %s done — total: %d, calculated: %d, partial: %d, unbound: %d, no_data: %d, error: %d",
+            job = create_job(payload, triggered_by="cron", user_id=None)
+            logger.info("Job %s created for month %s — running ...", job.id, month)
+        except JobAlreadyRunning as exc:
+            logger.warning(
+                "Month %s ya tiene un job activo (id=%s, status=%s); reusando ese job.",
                 month,
-                s.total,
-                s.calculated,
-                s.partial,
-                s.unbound,
-                s.no_data,
-                s.error,
+                exc.job.id,
+                exc.job.status,
             )
+            job = exc.job
         except Exception:
-            logger.exception("Failed to calculate month %s", month)
+            logger.exception("No fue posible crear el job para el mes %s", month)
+            continue
+
+        try:
+            final = run_job(job.id)
+        except Exception:
+            logger.exception("Job %s fallo para el mes %s", job.id, month)
+            continue
+
+        s = final.summary
+        if s is None:
+            logger.warning(
+                "Month %s termino sin summary (estado=%s, error=%s)",
+                month,
+                final.status,
+                final.error_message,
+            )
+            continue
+
+        logger.info(
+            "Month %s done — job=%s status=%s total: %d, calculated: %d, partial: %d, unbound: %d, no_data: %d, error: %d",
+            month,
+            job.id,
+            final.status,
+            s.total,
+            s.calculated,
+            s.partial,
+            s.unbound,
+            s.no_data,
+            s.error,
+        )
 
     logger.info("Daily performance calculation finished.")
 

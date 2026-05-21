@@ -320,7 +320,32 @@ def _list_available_cpls_by_technical_numbers(
     }
 
 
+_MOTOR_TABLES_DDL_DONE = False
+
+
 def _ensure_motor_tables(conn: psycopg.Connection) -> None:
+    """
+    Garantiza las tablas necesarias + sincroniza tipos de proveedor.
+
+    La DDL pesada (CREATE/ALTER) solo corre la primera vez por proceso y en una
+    conexion propia (no la del caller). Asi los locks (ACCESS EXCLUSIVE de los
+    ALTER TABLE / CREATE TABLE IF NOT EXISTS) no se quedan colgados dentro de
+    la transaccion larga del caller — el calc de rendimientos puede durar 17
+    min y, antes, bloqueaba todas las demas consultas sobre estas tablas.
+    """
+    global _MOTOR_TABLES_DDL_DONE
+    if not _MOTOR_TABLES_DDL_DONE:
+        own_conn = psycopg.connect(_database_dsn())
+        try:
+            _run_motor_tables_ddl_inner(own_conn)
+            own_conn.commit()
+        finally:
+            own_conn.close()
+        _MOTOR_TABLES_DDL_DONE = True
+    _sync_inferred_provider_types(conn)
+
+
+def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -551,7 +576,6 @@ def _ensure_motor_tables(conn: psycopg.Connection) -> None:
             );
             """
         )
-    _sync_inferred_provider_types(conn)
 
 
 def list_motors() -> list[MotorCatalogRecord]:

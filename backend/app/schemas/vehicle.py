@@ -436,4 +436,28 @@ class MonthlyPerformanceResponse(BaseModel):
     )
 
 
+class PerformanceCalculationJob(BaseModel):
+    id: int = Field(..., description="ID del job")
+    status: str = Field(..., description="queued | running | done | error")
+    month: str = Field(..., description="Mes calculado en formato YYYY-MM")
+    customer_id: int | None = Field(default=None)
+    customer_ids: list[int] = Field(default_factory=list)
+    customer_database_id: int | None = Field(default=None)
+    force_recalculate: bool = Field(default=True)
+    total_targets: int = Field(default=0)
+    processed_targets: int = Field(default=0)
+    progress_pct: float = Field(default=0.0, description="Porcentaje 0-100 derivado de processed/total")
+    summary: MonthlyPerformanceSummary | None = Field(default=None)
+    error_message: str | None = Field(default=None)
+    triggered_by: str = Field(default="ui", description="ui | cron | cli")
+    created_by_user_id: int | None = Field(default=None)
+    created_at: datetime = Field(...)
+    started_at: datetime | None = Field(default=None)
+    finished_at: datetime | None = Field(default=None)
+
+
+class PerformanceJobListResponse(BaseModel):
+    jobs: list[PerformanceCalculationJob] = Field(default_factory=list)
+
+
 GeotabRuleConditionNode.model_rebuild()

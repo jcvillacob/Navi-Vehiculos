@@ -210,12 +210,37 @@ export async function fetchMonthlyPerformance(params) {
 }
 
 export async function calculateMonthlyPerformance(payload) {
+  // Endpoint async: retorna 202 con el job nuevo, 409 con el job ya activo, o
+  // un error >=400 normal. En 202 y 409 el body es el mismo schema (job).
   const response = await fetchWithAuth(buildUrl("/api/v1/rendimientos/calculate"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  if (response.status === 202 || response.status === 409 || response.status === 200) {
+    const job = await response.json();
+    return { job, reused: response.status === 409 };
+  }
+  // Forzar el camino de error de parseJsonOrThrow
   return parseJsonOrThrow(response, "Error calculando rendimientos mensuales");
+}
+
+export async function fetchPerformanceJob(jobId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/rendimientos/jobs/${jobId}`));
+  return parseJsonOrThrow(response, "Error consultando el job de rendimientos");
+}
+
+export async function fetchActivePerformanceJobs() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/rendimientos/jobs?active=true"));
+  const data = await parseJsonOrThrow(response, "Error listando jobs activos de rendimientos");
+  return Array.isArray(data?.jobs) ? data.jobs : [];
+}
+
+export async function fetchRecentPerformanceJobs(limit = 50) {
+  const params = new URLSearchParams({ active: "false", limit: String(limit) });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/rendimientos/jobs?${params.toString()}`));
+  const data = await parseJsonOrThrow(response, "Error cargando historial de rendimientos");
+  return Array.isArray(data?.jobs) ? data.jobs : [];
 }
 
 // ── Vehicle ───────────────────────────────────────────────────────────────────

@@ -1,11 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 
 from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
     MonthlyPerformanceCalculateRequest,
     MonthlyPerformanceResponse,
+    PerformanceCalculationJob,
+    PerformanceJobListResponse,
 )
-from app.services.rendimientos import calculate_monthly_performance, list_monthly_performance
+from app.services.rendimientos import list_monthly_performance
+from app.services.rendimientos_jobs import (
+    JobAlreadyRunning,
+    JobNotFound,
+    create_job,
+    get_job,
+    list_active_jobs,
+    list_recent_jobs,
+    run_job,
+)
 
 router = APIRouter(prefix="/rendimientos", tags=["rendimientos"])
 
@@ -47,12 +58,53 @@ def get_monthly_performance(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/calculate", response_model=MonthlyPerformanceResponse)
+@router.post(
+    "/calculate",
+    response_model=PerformanceCalculationJob,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def calculate_monthly_performance_route(
     payload: MonthlyPerformanceCalculateRequest,
-    _user: dict = Depends(require_permission("rendimientos.refresh")),
-) -> MonthlyPerformanceResponse:
+    background_tasks: BackgroundTasks,
+    response: Response,
+    user: dict = Depends(require_permission("rendimientos.refresh")),
+) -> PerformanceCalculationJob:
+    """
+    Crea un job y lo dispara en background. Retorna 202 con los datos del job.
+    Si ya hay un job activo para el mismo mes y conjunto de clientes, retorna 409
+    con el job existente (mismo schema) para que el cliente lo siga.
+    """
     try:
-        return calculate_monthly_performance(payload)
+        job = create_job(payload, triggered_by="ui", user_id=user.get("id"))
+    except JobAlreadyRunning as exc:
+        response.status_code = status.HTTP_409_CONFLICT
+        return exc.job
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    background_tasks.add_task(run_job, job.id)
+    return job
+
+
+@router.get("/jobs", response_model=PerformanceJobListResponse)
+def list_performance_jobs(
+    active: bool = Query(default=False, description="Solo jobs queued/running del usuario actual"),
+    limit: int = Query(default=50, ge=1, le=200, description="Historial: ultimos N jobs"),
+    user: dict = Depends(require_permission("rendimientos.view")),
+) -> PerformanceJobListResponse:
+    if active:
+        jobs = list_active_jobs(user_id=user.get("id"))
+    else:
+        jobs = list_recent_jobs(limit=limit)
+    return PerformanceJobListResponse(jobs=jobs)
+
+
+@router.get("/jobs/{job_id}", response_model=PerformanceCalculationJob)
+def get_performance_job(
+    job_id: int,
+    _user: dict = Depends(require_permission("rendimientos.view")),
+) -> PerformanceCalculationJob:
+    try:
+        return get_job(job_id)
+    except JobNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

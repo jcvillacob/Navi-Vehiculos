@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 import psycopg
 from psycopg.rows import dict_row
@@ -20,8 +20,30 @@ from app.services.performance_types import BindingSnapshot, PerformanceTarget
 from app.services.provider_registry import infer_provider_key, supports_monthly_performance
 
 
+_PERF_TABLES_DDL_DONE = False
+
+
 def _ensure_performance_tables(conn: psycopg.Connection) -> None:
+    """
+    Garantiza tablas de rendimientos. La DDL pesada solo corre una vez por
+    proceso, en conexion propia, para no atrapar locks en la transaccion
+    larga del caller. Ver la nota en _ensure_motor_tables.
+    """
+    global _PERF_TABLES_DDL_DONE
+    # _ensure_motor_tables ya cachea internamente y usa conexion propia para DDL.
     _ensure_motor_tables(conn)
+    if _PERF_TABLES_DDL_DONE:
+        return
+    own_conn = psycopg.connect(_database_dsn())
+    try:
+        _run_performance_tables_ddl_inner(own_conn)
+        own_conn.commit()
+    finally:
+        own_conn.close()
+    _PERF_TABLES_DDL_DONE = True
+
+
+def _run_performance_tables_ddl_inner(conn: psycopg.Connection) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -480,9 +502,19 @@ def _build_summary(rows: list[MonthlyPerformanceRecord]) -> MonthlyPerformanceSu
 
 def calculate_monthly_performance(
     payload: MonthlyPerformanceCalculateRequest,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> MonthlyPerformanceResponse:
     month, year, month_number = _normalize_month(payload.month)
     previous_month = _previous_month(month)
+
+    def _emit_progress(processed: int, total: int) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(processed, total)
+        except Exception:
+            # No queremos que un fallo del callback rompa el calculo
+            pass
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_performance_tables(conn)
@@ -493,6 +525,7 @@ def calculate_monthly_performance(
             customer_database_id=payload.customer_database_id,
         )
         if not targets:
+            _emit_progress(0, 0)
             return MonthlyPerformanceResponse(month=month, summary=MonthlyPerformanceSummary(), rows=[])
 
         existing_records = _load_existing_records(conn, month, targets)
@@ -502,12 +535,19 @@ def calculate_monthly_performance(
         grouped_targets: dict[tuple[str, int], list[PerformanceTarget]] = defaultdict(list)
         rows: list[MonthlyPerformanceRecord] = []
 
+        total_targets = len(targets)
+        processed_targets = 0
+        _emit_progress(processed_targets, total_targets)
+
         for target in targets:
             key = (target.customer_database_id, target.plate)
             if not payload.force_recalculate and key in existing_records:
                 rows.append(existing_records[key])
+                processed_targets += 1
                 continue
             grouped_targets[(target.provider_key, target.customer_database_id)].append(target)
+
+        _emit_progress(processed_targets, total_targets)
 
         for (provider_key, _database_id), database_targets in grouped_targets.items():
             sample_target = database_targets[0]
@@ -531,7 +571,18 @@ def calculate_monthly_performance(
                         ),
                     )
                     rows.append(saved)
+                    processed_targets += 1
+                _emit_progress(processed_targets, total_targets)
                 continue
+
+            # Contador en vivo: el provider llama on_target_done() despues de
+            # cada placa procesada. Asi el front ve avance fino.
+            in_flight_processed = {"value": 0}
+
+            def _bump_target_done() -> None:
+                in_flight_processed["value"] += 1
+                _emit_progress(processed_targets + in_flight_processed["value"], total_targets)
+
             try:
                 provider_result = provider.calculate_database_rows(
                     month=month,
@@ -541,6 +592,7 @@ def calculate_monthly_performance(
                     targets=database_targets,
                     previous_records=previous_records,
                     bindings=bindings,
+                    on_target_done=_bump_target_done,
                 )
             except Exception as exc:
                 for target in database_targets:
@@ -561,7 +613,9 @@ def calculate_monthly_performance(
                         ),
                     )
                     rows.append(saved)
+                    processed_targets += 1
                 conn.commit()
+                _emit_progress(processed_targets, total_targets)
                 continue
 
             for binding_update in provider_result.binding_updates:
@@ -575,6 +629,17 @@ def calculate_monthly_performance(
 
             for record in provider_result.records:
                 rows.append(_upsert_monthly_record(conn, record))
+
+            # Reconciliacion: el provider pudo haber bumpeado per-placa (in_flight)
+            # o haber retornado temprano sin bumpear (early-return de error). Usamos
+            # el numero real de records para no contar dos veces ni undercount.
+            processed_targets += max(len(provider_result.records), in_flight_processed["value"])
+            _emit_progress(processed_targets, total_targets)
+
+            # Commit per-database: libera los row locks de monthly_vehicle_performance
+            # y vehicle_provider_bindings entre databases para que otras consultas
+            # (UI listando rendimientos, vehiculos, etc.) no se queden esperando.
+            conn.commit()
 
         conn.commit()
 

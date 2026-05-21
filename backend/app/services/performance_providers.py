@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import time as dt_time, timedelta
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from app.clients.artimo_client import (
     ArtimoAuthError,
@@ -68,6 +68,7 @@ class MonthlyPerformanceProvider(Protocol):
         targets: list[PerformanceTarget],
         previous_records: dict[tuple[int, str], MonthlyPerformanceRecord],
         bindings: dict[tuple[str, int, str], BindingSnapshot],
+        on_target_done: "Callable[[], None] | None" = None,
     ) -> ProviderCalculationResult:
         ...
 
@@ -280,6 +281,7 @@ class ArtimoMonthlyPerformanceProvider:
         targets: list[PerformanceTarget],
         previous_records: dict[tuple[int, str], MonthlyPerformanceRecord],
         bindings: dict[tuple[str, int, str], BindingSnapshot],
+        on_target_done: Callable[[], None] | None = None,
     ) -> ProviderCalculationResult:
         if not targets:
             return ProviderCalculationResult(records=[], binding_updates=[])
@@ -316,6 +318,11 @@ class ArtimoMonthlyPerformanceProvider:
                         last_error=message,
                     )
                 )
+                if on_target_done is not None:
+                    try:
+                        on_target_done()
+                    except Exception:
+                        pass
                 rows.append(
                     _build_status_record(
                         target=target,
@@ -327,74 +334,81 @@ class ArtimoMonthlyPerformanceProvider:
             return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 
         for target in targets:
-            current_trip = current_trips.get(target.plate)
-            previous_trip = previous_trips.get(target.plate)
-            bound_id, is_manual = _select_binding(bindings=bindings, target=target)
-            if is_manual:
-                provider_vehicle_id = bound_id
-            else:
-                provider_vehicle_id = (
-                    bound_id
-                    or extract_provider_vehicle_id(current_trip)
-                    or extract_provider_vehicle_id(previous_trip)
-                )
+            try:
+                current_trip = current_trips.get(target.plate)
+                previous_trip = previous_trips.get(target.plate)
+                bound_id, is_manual = _select_binding(bindings=bindings, target=target)
+                if is_manual:
+                    provider_vehicle_id = bound_id
+                else:
+                    provider_vehicle_id = (
+                        bound_id
+                        or extract_provider_vehicle_id(current_trip)
+                        or extract_provider_vehicle_id(previous_trip)
+                    )
 
-            if not provider_vehicle_id:
+                if not provider_vehicle_id:
+                    binding_updates.append(
+                        BindingUpsert(
+                            target=target,
+                            provider_vehicle_id=None,
+                            binding_status="unbound",
+                            last_error="No fue posible resolver el ID externo del GPS en Artimo.",
+                        )
+                    )
+                    rows.append(
+                        _build_status_record(
+                            target=target,
+                            month=month,
+                            status="unbound",
+                            warnings=["No fue posible resolver el ID externo del GPS en Artimo."],
+                        )
+                    )
+                    continue
+
                 binding_updates.append(
                     BindingUpsert(
                         target=target,
-                        provider_vehicle_id=None,
-                        binding_status="unbound",
-                        last_error="No fue posible resolver el ID externo del GPS en Artimo.",
-                    )
-                )
-                rows.append(
-                    _build_status_record(
-                        target=target,
-                        month=month,
-                        status="unbound",
-                        warnings=["No fue posible resolver el ID externo del GPS en Artimo."],
-                    )
-                )
-                continue
-
-            binding_updates.append(
-                BindingUpsert(
-                    target=target,
-                    provider_vehicle_id=provider_vehicle_id,
-                    binding_status="resolved",
-                    last_error=None,
-                )
-            )
-
-            try:
-                gps_rows = artimo.get_report(
-                    "gps",
-                    current_start,
-                    current_end,
-                    resource_id=provider_vehicle_id,
-                )
-                rows.append(
-                    _calculate_vehicle_record(
-                        target=target,
-                        month=month,
-                        current_trip=current_trip,
-                        previous_trip=previous_trip,
-                        previous_record=previous_records.get((target.customer_database_id, target.plate)),
                         provider_vehicle_id=provider_vehicle_id,
-                        gps_rows=gps_rows,
+                        binding_status="resolved",
+                        last_error=None,
                     )
                 )
-            except Exception as exc:
-                rows.append(
-                    _build_status_record(
-                        target=target,
-                        month=month,
-                        status="error",
-                        provider_vehicle_id=provider_vehicle_id,
-                        warnings=[f"Error calculando la placa en Artimo: {exc}"],
+
+                try:
+                    gps_rows = artimo.get_report(
+                        "gps",
+                        current_start,
+                        current_end,
+                        resource_id=provider_vehicle_id,
                     )
-                )
+                    rows.append(
+                        _calculate_vehicle_record(
+                            target=target,
+                            month=month,
+                            current_trip=current_trip,
+                            previous_trip=previous_trip,
+                            previous_record=previous_records.get((target.customer_database_id, target.plate)),
+                            provider_vehicle_id=provider_vehicle_id,
+                            gps_rows=gps_rows,
+                        )
+                    )
+                except Exception as exc:
+                    rows.append(
+                        _build_status_record(
+                            target=target,
+                            month=month,
+                            status="error",
+                            provider_vehicle_id=provider_vehicle_id,
+                            warnings=[f"Error calculando la placa en Artimo: {exc}"],
+                        )
+                    )
+            finally:
+                if on_target_done is not None:
+                    try:
+                        on_target_done()
+                    except Exception:
+                        pass
 
         return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 
@@ -585,6 +599,7 @@ class GeotabMonthlyPerformanceProvider:
         targets: list[PerformanceTarget],
         previous_records: dict[tuple[int, str], MonthlyPerformanceRecord],
         bindings: dict[tuple[str, int, str], BindingSnapshot],
+        on_target_done: Callable[[], None] | None = None,
     ) -> ProviderCalculationResult:
         if not targets:
             return ProviderCalculationResult(records=[], binding_updates=[])
@@ -602,64 +617,71 @@ class GeotabMonthlyPerformanceProvider:
         binding_updates: list[BindingUpsert] = []
 
         for target in targets:
-            bound_id, is_manual = _select_binding(bindings=bindings, target=target)
-            if is_manual:
-                device_id = bound_id
-            else:
-                device_id = bound_id
-                if not device_id:
-                    device = find_device_by_plate(api, target.plate, plate_prefix=target.provider_config.get("plate_prefix"))
-                    device_id = str(device.get("id") or "").strip() if device else None
+            try:
+                bound_id, is_manual = _select_binding(bindings=bindings, target=target)
+                if is_manual:
+                    device_id = bound_id
+                else:
+                    device_id = bound_id
+                    if not device_id:
+                        device = find_device_by_plate(api, target.plate, plate_prefix=target.provider_config.get("plate_prefix"))
+                        device_id = str(device.get("id") or "").strip() if device else None
 
-            if not device_id:
+                if not device_id:
+                    binding_updates.append(
+                        BindingUpsert(
+                            target=target,
+                            provider_vehicle_id=None,
+                            binding_status="unbound",
+                            last_error="No fue posible resolver el dispositivo en Geotab para esta placa.",
+                        )
+                    )
+                    rows.append(
+                        _build_status_record(
+                            target=target,
+                            month=month,
+                            status="unbound",
+                            warnings=["No fue posible resolver el dispositivo en Geotab para esta placa."],
+                        )
+                    )
+                    continue
+
                 binding_updates.append(
                     BindingUpsert(
                         target=target,
-                        provider_vehicle_id=None,
-                        binding_status="unbound",
-                        last_error="No fue posible resolver el dispositivo en Geotab para esta placa.",
-                    )
-                )
-                rows.append(
-                    _build_status_record(
-                        target=target,
-                        month=month,
-                        status="unbound",
-                        warnings=["No fue posible resolver el dispositivo en Geotab para esta placa."],
-                    )
-                )
-                continue
-
-            binding_updates.append(
-                BindingUpsert(
-                    target=target,
-                    provider_vehicle_id=device_id,
-                    binding_status="resolved",
-                    last_error=None,
-                )
-            )
-
-            try:
-                record = _calculate_geotab_vehicle_record(
-                    target=target,
-                    month=month,
-                    device_id=device_id,
-                    api=api,
-                    from_date=from_date,
-                    to_date=to_date,
-                    previous_record=previous_records.get((target.customer_database_id, target.plate)),
-                )
-                rows.append(record)
-            except Exception as exc:
-                rows.append(
-                    _build_status_record(
-                        target=target,
-                        month=month,
-                        status="error",
                         provider_vehicle_id=device_id,
-                        warnings=[f"Error calculando la placa en Geotab: {exc}"],
+                        binding_status="resolved",
+                        last_error=None,
                     )
                 )
+
+                try:
+                    record = _calculate_geotab_vehicle_record(
+                        target=target,
+                        month=month,
+                        device_id=device_id,
+                        api=api,
+                        from_date=from_date,
+                        to_date=to_date,
+                        previous_record=previous_records.get((target.customer_database_id, target.plate)),
+                    )
+                    rows.append(record)
+                except Exception as exc:
+                    rows.append(
+                        _build_status_record(
+                            target=target,
+                            month=month,
+                            status="error",
+                            provider_vehicle_id=device_id,
+                            warnings=[f"Error calculando la placa en Geotab: {exc}"],
+                        )
+                    )
+            finally:
+                if on_target_done is not None:
+                    try:
+                        on_target_done()
+                    except Exception:
+                        pass
 
         return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 
@@ -774,6 +796,7 @@ class FrotcomMonthlyPerformanceProvider:
         targets: list[PerformanceTarget],
         previous_records: dict[tuple[int, str], MonthlyPerformanceRecord],
         bindings: dict[tuple[str, int, str], BindingSnapshot],
+        on_target_done: Callable[[], None] | None = None,
     ) -> ProviderCalculationResult:
         if not targets:
             return ProviderCalculationResult(records=[], binding_updates=[])
@@ -785,6 +808,13 @@ class FrotcomMonthlyPerformanceProvider:
 
         vehicles_cache: dict[tuple[str, str, str], list[dict]] = {}
         vehicles_list_failures: dict[tuple[str, str, str], str] = {}
+
+        def _notify_target_done():
+            if on_target_done is not None:
+                try:
+                    on_target_done()
+                except Exception:
+                    pass
 
         for target in targets:
             try:
@@ -806,6 +836,7 @@ class FrotcomMonthlyPerformanceProvider:
                         warnings=[str(exc)],
                     )
                 )
+                _notify_target_done()
                 continue
 
             cache_key = config.cache_key()
@@ -827,6 +858,7 @@ class FrotcomMonthlyPerformanceProvider:
                         warnings=[message],
                     )
                 )
+                _notify_target_done()
                 continue
 
             bound_id, is_manual = _select_binding(bindings=bindings, target=target)
@@ -867,6 +899,7 @@ class FrotcomMonthlyPerformanceProvider:
                                 warnings=[message],
                             )
                         )
+                        _notify_target_done()
                         continue
                     vehicle_id = find_frotcom_vehicle_id_by_plate(target.plate, config, cached)
 
@@ -887,6 +920,7 @@ class FrotcomMonthlyPerformanceProvider:
                         warnings=["No fue posible resolver el ID del vehiculo en Frotcom para esta placa."],
                     )
                 )
+                _notify_target_done()
                 continue
 
             binding_updates.append(
@@ -933,6 +967,8 @@ class FrotcomMonthlyPerformanceProvider:
                         warnings=[f"Error calculando la placa en Frotcom: {exc}"],
                     )
                 )
+
+            _notify_target_done()
 
         return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 
@@ -1096,9 +1132,17 @@ class LogitracsTritonMonthlyPerformanceProvider:
         targets: list[PerformanceTarget],
         previous_records: dict[tuple[int, str], MonthlyPerformanceRecord],
         bindings: dict[tuple[str, int, str], BindingSnapshot],
+        on_target_done: Callable[[], None] | None = None,
     ) -> ProviderCalculationResult:
         if not targets:
             return ProviderCalculationResult(records=[], binding_updates=[])
+
+        def _notify_target_done():
+            if on_target_done is not None:
+                try:
+                    on_target_done()
+                except Exception:
+                    pass
 
         try:
             client = LogitracsTritonClient(self._build_config(targets[0]))
@@ -1171,6 +1215,7 @@ class LogitracsTritonMonthlyPerformanceProvider:
                         warnings=["La placa no aparece en el informe operacional de LogiTracs para el mes."],
                     )
                 )
+                _notify_target_done()
                 continue
 
             if current_row or previous_row:
@@ -1216,6 +1261,8 @@ class LogitracsTritonMonthlyPerformanceProvider:
                         warnings=[f"Error calculando la placa en LogiTracs Triton: {exc}"],
                     )
                 )
+
+            _notify_target_done()
 
         return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 

@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,10 +13,21 @@ from app.core.rate_limit import limiter
 from app.middleware.audit import AuditMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
 from app.services.auth_service import cleanup_expired_refresh_tokens
+from app.services import scheduler
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-app = FastAPI(title=settings.app_name)
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 cleanup_expired_refresh_tokens()
