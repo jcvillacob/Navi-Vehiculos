@@ -14,13 +14,7 @@ _PLATE_PATTERN = re.compile(r"^[A-Z]{3}[0-9]{3}$")
 
 
 def build_client(cfg: GeotabConfig):
-    client = mygeotab.API(
-        username=cfg.username,
-        password=cfg.password,
-        database=cfg.database,
-    )
-    client.authenticate()
-    return client
+    return get_authenticated_client(cfg.username, cfg.password, cfg.database)
 
 
 def _normalize_rule_id(value: str | None) -> str | None:
@@ -47,8 +41,7 @@ def _normalize_vin(value: str | None) -> str | None:
 
 
 def _search_entities(client, type_name: str, search: dict | None = None) -> list[dict]:
-    response = client.call("Get", typeName=type_name, search=search or {})
-    return response or []
+    return _api_call_with_retry(client, "Get", typeName=type_name, search=search or {})
 
 
 def _search_devices(client, search: dict | None = None) -> list[dict]:
@@ -579,6 +572,13 @@ _NETWORK_ERROR_FRAGMENTS = (
     "Bad Gateway",
     "Gateway Timeout",
 )
+_AUTH_ERROR_FRAGMENTS = (
+    "Incorrect MyGeotab login credentials",
+    "InvalidUserException",
+    "AuthenticationException",
+    "session has expired",
+    "session expired",
+)
 NET_MAX_RETRIES = 3
 NET_RETRY_WAITS = (10, 20, 30)
 
@@ -588,17 +588,48 @@ def _is_network_error(exc: Exception) -> bool:
     return any(fragment in msg for fragment in _NETWORK_ERROR_FRAGMENTS)
 
 
+def _is_auth_error(exc: Exception) -> bool:
+    name = type(exc).__name__
+    if "Authentication" in name or "InvalidUser" in name:
+        return True
+    msg = str(exc)
+    return any(fragment in msg for fragment in _AUTH_ERROR_FRAGMENTS)
+
+
+def _credentials_key(api: mygeotab.API) -> tuple[str, str] | None:
+    credentials = getattr(api, "credentials", None)
+    if credentials is None:
+        return None
+    username = getattr(credentials, "username", None)
+    database = getattr(credentials, "database", None)
+    if not username or not database:
+        return None
+    return str(username), str(database)
+
+
 def _api_call_with_retry(api: mygeotab.API, method: str, **kwargs) -> list[dict]:
     """
-    Calls api.call(method, **kwargs) with retries on transient network errors.
-    Logic errors (auth, permissions, bad data) propagate immediately.
+    Calls api.call(method, **kwargs) with retries on transient network errors
+    and a single transparent re-authentication if the cached session expired.
+    Other logic errors (permissions, bad data) propagate immediately.
     """
     last_exc: Exception | None = None
+    auth_retry_used = False
     for attempt in range(NET_MAX_RETRIES):
         try:
             result = api.call(method, **kwargs)
             return result or []
         except Exception as exc:
+            if _is_auth_error(exc) and not auth_retry_used:
+                auth_retry_used = True
+                try:
+                    api.authenticate()
+                except Exception:
+                    key = _credentials_key(api)
+                    if key is not None:
+                        _invalidate_session(key[0], key[1])
+                    raise
+                continue
             if _is_network_error(exc) and attempt < NET_MAX_RETRIES - 1:
                 last_exc = exc
                 _time.sleep(NET_RETRY_WAITS[attempt])

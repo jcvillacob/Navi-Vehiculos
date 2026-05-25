@@ -152,6 +152,8 @@ export default function RendimientosPage() {
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [eligibleClients, setEligibleClients] = useState([]);
   const [selectedCustomerIds, setSelectedCustomerIds] = useState([]);
+  const [consultOpen, setConsultOpen] = useState(false);
+  const [calcAvailability, setCalcAvailability] = useState(false);
   const pollingCancelledRef = useRef(false);
 
   // ── Table range controls ──
@@ -591,6 +593,7 @@ export default function RendimientosPage() {
     const to = calcMonthFrom <= calcMonthTo ? calcMonthTo : calcMonthFrom;
     const months = generateMonthRange(from, to);
     pollingCancelledRef.current = false;
+    setConsultOpen(false);
     setCalculating(true);
     setCalcProgress({ current: 0, total: months.length, currentMonth: "", processedTargets: 0, totalTargets: 0, jobId: null });
 
@@ -730,88 +733,13 @@ export default function RendimientosPage() {
         </div>
 
         <div className="rendimientos-month-actions">
-          <div className="form-field">
-            <label htmlFor="rendimientos-calc-month-from">Desde</label>
-            <input
-              id="rendimientos-calc-month-from"
-              type="month"
-              value={calcMonthFrom}
-              onChange={(event) => setCalcMonthFrom(event.target.value)}
-              disabled={calculating}
-            />
-          </div>
-          <div className="form-field">
-            <label htmlFor="rendimientos-calc-month-to">Hasta</label>
-            <input
-              id="rendimientos-calc-month-to"
-              type="month"
-              value={calcMonthTo}
-              onChange={(event) => setCalcMonthTo(event.target.value)}
-              disabled={calculating}
-            />
-          </div>
-
-          <details className="client-picker" ref={pickerRef}>
-            <summary className="client-picker-summary">
-              <span className="client-picker-label">Clientes</span>
-              <span className="client-picker-value">{buildClientSelectionLabel(eligibleClients, selectedCustomerIds)}</span>
-            </summary>
-
-            <div className="client-picker-panel">
-              <label className="client-picker-option" key="all-artimo-clients">
-                <input
-                  type="checkbox"
-                  checked={selectedCustomerIds.length === 0}
-                  onChange={() => setSelectedCustomerIds([])}
-                />
-                <span>
-                  Todos los clientes
-                  <small>
-                    {eligibleClients.reduce((total, client) => total + client.readyVehicles, 0)} placas listas
-                  </small>
-                </span>
-              </label>
-
-              {catalogLoading ? (
-                <p className="support-copy">Cargando clientes...</p>
-              ) : eligibleClients.length === 0 ? (
-                <p className="support-copy">No hay clientes registrados.</p>
-              ) : (
-                eligibleClients.map((client) => {
-                  const checked = selectedCustomerIds.includes(client.id);
-                  return (
-                    <label className="client-picker-option" key={client.id}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => {
-                          setSelectedCustomerIds((current) =>
-                            checked
-                              ? current.filter((value) => value !== client.id)
-                              : [...current, client.id].sort((a, b) => a - b)
-                          );
-                        }}
-                      />
-                      <span>
-                        {client.name}
-                        <small>
-                          {client.readyVehicles > 0
-                            ? `${client.readyVehicles} placas listas`
-                            : client.hasPerformanceDatabase
-                              ? "Sin placas listas"
-                              : "Sin database activa"}
-                        </small>
-                      </span>
-                    </label>
-                  );
-                })
-              )}
-            </div>
-          </details>
-
           <Can permission="rendimientos.refresh">
-            <button type="button" onClick={handleCalculate} disabled={calculating || !calcMonthFrom || !calcMonthTo}>
-              {calculating ? "Calculando..." : "Calcular"}
+            <button
+              type="button"
+              onClick={() => setConsultOpen(true)}
+              disabled={calculating}
+            >
+              {calculating ? "Calculando..." : "Consultar"}
             </button>
           </Can>
         </div>
@@ -1211,6 +1139,150 @@ export default function RendimientosPage() {
           )
         )}
       </section>
+
+      {consultOpen && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setConsultOpen(false);
+          }}
+        >
+          <section className="card modal-card modal-card--popover" role="dialog" aria-modal="true" aria-label="Consultar rendimientos">
+            <header className="modal-header">
+              <div className="modal-heading">
+                <span className="eyebrow">Calcular rendimientos</span>
+                <h3>Consultar</h3>
+              </div>
+              <button
+                type="button"
+                className="icon-button modal-close-button"
+                onClick={() => setConsultOpen(false)}
+              >
+                Cerrar
+              </button>
+            </header>
+
+            <p className="support-copy modal-support-copy">
+              Selecciona el rango de meses y los clientes a procesar. El cálculo correrá en segundo plano y verás el progreso en la parte superior.
+            </p>
+
+            <form
+              className="register-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                handleCalculate();
+              }}
+            >
+              <div className="rendimientos-month-actions">
+                <div className="form-field">
+                  <label htmlFor="rendimientos-calc-month-from">Desde</label>
+                  <input
+                    id="rendimientos-calc-month-from"
+                    type="month"
+                    value={calcMonthFrom}
+                    onChange={(event) => setCalcMonthFrom(event.target.value)}
+                    disabled={calculating}
+                  />
+                </div>
+                <div className="form-field">
+                  <label htmlFor="rendimientos-calc-month-to">Hasta</label>
+                  <input
+                    id="rendimientos-calc-month-to"
+                    type="month"
+                    value={calcMonthTo}
+                    onChange={(event) => setCalcMonthTo(event.target.value)}
+                    disabled={calculating}
+                  />
+                </div>
+
+                <details className="client-picker" ref={pickerRef}>
+                  <summary className="client-picker-summary">
+                    <span className="client-picker-label">Clientes</span>
+                    <span className="client-picker-value">{buildClientSelectionLabel(eligibleClients, selectedCustomerIds)}</span>
+                  </summary>
+
+                  <div className="client-picker-panel">
+                    <label className="client-picker-option" key="all-artimo-clients">
+                      <input
+                        type="checkbox"
+                        checked={selectedCustomerIds.length === 0}
+                        onChange={() => setSelectedCustomerIds([])}
+                      />
+                      <span>
+                        Todos los clientes
+                        <small>
+                          {eligibleClients.reduce((total, client) => total + client.readyVehicles, 0)} placas listas
+                        </small>
+                      </span>
+                    </label>
+
+                    {catalogLoading ? (
+                      <p className="support-copy">Cargando clientes...</p>
+                    ) : eligibleClients.length === 0 ? (
+                      <p className="support-copy">No hay clientes registrados.</p>
+                    ) : (
+                      eligibleClients.map((client) => {
+                        const checked = selectedCustomerIds.includes(client.id);
+                        return (
+                          <label className="client-picker-option" key={client.id}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setSelectedCustomerIds((current) =>
+                                  checked
+                                    ? current.filter((value) => value !== client.id)
+                                    : [...current, client.id].sort((a, b) => a - b)
+                                );
+                              }}
+                            />
+                            <span>
+                              {client.name}
+                              <small>
+                                {client.readyVehicles > 0
+                                  ? `${client.readyVehicles} placas listas`
+                                  : client.hasPerformanceDatabase
+                                    ? "Sin placas listas"
+                                    : "Sin database activa"}
+                              </small>
+                            </span>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                </details>
+              </div>
+
+              <label className="client-picker-option" style={{ margin: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={calcAvailability}
+                  onChange={(event) => setCalcAvailability(event.target.checked)}
+                />
+                <span>
+                  Calcular Disponibilidad
+                  <small>Próximamente: incluirá el cálculo de disponibilidad de la flota.</small>
+                </span>
+              </label>
+
+              <div className="actions-row modal-actions">
+                <button type="submit" disabled={calculating || !calcMonthFrom || !calcMonthTo}>
+                  {calculating ? "Calculando..." : "Calcular"}
+                </button>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => setConsultOpen(false)}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
     </section>
   );
 }

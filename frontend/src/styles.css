@@ -3002,6 +3002,10 @@ input[readonly] {
   box-shadow: var(--shadow-lg);
 }
 
+.modal-card.modal-card--popover {
+  overflow: visible;
+}
+
 .client-picker-option {
   display: flex;
   align-items: center;
