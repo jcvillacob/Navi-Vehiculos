@@ -380,6 +380,10 @@ class MonthlyPerformanceCalculateRequest(BaseModel):
         default=False,
         description="Si es true, recalcula aunque ya exista un corte mensual persistido",
     )
+    compute_availability: bool = Field(
+        default=False,
+        description="Si es true, despues de los rendimientos calcula tambien la disponibilidad de proyectos desde CloudFleet.",
+    )
 
 
 class MonthlyPerformanceRecord(BaseModel):
@@ -413,6 +417,14 @@ class MonthlyPerformanceRecord(BaseModel):
     calculated_at: datetime | None = Field(default=None, description="Fecha del ultimo calculo")
 
 
+class AvailabilitySummary(BaseModel):
+    total: int = Field(default=0, description="Total de placas evaluadas en disponibilidad")
+    calculated: int = Field(default=0, description="Placas con disponibilidad calculada")
+    no_orders: int = Field(default=0, description="Placas sin ordenes en el mes (100% por default)")
+    not_in_cloudfleet: int = Field(default=0, description="Placas locales que no aparecen en CloudFleet")
+    error: int = Field(default=0, description="Placas con error puntual")
+
+
 class MonthlyPerformanceSummary(BaseModel):
     total: int = Field(default=0, description="Total de placas retornadas")
     calculated: int = Field(default=0, description="Cantidad de placas calculadas")
@@ -420,6 +432,34 @@ class MonthlyPerformanceSummary(BaseModel):
     unbound: int = Field(default=0, description="Cantidad de placas sin binding")
     no_data: int = Field(default=0, description="Cantidad de placas sin datos")
     error: int = Field(default=0, description="Cantidad de placas con error")
+    availability: AvailabilitySummary | None = Field(
+        default=None,
+        description="Resumen de disponibilidad cuando el job corrio con compute_availability=true.",
+    )
+
+
+class MonthlyVehicleAvailabilityRow(BaseModel):
+    plate: str = Field(..., description="Placa local")
+    period_month: str = Field(..., description="Mes en formato YYYY-MM")
+    calculation_status: str = Field(
+        ...,
+        description="calculated | no_orders | not_in_cloudfleet | error",
+    )
+    project_availability_pct: float | None = Field(
+        default=None, description="Porcentaje de disponibilidad de proyectos"
+    )
+    h_total: float | None = Field(default=None, description="Horas teoricas del mes (dias*24)")
+    h_no_disp: float | None = Field(default=None, description="Horas no disponibles en el mes")
+    orders_considered: int = Field(default=0, description="Cantidad de ordenes que afectaron disponibilidad")
+    error_message: str | None = Field(default=None, description="Detalle del error si lo hubo")
+    last_calculated_at: datetime = Field(..., description="Cuando se calculo por ultima vez")
+    source: str = Field(default="cloudfleet", description="Fuente del calculo")
+
+
+class MonthlyVehicleAvailabilityResponse(BaseModel):
+    month_from: str = Field(..., description="Inicio del rango consultado")
+    month_to: str = Field(..., description="Fin del rango consultado")
+    rows: list[MonthlyVehicleAvailabilityRow] = Field(default_factory=list)
 
 
 class MonthlyPerformanceResponse(BaseModel):
@@ -444,6 +484,10 @@ class PerformanceCalculationJob(BaseModel):
     customer_ids: list[int] = Field(default_factory=list)
     customer_database_id: int | None = Field(default=None)
     force_recalculate: bool = Field(default=True)
+    compute_availability: bool = Field(
+        default=False,
+        description="Si es true, el job tambien corrio el calculo de disponibilidad CloudFleet.",
+    )
     total_targets: int = Field(default=0)
     processed_targets: int = Field(default=0)
     progress_pct: float = Field(default=0.0, description="Porcentaje 0-100 derivado de processed/total")

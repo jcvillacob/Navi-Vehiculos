@@ -58,6 +58,16 @@ class QuickServeConfig:
     base_url: str
 
 
+@dataclass(frozen=True)
+class CloudFleetConfig:
+    api_key: str
+    base_url: str
+    timeout: float
+    request_delay: float
+    rate_limit_delay: float
+    max_retries: int
+
+
 settings = Settings()
 
 
@@ -86,4 +96,22 @@ def load_quickserve_config() -> QuickServeConfig:
         app_id=_required_env("QUICKSERVE_APP_ID"),
         sf_base=os.getenv("QUICKSERVE_SF_BASE", "https://mylogin.cummins.com").rstrip("/"),
         base_url=os.getenv("QUICKSERVE_BASE_URL", "https://quickserve.cummins.com").rstrip("/"),
+    )
+
+
+def load_cloudfleet_config() -> CloudFleetConfig | None:
+    """
+    Carga config CloudFleet desde env. Devuelve None si CLOUDFLEET_API_KEY
+    no esta definido — el caller debe interpretar eso como "feature deshabilitada".
+    """
+    api_key = (os.getenv("CLOUDFLEET_API_KEY") or "").strip()
+    if not api_key:
+        return None
+    return CloudFleetConfig(
+        api_key=api_key,
+        base_url=os.getenv("CLOUDFLEET_API_URL", "https://fleet.cloudfleet.com/api/v1").rstrip("/"),
+        timeout=float(os.getenv("CLOUDFLEET_HTTP_TIMEOUT", "45")),
+        request_delay=float(os.getenv("CLOUDFLEET_REQUEST_DELAY", "2.0")),
+        rate_limit_delay=float(os.getenv("CLOUDFLEET_RATE_LIMIT_DELAY", "10.0")),
+        max_retries=int(os.getenv("CLOUDFLEET_MAX_RETRIES", "3")),
     )

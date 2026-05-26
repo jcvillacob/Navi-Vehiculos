@@ -4,9 +4,12 @@ from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
     MonthlyPerformanceCalculateRequest,
     MonthlyPerformanceResponse,
+    MonthlyVehicleAvailabilityResponse,
+    MonthlyVehicleAvailabilityRow,
     PerformanceCalculationJob,
     PerformanceJobListResponse,
 )
+from app.services.availability_store import list_monthly_availability
 from app.services.rendimientos import list_monthly_performance
 from app.services.rendimientos_jobs import (
     JobAlreadyRunning,
@@ -108,3 +111,22 @@ def get_performance_job(
         return get_job(job_id)
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/availability", response_model=MonthlyVehicleAvailabilityResponse)
+def get_monthly_availability(
+    month_from: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="Inicio del rango"),
+    month_to: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="Fin del rango"),
+    _user: dict = Depends(require_permission("rendimientos.view")),
+) -> MonthlyVehicleAvailabilityResponse:
+    """
+    Devuelve los registros persistidos de disponibilidad (CloudFleet) en el
+    rango pedido. El front llama este endpoint despues de cargar los
+    rendimientos para hacer merge en memoria por placa.
+    """
+    rows = list_monthly_availability(month_from=month_from, month_to=month_to)
+    return MonthlyVehicleAvailabilityResponse(
+        month_from=month_from,
+        month_to=month_to,
+        rows=[MonthlyVehicleAvailabilityRow(**row) for row in rows],
+    )

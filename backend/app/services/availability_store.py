@@ -1,0 +1,319 @@
+"""
+Persistencia + orquestacion del calculo de disponibilidad por vehiculo.
+
+- DDL idempotente para `monthly_vehicle_availability`.
+- UPSERT por (plate, period_month, source).
+- Orquestador `run_availability_phase()` que el job de rendimientos llama
+  cuando el flag `compute_availability=true` esta presente.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any, Callable
+
+import psycopg
+from psycopg.rows import dict_row
+
+from app.clients.cloudfleet_client import (
+    CloudFleetAuthError,
+    CloudFleetUnavailableError,
+    list_vehicles,
+    list_work_orders,
+)
+from app.core.config import load_cloudfleet_config
+from app.services.availability import (
+    AvailabilityResult,
+    AvailabilityTarget,
+    _month_bounds_utc,
+    calculate_availability_for_targets,
+)
+from app.services.motor_catalog import _database_dsn
+
+_logger = logging.getLogger(__name__)
+
+_TABLE_BOOTSTRAPPED = False
+_SOURCE_CLOUDFLEET = "cloudfleet"
+
+
+def _ensure_availability_table() -> None:
+    """
+    Bootstrap idempotente — corre la DDL una sola vez por proceso. Igual patron
+    que `_ensure_jobs_table` en rendimientos_jobs.py.
+    """
+    global _TABLE_BOOTSTRAPPED
+    if _TABLE_BOOTSTRAPPED:
+        return
+    own_conn = psycopg.connect(_database_dsn())
+    try:
+        with own_conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS monthly_vehicle_availability (
+                    id BIGSERIAL PRIMARY KEY,
+                    plate TEXT NOT NULL,
+                    period_month TEXT NOT NULL,
+                    calculation_status TEXT NOT NULL
+                        CHECK (calculation_status IN
+                            ('calculated','no_orders','not_in_cloudfleet','error')),
+                    project_availability_pct NUMERIC(6,3) NULL,
+                    h_total NUMERIC(10,3) NULL,
+                    h_no_disp NUMERIC(10,3) NULL,
+                    orders_considered INTEGER NOT NULL DEFAULT 0,
+                    error_message TEXT NULL,
+                    last_calculated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    source TEXT NOT NULL DEFAULT 'cloudfleet'
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS monthly_vehicle_availability_unique
+                    ON monthly_vehicle_availability (plate, period_month, source);
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS monthly_vehicle_availability_month_idx
+                    ON monthly_vehicle_availability (period_month);
+                """
+            )
+        own_conn.commit()
+    finally:
+        own_conn.close()
+    _TABLE_BOOTSTRAPPED = True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Persistencia
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _upsert_result(
+    conn: psycopg.Connection,
+    *,
+    period_month: str,
+    result: AvailabilityResult,
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO monthly_vehicle_availability (
+                plate, period_month, calculation_status,
+                project_availability_pct, h_total, h_no_disp,
+                orders_considered, error_message,
+                last_calculated_at, source
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+            ON CONFLICT (plate, period_month, source) DO UPDATE SET
+                calculation_status = EXCLUDED.calculation_status,
+                project_availability_pct = EXCLUDED.project_availability_pct,
+                h_total = EXCLUDED.h_total,
+                h_no_disp = EXCLUDED.h_no_disp,
+                orders_considered = EXCLUDED.orders_considered,
+                error_message = EXCLUDED.error_message,
+                last_calculated_at = NOW();
+            """,
+            (
+                result.plate,
+                period_month,
+                result.status,
+                result.project_availability_pct,
+                result.h_total,
+                result.h_no_disp,
+                result.orders_considered,
+                result.error_message,
+                _SOURCE_CLOUDFLEET,
+            ),
+        )
+
+
+def list_monthly_availability(
+    *,
+    month_from: str,
+    month_to: str,
+) -> list[dict[str, Any]]:
+    """
+    Devuelve las filas persistidas en el rango pedido.
+    """
+    if month_to < month_from:
+        month_from, month_to = month_to, month_from
+    _ensure_availability_table()
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT plate,
+                       period_month,
+                       calculation_status,
+                       project_availability_pct,
+                       h_total,
+                       h_no_disp,
+                       orders_considered,
+                       error_message,
+                       last_calculated_at,
+                       source
+                FROM monthly_vehicle_availability
+                WHERE period_month BETWEEN %s AND %s
+                  AND source = %s
+                ORDER BY period_month ASC, plate ASC;
+                """,
+                (month_from, month_to, _SOURCE_CLOUDFLEET),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Targets — placas a evaluar segun customers seleccionados
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _load_plates_for_customers(
+    customer_ids: list[int],
+) -> list[AvailabilityTarget]:
+    """
+    Devuelve TODAS las placas asignadas a los customers indicados
+    (sin filtro por provider, a diferencia de la fase de rendimientos).
+    Si la lista es vacia, devuelve todas las placas.
+    """
+    params: list[Any] = []
+    where = ["1 = 1"]
+    if customer_ids:
+        where.append("a.customer_id = ANY(%s)")
+        params.append(sorted({int(c) for c in customer_ids}))
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                f"""
+                SELECT DISTINCT a.plate
+                FROM vehicle_motor_assignments a
+                WHERE {" AND ".join(where)}
+                ORDER BY a.plate ASC;
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+
+    return [AvailabilityTarget(plate=str(row["plate"])) for row in rows if row.get("plate")]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Orquestacion — la llama rendimientos_jobs.run_job
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _summary_from_results(results: list[AvailabilityResult]) -> dict[str, int]:
+    summary = {
+        "total": len(results),
+        "calculated": 0,
+        "no_orders": 0,
+        "not_in_cloudfleet": 0,
+        "error": 0,
+    }
+    for r in results:
+        if r.status in summary:
+            summary[r.status] += 1
+    return summary
+
+
+def run_availability_phase(
+    *,
+    month: str,
+    customer_ids: list[int],
+    progress_callback: Callable[[int], None] | None = None,
+) -> dict[str, Any]:
+    """
+    Ejecuta el calculo de disponibilidad para todos los vehiculos de los
+    customers seleccionados.
+
+    - Consulta CloudFleet una sola vez (vehicles + work-orders del mes).
+    - Itera placa por placa, persistiendo cada resultado (UPSERT).
+    - `progress_callback(processed)` se llama despues de cada placa procesada
+      para que el job principal pueda actualizar processed_targets.
+
+    Levanta excepciones explicitas si CloudFleet no esta configurado o si la
+    API falla — el caller (rendimientos_jobs.run_job) las debe atrapar y
+    marcar el job como `error`.
+    """
+    config = load_cloudfleet_config()
+    if config is None:
+        raise RuntimeError(
+            "CloudFleet no esta configurado: falta CLOUDFLEET_API_KEY en el .env."
+        )
+
+    _ensure_availability_table()
+
+    targets = _load_plates_for_customers(customer_ids)
+    if not targets:
+        _logger.info("Disponibilidad %s: no hay placas para los customers seleccionados.", month)
+        return {
+            "total": 0,
+            "calculated": 0,
+            "no_orders": 0,
+            "not_in_cloudfleet": 0,
+            "error": 0,
+        }
+
+    updated_at_from, updated_at_to = _month_bounds_utc(month)
+
+    _logger.info(
+        "Disponibilidad %s: descargando inventario CloudFleet (placas locales=%d).",
+        month,
+        len(targets),
+    )
+    try:
+        vehicles = list_vehicles(config)
+        orders = list_work_orders(
+            config,
+            updated_at_from=updated_at_from,
+            updated_at_to=updated_at_to,
+        )
+    except CloudFleetAuthError:
+        raise
+    except CloudFleetUnavailableError:
+        raise
+    except Exception as exc:
+        # Cualquier otra excepcion del cliente se traduce a Unavailable para que
+        # el job marque error sin colapsar el proceso.
+        raise CloudFleetUnavailableError(
+            f"Error inesperado consultando CloudFleet: {exc}"
+        ) from exc
+
+    results = calculate_availability_for_targets(
+        targets,
+        month=month,
+        cloudfleet_vehicles=vehicles,
+        cloudfleet_work_orders=orders,
+        now=datetime.now(),
+    )
+
+    processed = 0
+    with psycopg.connect(_database_dsn()) as conn:
+        for result in results:
+            _upsert_result(conn, period_month=month, result=result)
+            processed += 1
+            if progress_callback is not None:
+                try:
+                    progress_callback(processed)
+                except Exception:
+                    pass
+            # Commit per-row para que la barra de progreso del front vea avance
+            # real y para no atrapar locks largos.
+            conn.commit()
+
+    summary = _summary_from_results(results)
+    _logger.info(
+        "Disponibilidad %s lista: calc=%d no_orders=%d not_in_cf=%d err=%d",
+        month,
+        summary["calculated"],
+        summary["no_orders"],
+        summary["not_in_cloudfleet"],
+        summary["error"],
+    )
+    return summary
+
+
+__all__ = [
+    "run_availability_phase",
+    "list_monthly_availability",
+]

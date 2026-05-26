@@ -7,6 +7,7 @@ import {
   calculateMonthlyPerformance,
   fetchActivePerformanceJobs,
   fetchConnectionStats,
+  fetchMonthlyAvailability,
   fetchMonthlyPerformance,
   fetchPerformanceJob,
   fetchRecentPerformanceJobs,
@@ -170,6 +171,7 @@ export default function RendimientosPage() {
   });
   const [sortConfig, setSortConfig] = useState({ key: "", direction: "asc" });
   const [connStats, setConnStats] = useState({});
+  const [availabilityByPlate, setAvailabilityByPlate] = useState({});
   const [recentJobs, setRecentJobs] = useState([]);
   const [recentJobsLoading, setRecentJobsLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -341,6 +343,35 @@ export default function RendimientosPage() {
     loadRecords(monthFrom, monthTo).catch(() => {});
   }, [monthFrom, monthTo, loadRecords]);
 
+  // Load availability rows for current visible month range
+  useEffect(() => {
+    const from = monthFrom <= monthTo ? monthFrom : monthTo;
+    const to = monthFrom <= monthTo ? monthTo : monthFrom;
+    let cancelled = false;
+    fetchMonthlyAvailability({ month_from: from, month_to: to })
+      .then((rows) => {
+        if (cancelled) return;
+        // Una placa puede tener varios meses en el rango: nos quedamos con
+        // el mas reciente (last_calculated_at) para mostrar un valor "actual".
+        const byPlate = {};
+        for (const row of rows) {
+          const prev = byPlate[row.plate];
+          if (!prev) {
+            byPlate[row.plate] = row;
+            continue;
+          }
+          const prevTs = new Date(prev.last_calculated_at).getTime();
+          const nextTs = new Date(row.last_calculated_at).getTime();
+          if (nextTs >= prevTs) byPlate[row.plate] = row;
+        }
+        setAvailabilityByPlate(byPlate);
+      })
+      .catch(() => {
+        if (!cancelled) setAvailabilityByPlate({});
+      });
+    return () => { cancelled = true; };
+  }, [monthFrom, monthTo]);
+
   // Load connection stats for current visible month range
   useEffect(() => {
     const months = generateMonthRange(
@@ -458,6 +489,13 @@ export default function RendimientosPage() {
               : null;
           case "conn_pct":
             return connStats[row.plate]?.connection_pct ?? -1;
+          case "availability_pct": {
+            const a = availabilityByPlate[row.plate];
+            if (!a) return -1;
+            if (a.calculation_status === "not_in_cloudfleet") return -2;
+            if (a.calculation_status === "error") return -3;
+            return a.project_availability_pct ?? -1;
+          }
           default:
             return "";
         }
@@ -472,7 +510,7 @@ export default function RendimientosPage() {
       if (comparison !== 0) return comparison;
       return compareValues(left.plate || "", right.plate || "", "asc");
     });
-  }, [filteredRows, sortConfig, connStats]);
+  }, [filteredRows, sortConfig, connStats, availabilityByPlate]);
 
   const sortableColumns = [
     { key: "status", label: "Estado" },
@@ -491,7 +529,8 @@ export default function RendimientosPage() {
     { key: "fuel_gallons", label: "Galones" },
     { key: "kpg", label: "KPG" },
     { key: "gph", label: "GPH" },
-    { key: "conn_pct", label: "Conexion %" }
+    { key: "conn_pct", label: "Conexion %" },
+    { key: "availability_pct", label: "Disp %" }
   ];
 
   const visibleSummary = useMemo(() => {
@@ -611,7 +650,8 @@ export default function RendimientosPage() {
         createResponse = await calculateMonthlyPerformance({
           month: m,
           customer_ids: selectedCustomerIds,
-          force_recalculate: true
+          force_recalculate: true,
+          compute_availability: calcAvailability
         });
       } catch (err) {
         errors++;
@@ -649,6 +689,22 @@ export default function RendimientosPage() {
     }
     if (!pollingCancelledRef.current && to >= monthFrom && from <= monthTo) {
       await loadRecords(monthFrom, monthTo);
+      if (calcAvailability) {
+        try {
+          const rows = await fetchMonthlyAvailability({ month_from: monthFrom, month_to: monthTo });
+          const byPlate = {};
+          for (const row of rows) {
+            const prev = byPlate[row.plate];
+            if (!prev) { byPlate[row.plate] = row; continue; }
+            const prevTs = new Date(prev.last_calculated_at).getTime();
+            const nextTs = new Date(row.last_calculated_at).getTime();
+            if (nextTs >= prevTs) byPlate[row.plate] = row;
+          }
+          setAvailabilityByPlate(byPlate);
+        } catch (err) {
+          pushToast("error", err instanceof Error ? err.message : "No fue posible cargar disponibilidad");
+        }
+      }
     }
     setCalculating(false);
     setCalcProgress({ current: 0, total: 0, currentMonth: "", processedTargets: 0, totalTargets: 0, jobId: null });
@@ -671,6 +727,13 @@ export default function RendimientosPage() {
           : null;
 
         const cs = connStats[row.plate];
+        const a = availabilityByPlate[row.plate];
+        let availabilityCell = "Sin Datos";
+        if (a) {
+          if (a.calculation_status === "not_in_cloudfleet") availabilityCell = "No Aplica";
+          else if (a.calculation_status === "error") availabilityCell = "Error";
+          else availabilityCell = a.project_availability_pct;
+        }
         return {
           Mes: row.period_month || "",
           Estado: getStatusLabel(row.calculation_status),
@@ -692,7 +755,8 @@ export default function RendimientosPage() {
           "Conexion %": cs ? cs.connection_pct : null,
           "Dias conectado": cs ? cs.days_connected : null,
           "Dias revisados": cs ? cs.days_checked : null,
-          "Dias desconectado consecutivos": cs ? cs.consecutive_disconnected : null
+          "Dias desconectado consecutivos": cs ? cs.consecutive_disconnected : null,
+          "Disp % (Proyectos)": availabilityCell
         };
       });
 
@@ -1007,6 +1071,47 @@ export default function RendimientosPage() {
                                 <span className="conn-pct-fill" style={{ width: `${cs.connection_pct}%` }} />
                               </span>
                               <span className="conn-pct-label">{Math.round(cs.connection_pct)}%</span>
+                            </span>
+                          );
+                        })()}
+                      </td>
+                      <td data-label="Disp %">
+                        {(() => {
+                          const a = availabilityByPlate[row.plate];
+                          if (!a) {
+                            return <span className="availability-badge availability-empty">Sin Datos</span>;
+                          }
+                          if (a.calculation_status === "not_in_cloudfleet") {
+                            return (
+                              <span
+                                className="availability-badge availability-na"
+                                title="La placa no aparece en CloudFleet"
+                              >
+                                No Aplica
+                              </span>
+                            );
+                          }
+                          if (a.calculation_status === "error") {
+                            return (
+                              <span
+                                className="availability-badge availability-error"
+                                title={a.error_message || "Error en el calculo"}
+                              >
+                                Error
+                              </span>
+                            );
+                          }
+                          const pct = a.project_availability_pct ?? 0;
+                          const level = pct >= 97 ? "good" : pct >= 96 ? "warn" : "bad";
+                          const title = a.calculation_status === "no_orders"
+                            ? "Sin ordenes en el mes"
+                            : `${a.orders_considered} orden(es) consideradas | h_no_disp=${Number(a.h_no_disp || 0).toFixed(1)} / h_total=${Number(a.h_total || 0).toFixed(1)}`;
+                          return (
+                            <span
+                              className={`availability-badge availability-${level}`}
+                              title={title}
+                            >
+                              {pct.toFixed(1)}%
                             </span>
                           );
                         })()}

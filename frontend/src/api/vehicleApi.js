@@ -243,6 +243,13 @@ export async function fetchRecentPerformanceJobs(limit = 50) {
   return Array.isArray(data?.jobs) ? data.jobs : [];
 }
 
+export async function fetchMonthlyAvailability({ month_from, month_to }) {
+  const query = new URLSearchParams({ month_from, month_to });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/rendimientos/availability?${query.toString()}`));
+  const data = await parseJsonOrThrow(response, "Error cargando disponibilidad mensual");
+  return Array.isArray(data?.rows) ? data.rows : [];
+}
+
 // ── Vehicle ───────────────────────────────────────────────────────────────────
 
 export async function lookupVehicle(identifier, { force = false } = {}) {

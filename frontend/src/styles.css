@@ -2860,6 +2860,56 @@ input[readonly] {
 .conn-pct-bad .conn-pct-fill { background: #c52b2b; }
 .conn-pct-bad .conn-pct-label { color: #c52b2b; }
 
+/* Availability % badge */
+.availability-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-body);
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.availability-empty {
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+.availability-na {
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: var(--bg);
+  font-style: italic;
+}
+
+.availability-error {
+  color: #c52b2b;
+  border-color: rgba(197, 43, 43, 0.35);
+  background: rgba(197, 43, 43, 0.08);
+}
+
+.availability-good {
+  color: #2f8c2f;
+  border-color: rgba(47, 140, 47, 0.35);
+  background: rgba(47, 140, 47, 0.08);
+}
+
+.availability-warn {
+  color: #d18c00;
+  border-color: rgba(209, 140, 0, 0.35);
+  background: rgba(209, 140, 0, 0.08);
+}
+
+.availability-bad {
+  color: #c52b2b;
+  border-color: rgba(197, 43, 43, 0.35);
+  background: rgba(197, 43, 43, 0.08);
+}
+
 .conn-pct-alert {
   position: relative;
 }

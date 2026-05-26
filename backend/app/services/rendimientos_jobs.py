@@ -19,10 +19,13 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.schemas.vehicle import (
+    AvailabilitySummary,
     MonthlyPerformanceCalculateRequest,
     MonthlyPerformanceSummary,
     PerformanceCalculationJob,
 )
+from app.services.availability_store import run_availability_phase
+from app.clients.cloudfleet_client import CloudFleetAuthError, CloudFleetUnavailableError
 from app.services.motor_catalog import _database_dsn
 from app.services.rendimientos import calculate_monthly_performance
 
@@ -90,6 +93,12 @@ def _ensure_jobs_table(conn: psycopg.Connection | None = None) -> None:
                     ON performance_calculation_jobs (created_by_user_id, created_at DESC);
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE performance_calculation_jobs
+                ADD COLUMN IF NOT EXISTS compute_availability BOOLEAN NOT NULL DEFAULT FALSE;
+                """
+            )
         own_conn.commit()
     finally:
         own_conn.close()
@@ -114,7 +123,8 @@ def _compute_scope_key(payload: MonthlyPerformanceCalculateRequest) -> str:
         cids.add(int(payload.customer_id))
     cids_part = ",".join(str(c) for c in sorted(cids)) if cids else "all"
     db_part = str(payload.customer_database_id) if payload.customer_database_id is not None else "any"
-    return f"{cids_part}|{db_part}"
+    avail_part = "av" if payload.compute_availability else "noav"
+    return f"{cids_part}|{db_part}|{avail_part}"
 
 
 def _row_to_job(row: dict[str, Any]) -> PerformanceCalculationJob:
@@ -136,6 +146,7 @@ def _row_to_job(row: dict[str, Any]) -> PerformanceCalculationJob:
         customer_ids=list(row.get("customer_ids") or []),
         customer_database_id=row.get("customer_database_id"),
         force_recalculate=bool(row.get("force_recalculate")),
+        compute_availability=bool(row.get("compute_availability")),
         total_targets=total,
         processed_targets=processed,
         progress_pct=progress,
@@ -205,9 +216,10 @@ def create_job(
                     INSERT INTO performance_calculation_jobs (
                         status, month, scope_key,
                         customer_id, customer_ids, customer_database_id,
-                        force_recalculate, triggered_by, created_by_user_id
+                        force_recalculate, compute_availability,
+                        triggered_by, created_by_user_id
                     )
-                    VALUES ('queued', %s, %s, %s, %s::jsonb, %s, %s, %s, %s)
+                    VALUES ('queued', %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
                     RETURNING *;
                     """,
                     (
@@ -217,6 +229,7 @@ def create_job(
                         Jsonb(customer_ids),
                         payload.customer_database_id,
                         payload.force_recalculate,
+                        payload.compute_availability,
                         triggered_by,
                         user_id,
                     ),
@@ -329,10 +342,17 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
         customer_ids=list(job.customer_ids or []),
         customer_database_id=job.customer_database_id,
         force_recalculate=job.force_recalculate,
+        compute_availability=job.compute_availability,
     )
 
     _mark_running(job_id)
-    _logger.info("Job %s: running (month=%s, scope_key=%s)", job_id, job.month, _compute_scope_key(payload))
+    _logger.info(
+        "Job %s: running (month=%s, scope_key=%s, availability=%s)",
+        job_id,
+        job.month,
+        _compute_scope_key(payload),
+        job.compute_availability,
+    )
 
     try:
         result = calculate_monthly_performance(
@@ -340,25 +360,118 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
             progress_callback=lambda processed, total: _update_progress(job_id, processed, total),
         )
     except Exception as exc:
-        _logger.exception("Job %s fallo", job_id)
+        _logger.exception("Job %s fallo en fase de rendimientos", job_id)
         _mark_error(job_id, f"{type(exc).__name__}: {exc}")
         with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
             return _fetch_job(conn, job_id) or job
 
-    _mark_done(job_id, result.summary)
+    summary_with_availability = result.summary
+
+    if job.compute_availability:
+        try:
+            rendimientos_total = max(result.summary.total, 0)
+            availability_total = _count_availability_targets(payload)
+            grand_total = rendimientos_total + availability_total
+            # La barra de progreso suma rendimientos + disponibilidad. Subimos
+            # total_targets aqui para que el front anticipe el segundo tramo
+            # y la fraccion overall se mantenga monotona.
+            _bump_total(job_id, extra_total=availability_total)
+            availability_summary = run_availability_phase(
+                month=job.month,
+                customer_ids=list(payload.customer_ids or []),
+                progress_callback=lambda processed: _update_progress(
+                    job_id,
+                    rendimientos_total + processed,
+                    grand_total,
+                ),
+            )
+            summary_with_availability = result.summary.model_copy(
+                update={"availability": AvailabilitySummary(**availability_summary)}
+            )
+        except (CloudFleetAuthError, CloudFleetUnavailableError) as exc:
+            _logger.exception("Job %s: fase de disponibilidad fallo", job_id)
+            _mark_error(job_id, f"Disponibilidad: {type(exc).__name__}: {exc}")
+            with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+                return _fetch_job(conn, job_id) or job
+        except Exception as exc:
+            _logger.exception("Job %s: fase de disponibilidad fallo (inesperado)", job_id)
+            _mark_error(job_id, f"Disponibilidad: {type(exc).__name__}: {exc}")
+            with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+                return _fetch_job(conn, job_id) or job
+
+    _mark_done(job_id, summary_with_availability)
+    avail_log = ""
+    if summary_with_availability.availability is not None:
+        a = summary_with_availability.availability
+        avail_log = (
+            f" | availability: calc={a.calculated} no_orders={a.no_orders} "
+            f"not_in_cf={a.not_in_cloudfleet} err={a.error}"
+        )
     _logger.info(
-        "Job %s: done — calculated=%d partial=%d unbound=%d no_data=%d error=%d",
+        "Job %s: done — calculated=%d partial=%d unbound=%d no_data=%d error=%d%s",
         job_id,
         result.summary.calculated,
         result.summary.partial,
         result.summary.unbound,
         result.summary.no_data,
         result.summary.error,
+        avail_log,
     )
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         final = _fetch_job(conn, job_id)
     return final or job
+
+
+def _bump_total(job_id: int, *, extra_total: int) -> None:
+    """Suma `extra_total` al total_targets sin tocar processed_targets."""
+    if extra_total <= 0:
+        return
+    try:
+        with psycopg.connect(_database_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE performance_calculation_jobs
+                    SET total_targets = total_targets + %s,
+                        updated_at = NOW()
+                    WHERE id = %s;
+                    """,
+                    (extra_total, job_id),
+                )
+            conn.commit()
+    except Exception:
+        _logger.exception("No fue posible aumentar total_targets del job %s", job_id)
+
+
+def _count_availability_targets(payload: MonthlyPerformanceCalculateRequest) -> int:
+    """
+    Cantidad de placas que se van a procesar en la fase de disponibilidad.
+    Misma query que `_load_plates_for_customers` pero solo cuenta, para que
+    el front pueda mostrar el progreso completo desde el inicio.
+    """
+    params: list[Any] = []
+    where = ["1 = 1"]
+    customer_ids = sorted({int(c) for c in (payload.customer_ids or [])})
+    if customer_ids:
+        where.append("a.customer_id = ANY(%s)")
+        params.append(customer_ids)
+    try:
+        with psycopg.connect(_database_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT COUNT(DISTINCT a.plate)
+                    FROM vehicle_motor_assignments a
+                    WHERE {" AND ".join(where)};
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+    except Exception:
+        _logger.exception("No fue posible contar targets de disponibilidad")
+        return 0
 
 
 def get_job(job_id: int) -> PerformanceCalculationJob:
