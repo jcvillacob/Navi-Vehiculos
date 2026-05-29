@@ -74,6 +74,7 @@ def manual_assign_vehicle(
             linea=payload.linea,
             ano_modelo=payload.ano_modelo,
             tipo_combustible=payload.tipo_combustible,
+            nombre_vehiculo=payload.nombre_vehiculo,
         )
         return {"registered": True, "plate": plate.strip().upper()}
     except Exception as exc:

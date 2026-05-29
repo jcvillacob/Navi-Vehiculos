@@ -47,6 +47,7 @@ def _normalize_fenix_details(row: dict | None) -> dict[str, str | None]:
         "configuracion": str(row.get("Configuracion")).strip() if row.get("Configuracion") else None,
         "ano_modelo": str(row.get("AñoModelo")).strip() if row.get("AñoModelo") else None,
         "tipo_combustible": str(row.get("Tipo de Combustible")).strip() if row.get("Tipo de Combustible") else None,
+        "nombre_vehiculo": str(row.get("Nombre Vehiculo")).strip() if row.get("Nombre Vehiculo") else None,
     }
 
 
@@ -246,6 +247,7 @@ def lookup_vehicle(identifier: str, *, force: bool = False) -> VehicleLookupResp
                     linea=fenix_details.get("linea"),
                     ano_modelo=fenix_details.get("ano_modelo"),
                     tipo_combustible=fenix_details.get("tipo_combustible"),
+                    nombre_vehiculo=fenix_details.get("nombre_vehiculo"),
                 )
             geotab_customer_info = get_vehicle_geotab_customer_status(plate)
             return VehicleLookupResponse(
@@ -291,6 +293,7 @@ def lookup_vehicle(identifier: str, *, force: bool = False) -> VehicleLookupResp
                     linea=fenix_details.get("linea"),
                     ano_modelo=fenix_details.get("ano_modelo"),
                     tipo_combustible=fenix_details.get("tipo_combustible"),
+                    nombre_vehiculo=fenix_details.get("nombre_vehiculo"),
                 )
             geotab_customer_info = get_vehicle_geotab_customer_status(plate)
             return VehicleLookupResponse(
@@ -332,6 +335,7 @@ def lookup_vehicle(identifier: str, *, force: bool = False) -> VehicleLookupResp
                 linea=fenix_details.get("linea"),
                 ano_modelo=fenix_details.get("ano_modelo"),
                 tipo_combustible=fenix_details.get("tipo_combustible"),
+                nombre_vehiculo=fenix_details.get("nombre_vehiculo"),
             )
 
         message = "Consulta completada."

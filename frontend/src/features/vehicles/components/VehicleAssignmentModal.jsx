@@ -204,6 +204,7 @@ export default function VehicleAssignmentModal({
 
         <div className="data-grid">
           <DataItem label="Placa" value={vehicle.plate} />
+          <DataItem label="Nombre" value={vehicle.nombre_vehiculo} />
           <DataItem label="VIN" value={vehicle.vin} />
           <DataItem label="ESN" value={vehicle.engine_number} />
           <DataItem label="CPL" value={vehicle.cpl} />

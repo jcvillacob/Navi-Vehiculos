@@ -477,6 +477,12 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
         )
         cur.execute(
             """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS nombre_vehiculo TEXT NULL;
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS motor_attachments (
                 id BIGSERIAL PRIMARY KEY,
                 motor_id BIGINT NOT NULL REFERENCES motor_catalog(id) ON DELETE CASCADE,
@@ -1222,6 +1228,7 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     a.linea,
                     a.ano_modelo,
                     a.tipo_combustible,
+                    a.nombre_vehiculo,
                     m.engine_name,
                     c.name AS client_name,
                     cd.database_name,
@@ -1307,6 +1314,7 @@ def register_vehicle_assignment(
     linea: str | None = None,
     ano_modelo: str | None = None,
     tipo_combustible: str | None = None,
+    nombre_vehiculo: str | None = None,
 ) -> None:
     normalized_plate = plate.strip().upper()
     normalized_technical_number = technical_number.strip()
@@ -1328,9 +1336,10 @@ def register_vehicle_assignment(
                     marca,
                     linea,
                     ano_modelo,
-                    tipo_combustible
+                    tipo_combustible,
+                    nombre_vehiculo
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (plate)
                 DO UPDATE SET
                     vin = EXCLUDED.vin,
@@ -1342,6 +1351,7 @@ def register_vehicle_assignment(
                     linea = EXCLUDED.linea,
                     ano_modelo = EXCLUDED.ano_modelo,
                     tipo_combustible = EXCLUDED.tipo_combustible,
+                    nombre_vehiculo = EXCLUDED.nombre_vehiculo,
                     updated_at = NOW(),
                     last_seen_at = NOW();
                 """,
@@ -1356,6 +1366,7 @@ def register_vehicle_assignment(
                     _normalize_optional_text(linea),
                     _normalize_optional_text(ano_modelo),
                     _normalize_optional_text(tipo_combustible),
+                    _normalize_optional_text(nombre_vehiculo),
                 ),
             )
         conn.commit()
@@ -1371,6 +1382,7 @@ def update_vehicle_metadata(
     linea: str | None = None,
     ano_modelo: str | None = None,
     tipo_combustible: str | None = None,
+    nombre_vehiculo: str | None = None,
 ) -> None:
     """Update Fenix/Geotab fields on an existing vehicle WITHOUT touching technical_number."""
     normalized_plate = plate.strip().upper()
@@ -1391,6 +1403,7 @@ def update_vehicle_metadata(
                     linea = COALESCE(%s, linea),
                     ano_modelo = COALESCE(%s, ano_modelo),
                     tipo_combustible = COALESCE(%s, tipo_combustible),
+                    nombre_vehiculo = COALESCE(%s, nombre_vehiculo),
                     updated_at = NOW(),
                     last_seen_at = NOW()
                 WHERE plate = %s;
@@ -1403,6 +1416,7 @@ def update_vehicle_metadata(
                     _normalize_optional_text(linea),
                     _normalize_optional_text(ano_modelo),
                     _normalize_optional_text(tipo_combustible),
+                    _normalize_optional_text(nombre_vehiculo),
                     normalized_plate,
                 ),
             )

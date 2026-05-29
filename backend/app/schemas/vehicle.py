@@ -153,6 +153,7 @@ class VehicleAssignmentRecord(BaseModel):
     linea: str | None = Field(default=None, description="Linea del vehiculo (Fenix)")
     ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo (Fenix)")
     tipo_combustible: str | None = Field(default=None, description="Tipo de combustible (Fenix)")
+    nombre_vehiculo: str | None = Field(default=None, description="Nombre del vehiculo (Fenix)")
     engine_name: str | None = Field(default=None, description="Nombre visible del motor")
     client_name: str | None = Field(default=None, description="Cliente asociado al vehiculo")
     database_name: str | None = Field(default=None, description="Database asociada al vehiculo")
@@ -205,6 +206,7 @@ class ManualVehicleAssignmentRequest(BaseModel):
     linea: str | None = Field(default=None, description="Linea del vehiculo")
     ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo")
     tipo_combustible: str | None = Field(default=None, description="Tipo de combustible")
+    nombre_vehiculo: str | None = Field(default=None, description="Nombre del vehiculo")
     geotab_status: str = Field(default="unknown", description="Estado Geotab Navitrans")
 
 

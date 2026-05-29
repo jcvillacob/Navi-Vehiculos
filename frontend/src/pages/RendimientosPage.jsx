@@ -797,6 +797,18 @@ export default function RendimientosPage() {
         </div>
 
         <div className="rendimientos-month-actions">
+          {recentJobs.length > 0 && (() => {
+            const last = recentJobs[0];
+            if (last.status !== "done") return null;
+            const d = last.finished_at ? new Date(last.finished_at) : null;
+            const dateStr = d ? `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}` : "";
+            const s = last.summary || {};
+            return (
+              <span className="rendimientos-last-run">
+                {dateStr} - {s.calculated || 0} de {s.total || 0}
+              </span>
+            );
+          })()}
           <Can permission="rendimientos.refresh">
             <button
               type="button"

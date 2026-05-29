@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 
 import Can from "../components/Can";
 import ToastStack from "../components/ToastStack";
@@ -13,6 +14,24 @@ import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssig
 import { assignVehicleDatabase, checkVehicleConnections, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab } from "../api/vehicleApi";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
+
+const VEHICLE_COLUMNS = [
+  { key: "plate", label: "Placa", getValue: (v) => v.plate },
+  { key: "nombre_vehiculo", label: "Nombre", getValue: (v) => v.nombre_vehiculo || "-" },
+  { key: "marca", label: "Marca", getValue: (v) => v.marca || "-" },
+  { key: "linea", label: "Linea", getValue: (v) => v.linea || "-" },
+  { key: "ano_modelo", label: "Año", getValue: (v) => v.ano_modelo || "-" },
+  { key: "tipo_combustible", label: "Combustible", getValue: (v) => v.tipo_combustible || "-" },
+  { key: "vin", label: "VIN", getValue: (v) => v.vin || "Sin VIN" },
+  { key: "cpl", label: "CPL", getValue: (v) => v.cpl || "Sin CPL" },
+  { key: "db_connection", label: "DB", getExportValue: (v) => v.database_connection_type || "-" },
+  { key: "engine_name", label: "Motor", getValue: (v) => v.engine_name || "Sin catalogar" },
+  { key: "technical_number", label: "TEC#", getValue: (v) => v.technical_number },
+  { key: "client_name", label: "Cliente", getValue: (v) => v.client_name || "Sin cliente" },
+  { key: "database_name", label: "Database", getValue: (v) => v.database_name || "Sin database" },
+  { key: "has_motor_rules", label: "Reglas", getExportValue: (v) => (v.has_motor_rules ? "Si" : "No") },
+  { key: "attachments", label: "Adjuntos", getExportValue: (v) => v.attachments?.length || 0 },
+];
 
 function AttachmentIcon({ contentType }) {
   const isPdf = contentType === "application/pdf";
@@ -114,6 +133,33 @@ export default function VehiclesPage() {
   const canEditVehicles = usePermission("vehicles.edit");
   const canRefreshVehicles = usePermission("vehicles.refresh");
 
+  const [visibleColumns, setVisibleColumns] = useState(() => new Set(VEHICLE_COLUMNS.map((c) => c.key)));
+  const [columnSelectorOpen, setColumnSelectorOpen] = useState(false);
+  const columnSelectorRef = useRef(null);
+
+  useEffect(() => {
+    if (!columnSelectorOpen) return;
+    function handleClickOutside(event) {
+      if (columnSelectorRef.current && !columnSelectorRef.current.contains(event.target)) {
+        setColumnSelectorOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [columnSelectorOpen]);
+
+  const toggleColumn = useCallback((key) => {
+    setVisibleColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
   // React to bulk refresh finishing (works even if user navigated away and came back)
   useEffect(() => {
     if (bulkRefresh?.status !== "finished") return;
@@ -204,6 +250,47 @@ export default function VehiclesPage() {
     }
     return result;
   }, [vehicles, filterClient, filterMotor, filterDatabase, filterConnection, connectionResults]);
+
+  const activeColumns = useMemo(
+    () => VEHICLE_COLUMNS.filter((col) => visibleColumns.has(col.key)),
+    [visibleColumns]
+  );
+
+  const handleExportExcel = useCallback(() => {
+    try {
+      const headers = activeColumns.map((col) => col.label);
+      const rows = filteredVehicles.map((vehicle) =>
+        activeColumns.map((col) => {
+          const fn = col.getExportValue || col.getValue;
+          const value = fn ? fn(vehicle) : "";
+          if (value === null || value === undefined) return "";
+          return String(value);
+        })
+      );
+
+      const matrix = [headers, ...rows];
+      const ws = XLSX.utils.aoa_to_sheet(matrix);
+      ws["!freeze"] = { xSplit: 0, ySplit: 1 };
+      ws["!cols"] = headers.map((_, colIndex) => {
+        const maxLen = matrix.reduce((max, row) => {
+          const val = row[colIndex] == null ? "" : String(row[colIndex]);
+          return Math.max(max, val.length);
+        }, String(headers[colIndex] || "").length);
+        return { wch: Math.min(60, Math.max(10, maxLen + 2)) };
+      });
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Vehiculos");
+
+      const now = new Date();
+      const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+      const timePart = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+      XLSX.writeFile(wb, `navi-vehiculos-${datePart}-${timePart}.xlsx`);
+    } catch (err) {
+      console.error("Export error:", err);
+      pushToast("error", "No fue posible exportar a Excel.");
+    }
+  }, [activeColumns, filteredVehicles, pushToast]);
 
   useEffect(() => {
     const visiblePlates = new Set(filteredVehicles.map((vehicle) => vehicle.plate));
@@ -451,6 +538,53 @@ export default function VehiclesPage() {
           </div>
 
           <div className="actions-row section-heading-actions">
+            <div className="column-selector-wrapper" ref={columnSelectorRef}>
+              <button
+                type="button"
+                className="button-secondary button-sm"
+                onClick={() => setColumnSelectorOpen((prev) => !prev)}
+              >
+                Columnas ({visibleColumns.size}/{VEHICLE_COLUMNS.length})
+              </button>
+              {columnSelectorOpen && (
+                <div className="column-selector-dropdown">
+                  <div className="column-selector-actions">
+                    <button
+                      type="button"
+                      className="column-selector-link"
+                      onClick={() => setVisibleColumns(new Set(VEHICLE_COLUMNS.map((c) => c.key)))}
+                    >
+                      Todas
+                    </button>
+                    <button
+                      type="button"
+                      className="column-selector-link"
+                      onClick={() => setVisibleColumns(new Set())}
+                    >
+                      Ninguna
+                    </button>
+                  </div>
+                  {VEHICLE_COLUMNS.map((col) => (
+                    <label key={col.key} className="column-selector-option">
+                      <input
+                        type="checkbox"
+                        checked={visibleColumns.has(col.key)}
+                        onChange={() => toggleColumn(col.key)}
+                      />
+                      <span>{col.label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              className="button-secondary button-sm"
+              onClick={handleExportExcel}
+              disabled={filteredVehicles.length === 0}
+            >
+              Exportar Excel
+            </button>
             <button type="button" className="button-secondary button-sm" onClick={handleClear} disabled={loading}>
               Limpiar
             </button>
@@ -640,21 +774,10 @@ export default function VehiclesPage() {
                       aria-label="Seleccionar vehiculos visibles"
                     />
                   </th>
-                  <th>Placa</th>
-                  <th>Marca</th>
-                  <th>Linea</th>
-                  <th>Año</th>
-                  <th>Combustible</th>
-                  <th>VIN</th>
-                  <th>CPL</th>
-                  <th>DB</th>
-                  <th>Motor</th>
-                  <th>TEC#</th>
-                  <th>Cliente</th>
-                  <th>Database</th>
-                  <th>Reglas</th>
+                  {activeColumns.map((col) => (
+                    <th key={col.key}>{col.label}</th>
+                  ))}
                   <th>Acciones</th>
-                  <th>Adjuntos</th>
                 </tr>
               </thead>
               <tbody>
@@ -668,32 +791,66 @@ export default function VehiclesPage() {
                         aria-label={`Seleccionar ${vehicle.plate}`}
                       />
                     </td>
-                    <td data-label="Placa">
-                      <strong>{vehicle.plate}</strong>
-                    </td>
-                    <td data-label="Marca">{vehicle.marca || "-"}</td>
-                    <td data-label="Linea">{vehicle.linea || "-"}</td>
-                    <td data-label="Año">{vehicle.ano_modelo || "-"}</td>
-                    <td data-label="Combustible">{vehicle.tipo_combustible || "-"}</td>
-                    <td data-label="VIN">{vehicle.vin || "Sin VIN"}</td>
-                    <td data-label="CPL">{vehicle.cpl || "Sin CPL"}</td>
-                    <td data-label="DB">
-                      <DbConnectionBadge
-                        vehicle={vehicle}
-                        result={connectionResults[vehicle.plate]}
-                        checking={checkingConnections}
-                      />
-                    </td>
-                    <td data-label="Motor">{vehicle.engine_name || "Sin catalogar"}</td>
-                    <td data-label="TEC#">{vehicle.technical_number}</td>
-                    <td data-label="Cliente">{vehicle.client_name || "Sin cliente"}</td>
-                    <td data-label="Database">{vehicle.database_name || "Sin database"}</td>
-                    <td data-label="Reglas">
-                      <span
-                        className={`rules-dot ${vehicle.has_motor_rules ? "rules-dot-active" : "rules-dot-inactive"}`}
-                        title={vehicle.has_motor_rules ? "Motor con reglas configuradas" : "Sin reglas"}
-                      />
-                    </td>
+                    {activeColumns.map((col) => {
+                      if (col.key === "plate") {
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            <strong>{vehicle.plate}</strong>
+                          </td>
+                        );
+                      }
+                      if (col.key === "db_connection") {
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            <DbConnectionBadge
+                              vehicle={vehicle}
+                              result={connectionResults[vehicle.plate]}
+                              checking={checkingConnections}
+                            />
+                          </td>
+                        );
+                      }
+                      if (col.key === "has_motor_rules") {
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            <span
+                              className={`rules-dot ${vehicle.has_motor_rules ? "rules-dot-active" : "rules-dot-inactive"}`}
+                              title={vehicle.has_motor_rules ? "Motor con reglas configuradas" : "Sin reglas"}
+                            />
+                          </td>
+                        );
+                      }
+                      if (col.key === "attachments") {
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            {vehicle.attachments?.length ? (
+                              <div className="attachment-list attachment-list-compact">
+                                {vehicle.attachments.map((attachment) => (
+                                  <a
+                                    key={attachment.id}
+                                    className="attachment-chip"
+                                    href={`${API_BASE}${attachment.download_url}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title={`${attachment.original_filename} | CPL ${attachment.cpl || "Sin CPL"}`}
+                                    aria-label={`Abrir adjunto ${attachment.original_filename} del CPL ${attachment.cpl || "sin cpl"} en otra pestana`}
+                                  >
+                                    <AttachmentIcon contentType={attachment.content_type} />
+                                  </a>
+                                ))}
+                              </div>
+                            ) : (
+                              "Sin adjuntos"
+                            )}
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={col.key} data-label={col.label}>
+                          {col.getValue(vehicle)}
+                        </td>
+                      );
+                    })}
                     <td data-label="Acciones">
                       <div className="actions-row vehicles-row-actions">
                         <button
@@ -730,27 +887,6 @@ export default function VehiclesPage() {
                           </button>
                         </Can>
                       </div>
-                    </td>
-                    <td data-label="Adjuntos">
-                      {vehicle.attachments?.length ? (
-                        <div className="attachment-list attachment-list-compact">
-                          {vehicle.attachments.map((attachment) => (
-                            <a
-                              key={attachment.id}
-                              className="attachment-chip"
-                              href={`${API_BASE}${attachment.download_url}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              title={`${attachment.original_filename} | CPL ${attachment.cpl || "Sin CPL"}`}
-                              aria-label={`Abrir adjunto ${attachment.original_filename} del CPL ${attachment.cpl || "sin cpl"} en otra pestana`}
-                            >
-                              <AttachmentIcon contentType={attachment.content_type} />
-                            </a>
-                          ))}
-                        </div>
-                      ) : (
-                        "Sin adjuntos"
-                      )}
                     </td>
                   </tr>
                 ))}
