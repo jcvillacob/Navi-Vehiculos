@@ -112,6 +112,54 @@ function DbConnectionBadge({ vehicle, result, checking }) {
   );
 }
 
+function MultiSelectFilter({ label, options, selected, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const items = options.map((opt) =>
+    typeof opt === "string" ? { value: opt, label: opt } : opt
+  );
+
+  const toggle = (value) => {
+    onChange(
+      selected.includes(value)
+        ? selected.filter((v) => v !== value)
+        : [...selected, value]
+    );
+  };
+
+  return (
+    <div className={`th-multifilter ${selected.length ? "is-active" : ""}`} ref={ref}>
+      <button type="button" className="th-multifilter-trigger" onClick={() => setOpen(!open)}>
+        <span className="th-multifilter-text">{label}</span>
+        <span className="th-multifilter-arrow">▼</span>
+      </button>
+      {open && (
+        <div className="th-multifilter-dropdown">
+          {items.map((item) => (
+            <label key={item.value} className="th-multifilter-option">
+              <input
+                type="checkbox"
+                checked={selected.includes(item.value)}
+                onChange={() => toggle(item.value)}
+              />
+              <span>{item.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function VehiclesPage() {
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
@@ -120,10 +168,10 @@ export default function VehiclesPage() {
   const [refreshingPlates, setRefreshingPlates] = useState(new Set());
   const [checkingConnections, setCheckingConnections] = useState(false);
   const [connectionResults, setConnectionResults] = useState({});
-  const [filterClient, setFilterClient] = useState("");
-  const [filterMotor, setFilterMotor] = useState("");
-  const [filterDatabase, setFilterDatabase] = useState("");
-  const [filterConnection, setFilterConnection] = useState("");
+  const [filterClient, setFilterClient] = useState([]);
+  const [filterMotor, setFilterMotor] = useState([]);
+  const [filterDatabase, setFilterDatabase] = useState([]);
+  const [filterConnection, setFilterConnection] = useState([]);
   const selectAllRef = useRef(null);
   const { loading, vehicles, error, search, setSearch, loadVehicles } = useVehicleAssignments();
   const { customers, loading: customersLoading } = useCustomersCatalog();
@@ -183,8 +231,8 @@ export default function VehiclesPage() {
 
   const clientOptions = useMemo(() => {
     let subset = vehicles;
-    if (filterMotor) subset = subset.filter((v) => v.engine_name === filterMotor);
-    if (filterDatabase) subset = subset.filter((v) => v.database_name === filterDatabase);
+    if (filterMotor.length) subset = subset.filter((v) => filterMotor.includes(v.engine_name));
+    if (filterDatabase.length) subset = subset.filter((v) => filterDatabase.includes(v.database_name));
     const names = new Set();
     for (const v of subset) {
       if (v.client_name) names.add(v.client_name);
@@ -194,8 +242,8 @@ export default function VehiclesPage() {
 
   const motorOptions = useMemo(() => {
     let subset = vehicles;
-    if (filterClient) subset = subset.filter((v) => v.client_name === filterClient);
-    if (filterDatabase) subset = subset.filter((v) => v.database_name === filterDatabase);
+    if (filterClient.length) subset = subset.filter((v) => filterClient.includes(v.client_name));
+    if (filterDatabase.length) subset = subset.filter((v) => filterDatabase.includes(v.database_name));
     const names = new Set();
     for (const v of subset) {
       if (v.engine_name) names.add(v.engine_name);
@@ -205,8 +253,8 @@ export default function VehiclesPage() {
 
   const databaseOptions = useMemo(() => {
     let subset = vehicles;
-    if (filterClient) subset = subset.filter((v) => v.client_name === filterClient);
-    if (filterMotor) subset = subset.filter((v) => v.engine_name === filterMotor);
+    if (filterClient.length) subset = subset.filter((v) => filterClient.includes(v.client_name));
+    if (filterMotor.length) subset = subset.filter((v) => filterMotor.includes(v.engine_name));
     const names = new Set();
     for (const v of subset) {
       if (v.database_name) names.add(v.database_name);
@@ -215,37 +263,37 @@ export default function VehiclesPage() {
   }, [vehicles, filterClient, filterMotor]);
 
   useEffect(() => {
-    if (filterClient && !clientOptions.includes(filterClient)) setFilterClient("");
-  }, [clientOptions, filterClient]);
+    setFilterClient((current) => current.filter((name) => clientOptions.includes(name)));
+  }, [clientOptions]);
 
   useEffect(() => {
-    if (filterMotor && !motorOptions.includes(filterMotor)) setFilterMotor("");
-  }, [motorOptions, filterMotor]);
+    setFilterMotor((current) => current.filter((name) => motorOptions.includes(name)));
+  }, [motorOptions]);
 
   useEffect(() => {
-    if (filterDatabase && !databaseOptions.includes(filterDatabase)) setFilterDatabase("");
-  }, [databaseOptions, filterDatabase]);
+    setFilterDatabase((current) => current.filter((name) => databaseOptions.includes(name)));
+  }, [databaseOptions]);
 
   const filteredVehicles = useMemo(() => {
     let result = vehicles;
-    if (filterClient) {
-      result = result.filter((v) => v.client_name === filterClient);
+    if (filterClient.length) {
+      result = result.filter((v) => filterClient.includes(v.client_name));
     }
-    if (filterMotor) {
-      result = result.filter((v) => v.engine_name === filterMotor);
+    if (filterMotor.length) {
+      result = result.filter((v) => filterMotor.includes(v.engine_name));
     }
-    if (filterDatabase) {
-      result = result.filter((v) => v.database_name === filterDatabase);
+    if (filterDatabase.length) {
+      result = result.filter((v) => filterDatabase.includes(v.database_name));
     }
-    if (filterConnection) {
+    if (filterConnection.length) {
       result = result.filter((v) => {
         const eligible = v.database_connection_type === "geotab" || !v.customer_database_id;
         const status = eligible ? connectionResults[v.plate]?.status : "not_applicable";
-        if (filterConnection === "active") return status === "connected";
-        if (filterConnection === "inactive") return status === "disconnected" || status === "not_found";
-        if (filterConnection === "unchecked") return eligible && !status;
-        if (filterConnection === "not_applicable") return !eligible;
-        return true;
+        if (filterConnection.includes("active") && status === "connected") return true;
+        if (filterConnection.includes("inactive") && (status === "disconnected" || status === "not_found")) return true;
+        if (filterConnection.includes("unchecked") && eligible && !status) return true;
+        if (filterConnection.includes("not_applicable") && !eligible) return true;
+        return false;
       });
     }
     return result;
@@ -340,10 +388,10 @@ export default function VehiclesPage() {
 
   const handleClear = () => {
     setSearch("");
-    setFilterClient("");
-    setFilterMotor("");
-    setFilterDatabase("");
-    setFilterConnection("");
+    setFilterClient([]);
+    setFilterMotor([]);
+    setFilterDatabase([]);
+    setFilterConnection([]);
     setSelectedPlates(new Set());
     setBulkAssignOpen(false);
   };
@@ -585,9 +633,6 @@ export default function VehiclesPage() {
             >
               Exportar Excel
             </button>
-            <button type="button" className="button-secondary button-sm" onClick={handleClear} disabled={loading}>
-              Limpiar
-            </button>
             <Can permission="vehicles.edit">
               <button
                 type="button"
@@ -612,10 +657,16 @@ export default function VehiclesPage() {
               <button
                 type="button"
                 className="button button-sm"
-                onClick={() => startBulkRefresh(filteredVehicles.map((v) => v.plate))}
+                onClick={() =>
+                  startBulkRefresh(
+                    selectedVehicles.length > 0
+                      ? selectedVehicles.map((v) => v.plate)
+                      : filteredVehicles.map((v) => v.plate)
+                  )
+                }
                 disabled={loading || Boolean(bulkRefresh) || filteredVehicles.length === 0}
               >
-                Reprocesar todos ({filteredVehicles.length})
+                Reprocesar {selectedVehicles.length > 0 ? `(${selectedVehicles.length})` : `todos (${filteredVehicles.length})`}
               </button>
             </Can>
           </div>
@@ -624,96 +675,28 @@ export default function VehiclesPage() {
         <div className="vehicles-filter-bar">
           <div className="form-field vehicles-search-field">
             <label htmlFor="vehicles-search">Buscar</label>
-            <input
-              id="vehicles-search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value.toUpperCase())}
-              placeholder="Placa, VIN, TEC#, CPL, motor, cliente o database"
-            />
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="vehicles-filter-client">Cliente</label>
-            <select
-              id="vehicles-filter-client"
-              value={filterClient}
-              onChange={(event) => setFilterClient(event.target.value)}
-            >
-              <option value="">Todos</option>
-              {clientOptions.map((name) => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="vehicles-filter-motor">Motor</label>
-            <select
-              id="vehicles-filter-motor"
-              value={filterMotor}
-              onChange={(event) => setFilterMotor(event.target.value)}
-            >
-              <option value="">Todos</option>
-              {motorOptions.map((name) => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="vehicles-filter-database">Database</label>
-            <select
-              id="vehicles-filter-database"
-              value={filterDatabase}
-              onChange={(event) => setFilterDatabase(event.target.value)}
-            >
-              <option value="">Todas</option>
-              {databaseOptions.map((name) => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="vehicles-filter-connection">Conexion</label>
-            <select
-              id="vehicles-filter-connection"
-              value={filterConnection}
-              onChange={(event) => setFilterConnection(event.target.value)}
-            >
-              <option value="">Todas</option>
-              <option value="active">Activos</option>
-              <option value="inactive">Inactivos</option>
-              <option value="unchecked">Sin revisar</option>
-              <option value="not_applicable">No aplica</option>
-            </select>
-          </div>
-
-        </div>
-
-        <div className="bulk-selection-toolbar">
-          <span className="bulk-selection-meta">
-            Seleccionados: <strong>{selectedVehicles.length}</strong> de {filteredVehicles.length} visibles
-          </span>
-          <div className="actions-row">
-            <button
-              type="button"
-              className="button-secondary button-sm"
-              onClick={handleToggleVisibleSelection}
-              disabled={filteredVehicles.length === 0}
-            >
-              {allVisibleSelected ? "Quitar visibles" : `Seleccionar visibles (${filteredVehicles.length})`}
-            </button>
-            <button
-              type="button"
-              className="button-secondary button-sm"
-              onClick={() => setSelectedPlates(new Set())}
-              disabled={selectedVehicles.length === 0}
-            >
-              Limpiar seleccion
-            </button>
+            <div className="search-input-wrap">
+              <input
+                id="vehicles-search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value.toUpperCase())}
+                placeholder="Placa, VIN, TEC#, CPL, motor, cliente, database, nombre, linea o marca"
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="search-clear-button"
+                  onClick={() => setSearch("")}
+                  aria-label="Limpiar busqueda"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           </div>
         </div>
+
+
 
         {/* ── Bulk refresh progress ── */}
         {bulkRefresh?.status === "running" ? (
@@ -775,7 +758,48 @@ export default function VehiclesPage() {
                     />
                   </th>
                   {activeColumns.map((col) => (
-                    <th key={col.key}>{col.label}</th>
+                    <th key={col.key}>
+                      {col.key === "client_name" && (
+                        <MultiSelectFilter
+                          label={col.label}
+                          options={clientOptions}
+                          selected={filterClient}
+                          onChange={setFilterClient}
+                        />
+                      )}
+                      {col.key === "engine_name" && (
+                        <MultiSelectFilter
+                          label={col.label}
+                          options={motorOptions}
+                          selected={filterMotor}
+                          onChange={setFilterMotor}
+                        />
+                      )}
+                      {col.key === "database_name" && (
+                        <MultiSelectFilter
+                          label={col.label}
+                          options={databaseOptions}
+                          selected={filterDatabase}
+                          onChange={setFilterDatabase}
+                        />
+                      )}
+                      {col.key === "db_connection" && (
+                        <MultiSelectFilter
+                          label={col.label}
+                          options={[
+                            { value: "active", label: "Activos" },
+                            { value: "inactive", label: "Inactivos" },
+                            { value: "unchecked", label: "Sin revisar" },
+                            { value: "not_applicable", label: "No aplica" }
+                          ]}
+                          selected={filterConnection}
+                          onChange={setFilterConnection}
+                        />
+                      )}
+                      {![ "client_name", "engine_name", "database_name", "db_connection" ].includes(col.key) && (
+                        <span>{col.label}</span>
+                      )}
+                    </th>
                   ))}
                   <th>Acciones</th>
                 </tr>

@@ -1,8 +1,6 @@
 import { createContext, useCallback, useContext, useRef, useState } from "react";
 
-import { refreshVehicle } from "../api/vehicleApi";
-
-const BULK_DELAY_MS = 4000;
+import { batchLookupVehiclesStream } from "../api/vehicleApi";
 
 const BulkRefreshContext = createContext(null);
 
@@ -23,36 +21,44 @@ export function BulkRefreshProvider({ children }) {
 
     const total = plates.length;
     const errors = [];
+    let done = 0;
+
     setState({ status: "running", total, done: 0, currentPlate: plates[0], errors });
 
-    for (let i = 0; i < total; i++) {
-      if (cancelRef.current) break;
+    try {
+      await batchLookupVehiclesStream(plates, {
+        force: true,
+        onResult: (result, count) => {
+          done = count;
+          const plate = plates[count - 1] || "";
 
-      const plate = plates[i];
-      setState((prev) => ({ ...prev, done: i, currentPlate: plate }));
+          if (result?.status === "error") {
+            errors.push(plate);
+          }
 
-      try {
-        await refreshVehicle(plate);
-      } catch {
-        errors.push(plate);
-      }
-
-      // Update done count after processing (so bar reflects completed, not started)
-      setState((prev) => ({ ...prev, done: i + 1 }));
-
-      if (i < total - 1 && !cancelRef.current) {
-        await new Promise((resolve) => setTimeout(resolve, BULK_DELAY_MS));
-      }
+          setState({
+            status: "running",
+            total,
+            done: count,
+            currentPlate: count < total ? plates[count] : plate,
+            errors,
+          });
+        },
+      });
+    } catch {
+      // If the entire stream fails, mark remaining plates as errors
+      const remaining = plates.slice(done);
+      errors.push(...remaining);
+      done = total;
     }
 
     const wasCancelled = cancelRef.current;
     runningRef.current = false;
 
-    // Transition to "finished" — stays visible until the consumer acknowledges it
     setState({
       status: "finished",
       total,
-      done: wasCancelled ? errors.length > 0 ? total - errors.length : 0 : total,
+      done: wasCancelled ? done - errors.length : done,
       errors,
       wasCancelled,
     });

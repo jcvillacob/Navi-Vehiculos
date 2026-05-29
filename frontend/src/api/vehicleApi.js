@@ -259,6 +259,61 @@ export async function lookupVehicle(identifier, { force = false } = {}) {
   return parseJsonOrThrow(response, "Error consultando la API");
 }
 
+export async function batchLookupVehiclesStream(identifiers, { force = false, onResult } = {}) {
+  const response = await fetchWithAuth(buildUrl("/api/v1/vehicle/batch-lookup"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      identifiers: identifiers.map((id) => id.trim().toUpperCase()),
+      force,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "Error en consulta masiva");
+    throw new Error(text);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const results = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        results.push(parsed);
+        if (onResult) onResult(parsed, results.length);
+      } catch {
+        /* skip malformed lines */
+      }
+    }
+  }
+
+  // Process any remaining buffer
+  if (buffer.trim()) {
+    try {
+      const parsed = JSON.parse(buffer.trim());
+      results.push(parsed);
+      if (onResult) onResult(parsed, results.length);
+    } catch {
+      /* skip */
+    }
+  }
+
+  return results;
+}
+
 export async function listVehicleAssignments(search = "") {
   const normalizedSearch = search.trim().toUpperCase();
   const query = new URLSearchParams();

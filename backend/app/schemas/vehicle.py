@@ -507,3 +507,18 @@ class PerformanceJobListResponse(BaseModel):
 
 
 GeotabRuleConditionNode.model_rebuild()
+
+
+class BatchLookupRequest(BaseModel):
+    identifiers: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Lista de placas o VINs a consultar",
+    )
+    force: bool = Field(
+        default=False,
+        description="Forzar consulta externa ignorando cache local",
+    )
+
+

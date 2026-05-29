@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { lookupVehicle } from "../../../api/vehicleApi";
+import { batchLookupVehiclesStream } from "../../../api/vehicleApi";
 
+const BATCH_SIZE = 500;
 const DEFAULT_DELAY_MS = 1500;
 const MIN_DELAY_MS = 500;
 const MAX_DELAY_MS = 5000;
@@ -144,8 +145,21 @@ export function useBulkLookup() {
     try {
       const currentItems = itemsRef.current;
       const startIndex = processedRef.current;
+      const remaining = currentItems.slice(startIndex);
 
-      for (let index = startIndex; index < currentItems.length; index += 1) {
+      if (!remaining.length) {
+        setCurrentIdentifier(null);
+        setStatus("done");
+        return;
+      }
+
+      // Split into batches of BATCH_SIZE (API max=500) for very large lists
+      const batches = [];
+      for (let i = 0; i < remaining.length; i += BATCH_SIZE) {
+        batches.push(remaining.slice(i, i + BATCH_SIZE));
+      }
+
+      for (let batchIdx = 0; batchIdx < batches.length; batchIdx += 1) {
         if (cancelRef.current) {
           setStatus("cancelled");
           setCurrentIdentifier(null);
@@ -158,61 +172,75 @@ export function useBulkLookup() {
           return;
         }
 
-        const item = currentItems[index] || {};
-        const started = performance.now();
+        const batch = batches[batchIdx];
+        const batchIdentifiers = batch.map((item) => item.identifier);
+        let itemIndex = 0;
 
         try {
-          setCurrentIdentifier(item.identifier ?? null);
-        } catch {
-          /* ignore setter errors */
-        }
+          await batchLookupVehiclesStream(batchIdentifiers, {
+            force: false,
+            onResult: (response) => {
+              const item = batch[itemIndex] || {};
+              const started = performance.now();
 
-        let cameFromCache = false;
-        try {
-          const response = await lookupVehicle(item.identifier, { force: false });
-          const durationMs = performance.now() - started;
-          cameFromCache = response?.cached === true;
+              try {
+                setCurrentIdentifier(item.identifier ?? null);
+              } catch {
+                /* ignore */
+              }
 
-          appendResult(
-            {
-              identifier: item.identifier,
-              rowNumber: item.rowNumber,
-              status: response?.status || "error",
-              response: response || null,
-              error: null,
+              try {
+                appendResult(
+                  {
+                    identifier: item.identifier,
+                    rowNumber: item.rowNumber,
+                    status: response?.status || "error",
+                    response,
+                    error: null,
+                  },
+                  0
+                );
+              } catch {
+                /* never break on appendResult failure */
+              }
+
+              itemIndex += 1;
             },
-            durationMs
-          );
+          });
         } catch (err) {
-          const durationMs = performance.now() - started;
           const message = err instanceof Error
             ? err.message
             : typeof err === "string"
               ? err
-              : "Error consultando el backend";
+              : "Error en consulta masiva";
 
-          try {
-            appendResult(
-              {
-                identifier: item.identifier,
-                rowNumber: item.rowNumber,
-                status: "error",
-                response: null,
-                error: message,
-              },
-              durationMs
-            );
-          } catch {
-            /* never break the loop if appendResult itself fails */
+          // Mark remaining items in this batch as errors
+          for (let i = itemIndex; i < batch.length; i += 1) {
+            const item = batch[i] || {};
+            try {
+              appendResult(
+                {
+                  identifier: item.identifier,
+                  rowNumber: item.rowNumber,
+                  status: "error",
+                  response: null,
+                  error: message,
+                },
+                0
+              );
+            } catch {
+              /* never break */
+            }
           }
         }
 
-        const isLast = index === currentItems.length - 1;
-        if (!isLast && !cameFromCache && !cancelRef.current && !pauseRef.current) {
+        // Delay between batches (only for very large lists with multiple batches)
+        const isLastBatch = batchIdx === batches.length - 1;
+        if (!isLastBatch && !cancelRef.current && !pauseRef.current) {
           try {
             await sleep(delayMsRef.current);
           } catch {
-            /* ignore sleep errors */
+            /* ignore */
           }
         }
       }

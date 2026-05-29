@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
     AssignedDatabaseSummary,
+    BatchLookupRequest,
     ManualVehicleAssignmentRequest,
     VehicleAssignmentRecord,
     VehicleDatabaseAssignmentRequest,
@@ -16,7 +18,10 @@ from app.services.motor_catalog import (
     register_vehicle_assignment,
     revalidate_vehicle_customer_geotab,
 )
-from app.services.vehicle_lookup import lookup_vehicle as lookup_vehicle_service
+from app.services.vehicle_lookup import (
+    batch_lookup_vehicles_stream,
+    lookup_vehicle as lookup_vehicle_service,
+)
 
 router = APIRouter(prefix="/vehicle", tags=["vehicle"])
 
@@ -41,6 +46,20 @@ def get_vehicle_assignments(
     _user: dict = Depends(require_permission("vehicles.list")),
 ) -> list[VehicleAssignmentRecord]:
     return list_vehicle_assignments(search)
+
+
+@router.post("/batch-lookup")
+def batch_lookup(
+    payload: BatchLookupRequest,
+    _user: dict = Depends(require_permission("engine_lookup.batch")),
+):
+    def generate():
+        for result in batch_lookup_vehicles_stream(
+            payload.identifiers, force=payload.force
+        ):
+            yield result.model_dump_json() + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 @router.put("/{plate}/database", response_model=AssignedDatabaseSummary)

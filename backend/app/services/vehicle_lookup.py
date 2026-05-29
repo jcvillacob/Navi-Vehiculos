@@ -13,7 +13,13 @@ from app.clients.quickserve_client import (
     extract_technical_engine_configuration,
     get_engine_dataplate,
 )
-from app.clients.sql_client import get_vehicle_by_plate, get_vehicle_by_vin
+from app.clients.sql_client import (
+    find_vehicles_by_plates,
+    find_vehicles_by_vins,
+    get_vehicle_by_plate,
+    get_vehicle_by_vin,
+    open_connection,
+)
 from app.core.config import load_geotab_config, load_quickserve_config, load_sql_config
 from app.schemas.vehicle import VehicleLookupResponse
 from app.services.motor_catalog import (
@@ -28,6 +34,7 @@ from app.services.motor_catalog import (
 
 _VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
 _logger = logging.getLogger(__name__)
+_SENTINEL = object()
 
 
 def _is_vin(value: str) -> bool:
@@ -158,7 +165,12 @@ def _resolve_geotab_status(plate: str | None, vin: str | None, warnings: list[st
         return "unknown"
 
 
-def lookup_vehicle(identifier: str, *, force: bool = False) -> VehicleLookupResponse:
+def lookup_vehicle(
+    identifier: str,
+    *,
+    force: bool = False,
+    _prefetched_fenix_row: dict | None | object = _SENTINEL,
+) -> VehicleLookupResponse:
     normalized_identifier = identifier.strip().upper()
     lookup_type = "vin" if _is_vin(normalized_identifier) else "plate"
 
@@ -174,15 +186,26 @@ def lookup_vehicle(identifier: str, *, force: bool = False) -> VehicleLookupResp
     plate = normalized_identifier if lookup_type == "plate" else None
     vin = normalized_identifier if lookup_type == "vin" else None
 
+    has_prefetch = _prefetched_fenix_row is not _SENTINEL
+
     try:
         sql_cfg = load_sql_config()
         quickserve_cfg = load_quickserve_config()
 
         if lookup_type == "plate":
-            vin, geotab_status, fallback_fenix_details = _resolve_vin_from_plate(
-                normalized_identifier, warnings
-            )
-            fenix_details.update(fallback_fenix_details)
+            if has_prefetch and _prefetched_fenix_row:
+                # VIN already resolved from batch pre-fetch
+                fenix_details = _normalize_fenix_details(_prefetched_fenix_row)
+                vin = fenix_details.get("vin")
+                geotab_status = _resolve_geotab_status(plate, vin, warnings)
+            elif has_prefetch and not _prefetched_fenix_row:
+                # Batch pre-fetch ran but plate was not found in Fenix
+                geotab_status = _resolve_geotab_status(plate, None, warnings)
+            else:
+                vin, geotab_status, fallback_fenix_details = _resolve_vin_from_plate(
+                    normalized_identifier, warnings
+                )
+                fenix_details.update(fallback_fenix_details)
             if not vin:
                 return _not_found_response(
                     normalized_identifier,
@@ -193,7 +216,11 @@ def lookup_vehicle(identifier: str, *, force: bool = False) -> VehicleLookupResp
                     warnings=warnings,
                 )
 
-        vehicle_row = get_vehicle_by_vin(vin, sql_cfg) if vin else None
+        if has_prefetch:
+            # Use pre-fetched data (may be the plate row or a separate VIN lookup)
+            vehicle_row = _prefetched_fenix_row if _prefetched_fenix_row else None
+        else:
+            vehicle_row = get_vehicle_by_vin(vin, sql_cfg) if vin else None
         if not vehicle_row:
             return _not_found_response(
                 normalized_identifier,
@@ -379,4 +406,153 @@ def lookup_vehicle(identifier: str, *, force: bool = False) -> VehicleLookupResp
             fenix_details=fenix_details,
             cummins_details=cummins_details,
             warnings=warnings,
+        )
+
+
+def batch_lookup_vehicles(
+    identifiers: list[str], *, force: bool = False
+) -> list[VehicleLookupResponse]:
+    """Pre-fetch all Fenix data in a single batch query, then process each vehicle."""
+    if not identifiers:
+        return []
+
+    normalized = [i.strip().upper() for i in identifiers]
+
+    # Separate VINs from plates
+    vin_identifiers: list[str] = []
+    plate_identifiers: list[str] = []
+    for ident in normalized:
+        if _is_vin(ident):
+            vin_identifiers.append(ident)
+        else:
+            plate_identifiers.append(ident)
+
+    # Check cache for plates (when not forcing)
+    cached_results: dict[str, VehicleLookupResponse] = {}
+    plates_to_fetch: list[str] = []
+    if not force:
+        for plate in plate_identifiers:
+            cached = get_cached_vehicle_lookup(plate)
+            if cached is not None:
+                cached_results[plate] = cached
+            else:
+                plates_to_fetch.append(plate)
+    else:
+        plates_to_fetch = list(plate_identifiers)
+
+    # Batch pre-fetch from Fenix (single connection)
+    fenix_by_vin: dict[str, dict] = {}
+    fenix_by_plate: dict[str, dict] = {}
+    try:
+        sql_cfg = load_sql_config()
+        conn = open_connection(sql_cfg)
+        try:
+            # 1) Resolve plates → get rows (which contain VINs)
+            if plates_to_fetch:
+                fenix_by_plate = find_vehicles_by_plates(conn, plates_to_fetch)
+
+            # 2) Collect all VINs (direct + resolved from plates) and batch-fetch
+            resolved_vins = set(vin_identifiers)
+            for plate, row in fenix_by_plate.items():
+                row_vin = str(row.get("VIN") or "").strip().upper()
+                if row_vin:
+                    resolved_vins.add(row_vin)
+            all_vins = list(resolved_vins)
+
+            if all_vins:
+                fenix_by_vin = find_vehicles_by_vins(conn, all_vins)
+        finally:
+            conn.close()
+    except Exception:
+        _logger.exception("Fenix batch pre-fetch failed — falling back to individual lookups")
+        # fenix_by_vin and fenix_by_plate remain empty; lookup_vehicle will call Fenix individually
+
+    # Process each identifier
+    results: list[VehicleLookupResponse] = []
+    for ident in normalized:
+        results.append(_resolve_single(
+            ident, force, cached_results, fenix_by_vin, fenix_by_plate, plates_to_fetch
+        ))
+
+    return results
+
+
+def _resolve_single(
+    ident: str,
+    force: bool,
+    cached_results: dict[str, VehicleLookupResponse],
+    fenix_by_vin: dict[str, dict],
+    fenix_by_plate: dict[str, dict],
+    plates_to_fetch: list[str],
+) -> VehicleLookupResponse:
+    if ident in cached_results:
+        return cached_results[ident]
+
+    if _is_vin(ident):
+        prefetched = fenix_by_vin.get(ident) if fenix_by_vin else _SENTINEL
+    else:
+        plate_row = fenix_by_plate.get(ident) if fenix_by_plate else None
+        if plate_row:
+            row_vin = str(plate_row.get("VIN") or "").strip().upper()
+            prefetched = fenix_by_vin.get(row_vin, plate_row) if row_vin and fenix_by_vin else plate_row
+        elif fenix_by_plate is not None and ident in plates_to_fetch:
+            prefetched = None
+        else:
+            prefetched = _SENTINEL
+
+    return lookup_vehicle(ident, force=force, _prefetched_fenix_row=prefetched)
+
+
+def batch_lookup_vehicles_stream(
+    identifiers: list[str], *, force: bool = False
+):
+    """Same as batch_lookup_vehicles but yields each result as it completes."""
+    if not identifiers:
+        return
+
+    normalized = [i.strip().upper() for i in identifiers]
+
+    vin_identifiers: list[str] = []
+    plate_identifiers: list[str] = []
+    for ident in normalized:
+        if _is_vin(ident):
+            vin_identifiers.append(ident)
+        else:
+            plate_identifiers.append(ident)
+
+    cached_results: dict[str, VehicleLookupResponse] = {}
+    plates_to_fetch: list[str] = []
+    if not force:
+        for plate in plate_identifiers:
+            cached = get_cached_vehicle_lookup(plate)
+            if cached is not None:
+                cached_results[plate] = cached
+            else:
+                plates_to_fetch.append(plate)
+    else:
+        plates_to_fetch = list(plate_identifiers)
+
+    fenix_by_vin: dict[str, dict] = {}
+    fenix_by_plate: dict[str, dict] = {}
+    try:
+        sql_cfg = load_sql_config()
+        conn = open_connection(sql_cfg)
+        try:
+            if plates_to_fetch:
+                fenix_by_plate = find_vehicles_by_plates(conn, plates_to_fetch)
+            resolved_vins = set(vin_identifiers)
+            for _plate, row in fenix_by_plate.items():
+                row_vin = str(row.get("VIN") or "").strip().upper()
+                if row_vin:
+                    resolved_vins.add(row_vin)
+            if resolved_vins:
+                fenix_by_vin = find_vehicles_by_vins(conn, list(resolved_vins))
+        finally:
+            conn.close()
+    except Exception:
+        _logger.exception("Fenix batch pre-fetch failed — falling back to individual lookups")
+
+    for ident in normalized:
+        yield _resolve_single(
+            ident, force, cached_results, fenix_by_vin, fenix_by_plate, plates_to_fetch
         )

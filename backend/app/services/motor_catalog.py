@@ -1194,9 +1194,15 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                OR UPPER(COALESCE(c.name, '')) LIKE %s
                OR UPPER(COALESCE(cd.database_name, '')) LIKE %s
                OR UPPER(COALESCE(cd.username, '')) LIKE %s
+               OR UPPER(COALESCE(a.nombre_vehiculo, '')) LIKE %s
+               OR UPPER(COALESCE(a.marca, '')) LIKE %s
+               OR UPPER(COALESCE(a.linea, '')) LIKE %s
         """
         params.extend(
             [
+                normalized_search,
+                normalized_search,
+                normalized_search,
                 normalized_search,
                 normalized_search,
                 normalized_search,

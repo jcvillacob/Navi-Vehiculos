@@ -2679,17 +2679,158 @@ input[readonly] {
 
 .column-selector-option input[type="checkbox"] {
   accent-color: var(--red);
+  height: 16px;
+  width: auto;
 }
 
 .vehicles-filter-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 180px 180px auto;
+  grid-template-columns: 1fr;
   gap: 10px;
   align-items: end;
 }
 
+.th-multifilter {
+  position: relative;
+}
+
+.th-multifilter-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 2px;
+  padding: 0;
+  font-family: "Poppins", sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 80ms ease;
+}
+
+.th-multifilter-trigger:hover {
+  color: #fff;
+}
+
+.th-multifilter-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-multifilter-arrow {
+  font-size: 7px;
+  line-height: 1;
+  color: var(--text-subtle);
+  flex-shrink: 0;
+  transition: color 80ms ease;
+}
+
+.th-multifilter.is-active .th-multifilter-trigger {
+  color: var(--red);
+}
+
+.th-multifilter.is-active .th-multifilter-arrow {
+  color: var(--red);
+}
+
+.th-multifilter.is-active .th-multifilter-trigger:hover {
+  color: var(--red-hover);
+}
+
+.th-multifilter-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  min-width: 130px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-top: 2px;
+}
+
+.th-multifilter-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  color: var(--text);
+}
+
+.th-multifilter-option:hover {
+  background: var(--surface-2);
+}
+
+.th-multifilter-option input[type="checkbox"] {
+  width: auto !important;
+  height: 15px !important;
+  flex-shrink: 0;
+}
+
+input[type="checkbox"] {
+  width: auto !important;
+  max-height: 16px !important;
+  flex-shrink: 0;
+}
+
+.vehicles-table th:has(.th-multifilter) {
+  vertical-align: middle;
+  padding: 6px 10px;
+}
+
+.vehicles-table th:has(.th-multifilter.is-active) {
+  background: var(--red-soft);
+}
+
 .vehicles-search-field {
   min-width: 0;
+}
+
+.search-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-input-wrap input {
+  padding-right: 30px;
+}
+
+.search-clear-button {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+}
+
+.search-clear-button:hover {
+  color: var(--text);
+  background: var(--surface-2);
 }
 
 .vehicles-filter-actions {

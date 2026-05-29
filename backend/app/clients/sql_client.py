@@ -212,6 +212,90 @@ def get_vehicle_by_plate_full(plate: str, cfg: SqlConfig) -> dict | None:
             conn.close()
 
 
+def _post_process_row(row: dict) -> dict:
+    row["plate"] = _extract_plate_from_row(row)
+    if "Número de motor" in row and "numero_motor" not in row:
+        row["numero_motor"] = row.get("Número de motor")
+    return row
+
+
+def _chunked(items: list, size: int = 2000):
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+# ── Batch queries ──────────────────────────────────────────────────
+
+
+def find_vehicles_by_vins(conn, vins: list[str]) -> dict[str, dict]:
+    if not vins:
+        return {}
+    result: dict[str, dict] = {}
+    for chunk in _chunked(vins):
+        placeholders = ", ".join(["%s"] * len(chunk))
+        query = f"""
+        SELECT *
+        FROM dbo.T_DIM_VEHICULO
+        WHERE VIN IN ({placeholders})
+        """
+        with conn.cursor(as_dict=True) as cursor:
+            cursor.execute(query, tuple(chunk))
+            rows = cursor.fetchall() or []
+        for row in rows:
+            _post_process_row(row)
+            vin_key = str(row.get("VIN") or "").strip().upper()
+            if vin_key:
+                result[vin_key] = row
+    return result
+
+
+def find_vehicles_by_plates(conn, plates: list[str]) -> dict[str, dict]:
+    if not plates:
+        return {}
+    plate_column = _find_plate_column(conn)
+    if not plate_column:
+        return {}
+
+    escaped_column = plate_column.replace("]", "]]")
+    result: dict[str, dict] = {}
+    for chunk in _chunked(plates):
+        placeholders = ", ".join(["%s"] * len(chunk))
+        query = f"""
+        SELECT *
+        FROM dbo.T_DIM_VEHICULO
+        WHERE UPPER(LTRIM(RTRIM(CAST([{escaped_column}] AS NVARCHAR(100))))) IN ({placeholders})
+        """
+        with conn.cursor(as_dict=True) as cursor:
+            cursor.execute(query, tuple(p.upper() for p in chunk))
+            rows = cursor.fetchall() or []
+        for row in rows:
+            _post_process_row(row)
+            plate_key = row.get("plate") or ""
+            if plate_key:
+                result[plate_key] = row
+    return result
+
+
+def get_vehicles_by_vins(vins: list[str], cfg: SqlConfig) -> dict[str, dict]:
+    conn = None
+    try:
+        conn = open_connection(cfg)
+        return find_vehicles_by_vins(conn, vins)
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_vehicles_by_plates(plates: list[str], cfg: SqlConfig) -> dict[str, dict]:
+    conn = None
+    try:
+        conn = open_connection(cfg)
+        return find_vehicles_by_plates(conn, plates)
+    finally:
+        if conn:
+            conn.close()
+
+
 def get_engine_number_from_vin(vin: str, cfg: SqlConfig) -> str | None:
     row = get_vehicle_by_vin(vin, cfg)
     if not row:
