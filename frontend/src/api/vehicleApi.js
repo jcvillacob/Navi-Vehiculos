@@ -259,14 +259,17 @@ export async function lookupVehicle(identifier, { force = false } = {}) {
   return parseJsonOrThrow(response, "Error consultando la API");
 }
 
-export async function batchLookupVehiclesStream(identifiers, { force = false, onResult } = {}) {
+export async function batchLookupVehiclesStream(identifiers, { force = false, scope = "all", skipGeotab = false, onResult, signal } = {}) {
   const response = await fetchWithAuth(buildUrl("/api/v1/vehicle/batch-lookup"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       identifiers: identifiers.map((id) => id.trim().toUpperCase()),
       force,
+      scope,
+      skip_geotab: skipGeotab,
     }),
+    signal,
   });
 
   if (!response.ok) {

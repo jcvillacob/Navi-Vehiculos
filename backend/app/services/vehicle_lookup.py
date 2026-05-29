@@ -165,11 +165,130 @@ def _resolve_geotab_status(plate: str | None, vin: str | None, warnings: list[st
         return "unknown"
 
 
+def _get_existing_motor(plate: str):
+    """Return the registered motor from the existing assignment, if any."""
+    if not plate:
+        return None
+    cached = get_cached_vehicle_lookup(plate)
+    if cached and cached.technical_engine_configuration:
+        return find_registered_motor(cached.technical_engine_configuration)
+    return None
+
+
+def _lookup_cummins_only(plate: str) -> VehicleLookupResponse:
+    """Re-query Cummins using the engine_number already stored locally."""
+    cached = get_cached_vehicle_lookup(plate)
+    if not cached or not cached.engine_number:
+        return _error_response(
+            plate,
+            "plate",
+            plate=plate,
+            warnings=["No hay numero de motor almacenado para re-consultar Cummins."],
+        )
+    engine_number = cached.engine_number
+    vin = cached.vin
+    geotab_status = cached.geotab_status or "unknown"
+    warnings: list[str] = []
+    try:
+        quickserve_cfg = load_quickserve_config()
+        cummins_details = get_engine_dataplate(engine_number, quickserve_cfg)
+        cummins_vin = str(cummins_details.get("VIN") or "").strip().upper() or None
+        if vin and cummins_vin and cummins_vin != vin:
+            warnings.append(
+                "QuickServe devolvio un VIN distinto al almacenado."
+            )
+            return VehicleLookupResponse(
+                plate=plate,
+                lookup_value=plate,
+                lookup_type="plate",
+                vin=vin,
+                geotab_status=geotab_status,
+                geotab_customer_status=cached.geotab_customer_status or "not_applicable",
+                marca=cached.marca,
+                linea=cached.linea,
+                ano_modelo=cached.ano_modelo,
+                tipo_combustible=cached.tipo_combustible,
+                engine_number=engine_number,
+                technical_engine_configuration=cached.technical_engine_configuration,
+                cpl=cached.cpl,
+                registered_motor=cached.registered_motor,
+                assigned_database=get_vehicle_database_assignment(plate),
+                source_details={"fenix": {}, "cummins": cummins_details},
+                warnings=warnings,
+                status="partial",
+                message="VIN mismatch entre datos locales y Cummins.",
+            )
+        technical_config = extract_technical_engine_configuration(cummins_details)
+        cpl = extract_cpl(cummins_details)
+        if not technical_config:
+            warnings.append("Motor no encontrado en Cummins.")
+            return VehicleLookupResponse(
+                plate=plate,
+                lookup_value=plate,
+                lookup_type="plate",
+                vin=vin,
+                geotab_status=geotab_status,
+                geotab_customer_status=cached.geotab_customer_status or "not_applicable",
+                marca=cached.marca,
+                linea=cached.linea,
+                ano_modelo=cached.ano_modelo,
+                tipo_combustible=cached.tipo_combustible,
+                engine_number=engine_number,
+                technical_engine_configuration=None,
+                cpl=None,
+                registered_motor=None,
+                assigned_database=get_vehicle_database_assignment(plate),
+                source_details={"fenix": {}, "cummins": cummins_details},
+                warnings=warnings,
+                status="partial",
+                message="Motor no existe en Cummins.",
+            )
+        register_vehicle_assignment(
+            plate=plate,
+            technical_number=technical_config,
+            cpl=cpl,
+            geotab_status=geotab_status,
+            vin=vin,
+            engine_number=engine_number,
+            marca=cached.marca,
+            linea=cached.linea,
+            ano_modelo=cached.ano_modelo,
+            tipo_combustible=cached.tipo_combustible,
+            nombre_vehiculo=cached.nombre_vehiculo,
+        )
+        return VehicleLookupResponse(
+            plate=plate,
+            lookup_value=plate,
+            lookup_type="plate",
+            vin=vin,
+            geotab_status=geotab_status,
+            geotab_customer_status=cached.geotab_customer_status or "not_applicable",
+            marca=cached.marca,
+            linea=cached.linea,
+            ano_modelo=cached.ano_modelo,
+            tipo_combustible=cached.tipo_combustible,
+            engine_number=engine_number,
+            technical_engine_configuration=technical_config,
+            cpl=cpl,
+            registered_motor=find_registered_motor(technical_config),
+            assigned_database=get_vehicle_database_assignment(plate),
+            source_details={"fenix": {}, "cummins": cummins_details},
+            warnings=warnings,
+            status="ok",
+            message="Datos Cummins actualizados.",
+        )
+    except Exception:
+        _logger.exception("Error en _lookup_cummins_only para plate=%s", plate)
+        return _error_response(plate, "plate", plate=plate, vin=vin)
+
+
 def lookup_vehicle(
     identifier: str,
     *,
     force: bool = False,
     _prefetched_fenix_row: dict | None | object = _SENTINEL,
+    scope: str = "all",
+    skip_geotab: bool = False,
 ) -> VehicleLookupResponse:
     normalized_identifier = identifier.strip().upper()
     lookup_type = "vin" if _is_vin(normalized_identifier) else "plate"
@@ -188,6 +307,10 @@ def lookup_vehicle(
 
     has_prefetch = _prefetched_fenix_row is not _SENTINEL
 
+    # ── scope="cummins": skip Fenix/Geotab, re-query only Cummins ──
+    if scope == "cummins" and lookup_type == "plate":
+        return _lookup_cummins_only(normalized_identifier)
+
     try:
         sql_cfg = load_sql_config()
         quickserve_cfg = load_quickserve_config()
@@ -197,15 +320,24 @@ def lookup_vehicle(
                 # VIN already resolved from batch pre-fetch
                 fenix_details = _normalize_fenix_details(_prefetched_fenix_row)
                 vin = fenix_details.get("vin")
-                geotab_status = _resolve_geotab_status(plate, vin, warnings)
+                if not skip_geotab:
+                    geotab_status = _resolve_geotab_status(plate, vin, warnings)
             elif has_prefetch and not _prefetched_fenix_row:
                 # Batch pre-fetch ran but plate was not found in Fenix
-                geotab_status = _resolve_geotab_status(plate, None, warnings)
+                if not skip_geotab:
+                    geotab_status = _resolve_geotab_status(plate, None, warnings)
             else:
-                vin, geotab_status, fallback_fenix_details = _resolve_vin_from_plate(
-                    normalized_identifier, warnings
-                )
-                fenix_details.update(fallback_fenix_details)
+                if skip_geotab:
+                    # Skip Geotab — resolve VIN from SQL only
+                    fallback_row = get_vehicle_by_plate(normalized_identifier, sql_cfg)
+                    if fallback_row and fallback_row.get("VIN"):
+                        vin = str(fallback_row["VIN"]).strip().upper()
+                        fenix_details.update(_normalize_fenix_details(fallback_row))
+                else:
+                    vin, geotab_status, fallback_fenix_details = _resolve_vin_from_plate(
+                        normalized_identifier, warnings
+                    )
+                    fenix_details.update(fallback_fenix_details)
             if not vin:
                 return _not_found_response(
                     normalized_identifier,
@@ -236,7 +368,7 @@ def lookup_vehicle(
         if not plate and fenix_details.get("plate"):
             plate = fenix_details["plate"]
 
-        if lookup_type == "vin":
+        if lookup_type == "vin" and not skip_geotab:
             geotab_status = _resolve_geotab_status(plate, vin, warnings)
 
         engine_number = fenix_details.get("engine_number")
@@ -249,6 +381,45 @@ def lookup_vehicle(
                 geotab_status=geotab_status,
                 fenix_details=fenix_details,
                 warnings=warnings,
+            )
+
+        # ── scope="fenix": update metadata only, skip Cummins ──
+        if scope == "fenix":
+            if plate:
+                update_vehicle_metadata(
+                    plate,
+                    geotab_status=geotab_status,
+                    vin=vin,
+                    engine_number=engine_number,
+                    marca=fenix_details.get("marca"),
+                    linea=fenix_details.get("linea"),
+                    ano_modelo=fenix_details.get("ano_modelo"),
+                    tipo_combustible=fenix_details.get("tipo_combustible"),
+                    nombre_vehiculo=fenix_details.get("nombre_vehiculo"),
+                )
+            geotab_customer_info = get_vehicle_geotab_customer_status(plate)
+            return VehicleLookupResponse(
+                plate=plate,
+                lookup_value=normalized_identifier,
+                lookup_type=lookup_type,
+                vin=vin,
+                geotab_status=geotab_status,
+                geotab_customer_status=geotab_customer_info.get(
+                    "geotab_customer_status", "not_applicable"
+                ),
+                marca=fenix_details.get("marca"),
+                linea=fenix_details.get("linea"),
+                ano_modelo=fenix_details.get("ano_modelo"),
+                tipo_combustible=fenix_details.get("tipo_combustible"),
+                engine_number=engine_number,
+                technical_engine_configuration=None,
+                cpl=None,
+                registered_motor=_get_existing_motor(plate),
+                assigned_database=get_vehicle_database_assignment(plate),
+                source_details={"fenix": fenix_details, "cummins": {}},
+                warnings=warnings,
+                status="ok",
+                message="Datos Fenix/Geotab actualizados.",
             )
 
         cummins_details = get_engine_dataplate(engine_number, quickserve_cfg)
@@ -484,6 +655,8 @@ def _resolve_single(
     fenix_by_vin: dict[str, dict],
     fenix_by_plate: dict[str, dict],
     plates_to_fetch: list[str],
+    scope: str = "all",
+    skip_geotab: bool = False,
 ) -> VehicleLookupResponse:
     if ident in cached_results:
         return cached_results[ident]
@@ -500,11 +673,11 @@ def _resolve_single(
         else:
             prefetched = _SENTINEL
 
-    return lookup_vehicle(ident, force=force, _prefetched_fenix_row=prefetched)
+    return lookup_vehicle(ident, force=force, _prefetched_fenix_row=prefetched, scope=scope, skip_geotab=skip_geotab)
 
 
 def batch_lookup_vehicles_stream(
-    identifiers: list[str], *, force: bool = False
+    identifiers: list[str], *, force: bool = False, scope: str = "all", skip_geotab: bool = False
 ):
     """Same as batch_lookup_vehicles but yields each result as it completes."""
     if not identifiers:
@@ -534,25 +707,30 @@ def batch_lookup_vehicles_stream(
 
     fenix_by_vin: dict[str, dict] = {}
     fenix_by_plate: dict[str, dict] = {}
-    try:
-        sql_cfg = load_sql_config()
-        conn = open_connection(sql_cfg)
+    if scope != "cummins":
         try:
-            if plates_to_fetch:
-                fenix_by_plate = find_vehicles_by_plates(conn, plates_to_fetch)
-            resolved_vins = set(vin_identifiers)
-            for _plate, row in fenix_by_plate.items():
-                row_vin = str(row.get("VIN") or "").strip().upper()
-                if row_vin:
-                    resolved_vins.add(row_vin)
-            if resolved_vins:
-                fenix_by_vin = find_vehicles_by_vins(conn, list(resolved_vins))
-        finally:
-            conn.close()
-    except Exception:
-        _logger.exception("Fenix batch pre-fetch failed — falling back to individual lookups")
+            sql_cfg = load_sql_config()
+            conn = open_connection(sql_cfg)
+            try:
+                if plates_to_fetch:
+                    fenix_by_plate = find_vehicles_by_plates(conn, plates_to_fetch)
+                resolved_vins = set(vin_identifiers)
+                for _plate, row in fenix_by_plate.items():
+                    row_vin = str(row.get("VIN") or "").strip().upper()
+                    if row_vin:
+                        resolved_vins.add(row_vin)
+                if resolved_vins:
+                    fenix_by_vin = find_vehicles_by_vins(conn, list(resolved_vins))
+            finally:
+                conn.close()
+        except Exception:
+            _logger.exception("Fenix batch pre-fetch failed — falling back to individual lookups")
 
     for ident in normalized:
-        yield _resolve_single(
-            ident, force, cached_results, fenix_by_vin, fenix_by_plate, plates_to_fetch
-        )
+        try:
+            yield _resolve_single(
+                ident, force, cached_results, fenix_by_vin, fenix_by_plate, plates_to_fetch, scope, skip_geotab
+            )
+        except Exception:
+            _logger.exception("Error processing identifier %s in batch stream", ident)
+            yield _error_response(ident, "vin" if _is_vin(ident) else "plate")

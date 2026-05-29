@@ -19,6 +19,38 @@ import { DATABASE_PROVIDERS } from "../features/customers/providerCatalog";
 const PERFORMANCE_PROVIDER_KEYS = new Set(
   DATABASE_PROVIDERS.filter((provider) => provider.supportsMonthlyPerformance).map((provider) => provider.key)
 );
+const RENDIMIENTOS_COLUMNS = [
+  { key: "status", label: "Estado", getValue: (row) => getStatusLabel(row.calculation_status), getSortValue: (row) => getStatusLabel(row.calculation_status) },
+  { key: "plate", label: "Placa", getValue: (row) => row.plate || "-", getSortValue: (row) => row.plate || "" },
+  { key: "client", label: "Cliente", getValue: (row) => row.client_name || "-", getSortValue: (row) => row.client_name || "" },
+  { key: "database", label: "Database", getValue: (row) => row.database_name || "-", getSortValue: (row) => row.database_name || "" },
+  { key: "motor", label: "Motor", getValue: (row) => row.engine_name || "Sin catalogar", getSortValue: (row) => row.engine_name || "Sin catalogar" },
+  { key: "nombre_vehiculo", label: "Nombre", getValue: (row) => row.nombre_vehiculo || "-", getSortValue: (row) => row.nombre_vehiculo || "" },
+  { key: "marca", label: "Marca", getValue: (row) => row.marca || "-", getSortValue: (row) => row.marca || "" },
+  { key: "linea", label: "Linea", getValue: (row) => row.linea || "-", getSortValue: (row) => row.linea || "" },
+  { key: "ano_modelo", label: "Año", getValue: (row) => row.ano_modelo || "-", getSortValue: (row) => row.ano_modelo || "" },
+  { key: "tipo_combustible", label: "Combustible", getValue: (row) => row.tipo_combustible || "-", getSortValue: (row) => row.tipo_combustible || "" },
+  { key: "vin", label: "VIN", getValue: (row) => row.vin || "Sin VIN", getSortValue: (row) => row.vin || "" },
+  { key: "cpl", label: "CPL", getValue: (row) => row.cpl || "Sin CPL", getSortValue: (row) => row.cpl || "" },
+  { key: "technical_number", label: "TEC#", getValue: (row) => row.technical_number || "-", getSortValue: (row) => row.technical_number || "" },
+  { key: "source_provider", label: "Proveedor", getValue: (row) => row.source_provider || "-", getSortValue: (row) => row.source_provider || "" },
+  { key: "period_month", label: "Mes", getValue: (row) => formatMonthLabel(row.period_month), getSortValue: (row) => row.period_month || "" },
+  { key: "odo_start", label: "Odo ini", getValue: (row) => formatMetric(row.odo_start, 0), getSortValue: (row) => row.odo_start },
+  { key: "odo_end", label: "Odo fin", getValue: (row) => formatMetric(row.odo_end, 0), getSortValue: (row) => row.odo_end },
+  { key: "kms_ecm", label: "Kms ECM", getValue: (row) => formatMetric(row.kms_ecm, 0), getSortValue: (row) => row.kms_ecm },
+  { key: "kms_gps", label: "Kms GPS", getValue: (row) => formatMetric(row.kms_gps, 0), getSortValue: (row) => row.kms_gps },
+  { key: "horo_start", label: "Horo ini", getValue: (row) => formatMetric(row.horo_start, 0), getSortValue: (row) => row.horo_start },
+  { key: "horo_end", label: "Horo fin", getValue: (row) => formatMetric(row.horo_end, 0), getSortValue: (row) => row.horo_end },
+  { key: "hours_ecm", label: "Hrs ECM", getValue: (row) => formatMetric(row.hours_ecm, 0), getSortValue: (row) => row.hours_ecm },
+  { key: "hours_gps", label: "Hrs GPS", getValue: (row) => formatMetric(row.hours_gps, 0), getSortValue: (row) => row.hours_gps },
+  { key: "fuel_gallons", label: "Galones", getValue: (row) => formatMetric(row.fuel_gallons, 0), getSortValue: (row) => row.fuel_gallons },
+  { key: "kpg", label: "KPG", getValue: (row) => row.fuel_gallons > 0 && row.kms_ecm != null ? formatMetric(row.kms_ecm / row.fuel_gallons, 2) : "-", getSortValue: (row) => row.fuel_gallons > 0 && row.kms_ecm != null ? row.kms_ecm / row.fuel_gallons : null },
+  { key: "gph", label: "GPH", getValue: (row) => row.hours_ecm > 0 && row.fuel_gallons != null ? formatMetric(row.fuel_gallons / row.hours_ecm, 2) : "-", getSortValue: (row) => row.hours_ecm > 0 && row.fuel_gallons != null ? row.fuel_gallons / row.hours_ecm : null },
+  { key: "conn_pct", label: "Conexion %", getValue: (row, ctx) => ctx?.connStats?.[row.plate] ? `${Math.round(ctx.connStats[row.plate].connection_pct)}%` : "--", getSortValue: (row, ctx) => ctx?.connStats?.[row.plate]?.connection_pct ?? -1 },
+  { key: "availability_pct", label: "Disp %", getValue: (row, ctx) => { const a = ctx?.availabilityByPlate?.[row.plate]; if (!a) return "Sin Datos"; if (a.calculation_status === "not_in_cloudfleet") return "No Aplica"; if (a.calculation_status === "error") return "Error"; return `${(a.project_availability_pct ?? 0).toFixed(1)}%`; }, getSortValue: (row, ctx) => { const a = ctx?.availabilityByPlate?.[row.plate]; if (!a) return -1; if (a.calculation_status === "not_in_cloudfleet") return -2; if (a.calculation_status === "error") return -3; return a.project_availability_pct ?? -1; } },
+  { key: "calculated_at", label: "Último cálculo", getValue: (row) => row.calculated_at ? new Date(row.calculated_at).toLocaleString("es-CO") : "-", getSortValue: (row) => row.calculated_at ? new Date(row.calculated_at).getTime() : 0 },
+];
+
 const STATUS_FILTER_OPTIONS = [
   { key: "calculated", label: "Calculadas", className: "is-calculated" },
   { key: "partial", label: "Parciales", className: "is-partial" },
@@ -175,6 +207,32 @@ export default function RendimientosPage() {
   const [recentJobs, setRecentJobs] = useState([]);
   const [recentJobsLoading, setRecentJobsLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState(() => new Set(RENDIMIENTOS_COLUMNS.map((c) => c.key)));
+  const [columnSelectorOpen, setColumnSelectorOpen] = useState(false);
+  const columnSelectorRef = useRef(null);
+
+  useEffect(() => {
+    if (!columnSelectorOpen) return;
+    function handleClickOutside(e) {
+      if (columnSelectorRef.current && !columnSelectorRef.current.contains(e.target)) setColumnSelectorOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [columnSelectorOpen]);
+
+  const toggleColumn = useCallback((key) => {
+    setVisibleColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const activeColumns = useMemo(
+    () => RENDIMIENTOS_COLUMNS.filter((col) => visibleColumns.has(col.key)),
+    [visibleColumns]
+  );
 
   const isRange = monthFrom !== monthTo;
   const pickerRef = useRef(null);
@@ -448,90 +506,20 @@ export default function RendimientosPage() {
   const sortedRows = useMemo(() => {
     if (!sortConfig.key) return filteredRows;
 
+    const col = RENDIMIENTOS_COLUMNS.find((c) => c.key === sortConfig.key);
+    if (!col) return filteredRows;
+
+    const ctx = { connStats, availabilityByPlate };
+
     return [...filteredRows].sort((left, right) => {
-      const getComparableValue = (row) => {
-        switch (sortConfig.key) {
-          case "status":
-            return getStatusLabel(row.calculation_status);
-          case "client":
-            return row.client_name || "";
-          case "database":
-            return row.database_name || "";
-          case "motor":
-            return row.engine_name || "Sin catalogar";
-          case "plate":
-            return row.plate || "";
-          case "odo_start":
-            return row.odo_start;
-          case "odo_end":
-            return row.odo_end;
-          case "kms_ecm":
-            return row.kms_ecm;
-          case "kms_gps":
-            return row.kms_gps;
-          case "horo_start":
-            return row.horo_start;
-          case "horo_end":
-            return row.horo_end;
-          case "hours_ecm":
-            return row.hours_ecm;
-          case "hours_gps":
-            return row.hours_gps;
-          case "fuel_gallons":
-            return row.fuel_gallons;
-          case "kpg":
-            return row.fuel_gallons > 0 && row.kms_ecm !== null && row.kms_ecm !== undefined
-              ? row.kms_ecm / row.fuel_gallons
-              : null;
-          case "gph":
-            return row.hours_ecm > 0 && row.fuel_gallons !== null && row.fuel_gallons !== undefined
-              ? row.fuel_gallons / row.hours_ecm
-              : null;
-          case "conn_pct":
-            return connStats[row.plate]?.connection_pct ?? -1;
-          case "availability_pct": {
-            const a = availabilityByPlate[row.plate];
-            if (!a) return -1;
-            if (a.calculation_status === "not_in_cloudfleet") return -2;
-            if (a.calculation_status === "error") return -3;
-            return a.project_availability_pct ?? -1;
-          }
-          default:
-            return "";
-        }
-      };
+      const leftVal = col.getSortValue ? col.getSortValue(left, ctx) : col.getValue(left, ctx);
+      const rightVal = col.getSortValue ? col.getSortValue(right, ctx) : col.getValue(right, ctx);
 
-      const comparison = compareValues(
-        getComparableValue(left),
-        getComparableValue(right),
-        sortConfig.direction
-      );
-
+      const comparison = compareValues(leftVal, rightVal, sortConfig.direction);
       if (comparison !== 0) return comparison;
       return compareValues(left.plate || "", right.plate || "", "asc");
     });
   }, [filteredRows, sortConfig, connStats, availabilityByPlate]);
-
-  const sortableColumns = [
-    { key: "status", label: "Estado" },
-    { key: "client", label: "Cliente" },
-    { key: "database", label: "Database" },
-    { key: "motor", label: "Motor" },
-    { key: "plate", label: "Placa" },
-    { key: "odo_start", label: "Odo ini" },
-    { key: "odo_end", label: "Odo fin" },
-    { key: "kms_ecm", label: "Kms ECM" },
-    { key: "kms_gps", label: "Kms GPS" },
-    { key: "horo_start", label: "Horo ini" },
-    { key: "horo_end", label: "Horo fin" },
-    { key: "hours_ecm", label: "Hrs ECM" },
-    { key: "hours_gps", label: "Hrs GPS" },
-    { key: "fuel_gallons", label: "Galones" },
-    { key: "kpg", label: "KPG" },
-    { key: "gph", label: "GPH" },
-    { key: "conn_pct", label: "Conexion %" },
-    { key: "availability_pct", label: "Disp %" }
-  ];
 
   const visibleSummary = useMemo(() => {
     const totals = filteredRows.reduce(
@@ -718,49 +706,29 @@ export default function RendimientosPage() {
 
     try {
       const XLSX = await import("xlsx");
-      const exportRows = sortedRows.map((row) => {
-        const kpg = row.fuel_gallons > 0 && row.kms_ecm !== null && row.kms_ecm !== undefined
-          ? row.kms_ecm / row.fuel_gallons
-          : null;
-        const gph = row.hours_ecm > 0 && row.fuel_gallons !== null && row.fuel_gallons !== undefined
-          ? row.fuel_gallons / row.hours_ecm
-          : null;
+      const ctx = { connStats, availabilityByPlate };
 
-        const cs = connStats[row.plate];
-        const a = availabilityByPlate[row.plate];
-        let availabilityCell = "Sin Datos";
-        if (a) {
-          if (a.calculation_status === "not_in_cloudfleet") availabilityCell = "No Aplica";
-          else if (a.calculation_status === "error") availabilityCell = "Error";
-          else availabilityCell = a.project_availability_pct;
-        }
-        return {
-          Mes: row.period_month || "",
-          Estado: getStatusLabel(row.calculation_status),
-          Cliente: row.client_name || "",
-          Database: row.database_name || "",
-          Motor: row.engine_name || "Sin catalogar",
-          Placa: row.plate || "",
-          "Odo ini": row.odo_start,
-          "Odo fin": row.odo_end,
-          "Kms ECM": row.kms_ecm,
-          "Kms GPS": row.kms_gps,
-          "Horo ini": row.horo_start,
-          "Horo fin": row.horo_end,
-          "Hrs ECM": row.hours_ecm,
-          "Hrs GPS": row.hours_gps,
-          Galones: row.fuel_gallons,
-          KPG: kpg,
-          GPH: gph,
-          "Conexion %": cs ? cs.connection_pct : null,
-          "Dias conectado": cs ? cs.days_connected : null,
-          "Dias revisados": cs ? cs.days_checked : null,
-          "Dias desconectado consecutivos": cs ? cs.consecutive_disconnected : null,
-          "Disp % (Proyectos)": availabilityCell
-        };
-      });
+      const headers = activeColumns.map((col) => col.label);
+      const rows = sortedRows.map((row) =>
+        activeColumns.map((col) => {
+          if (col.key === "status") return getStatusLabel(row.calculation_status);
+          if (col.key === "conn_pct") {
+            const cs = connStats[row.plate];
+            return cs ? cs.connection_pct : null;
+          }
+          if (col.key === "availability_pct") {
+            const a = availabilityByPlate[row.plate];
+            if (!a) return "Sin Datos";
+            if (a.calculation_status === "not_in_cloudfleet") return "No Aplica";
+            if (a.calculation_status === "error") return "Error";
+            return a.project_availability_pct;
+          }
+          const val = col.getValue(row, ctx);
+          return val;
+        })
+      );
 
-      const filterRowsSheet = [
+      const filtersSheet = [
         { Filtro: "Desde", Valor: monthFrom || "Todos" },
         { Filtro: "Hasta", Valor: monthTo || "Todos" },
         { Filtro: "Estado", Valor: filters.status ? getStatusLabel(filters.status) : "Todos" },
@@ -770,12 +738,13 @@ export default function RendimientosPage() {
         { Filtro: "Placa", Valor: filters.plateSearch || "Todas" }
       ];
 
-      const workbook = XLSX.utils.book_new();
-      const dataSheet = XLSX.utils.json_to_sheet(exportRows);
-      const filtersSheet = XLSX.utils.json_to_sheet(filterRowsSheet);
+      const matrix = [headers, ...rows];
+      const dataSheet = XLSX.utils.aoa_to_sheet(matrix);
+      const filtersDataSheet = XLSX.utils.json_to_sheet(filtersSheet);
 
+      const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, dataSheet, "Rendimientos");
-      XLSX.utils.book_append_sheet(workbook, filtersSheet, "Filtros");
+      XLSX.utils.book_append_sheet(workbook, filtersDataSheet, "Filtros");
       XLSX.writeFile(workbook, buildExportFileName(monthFrom, monthTo));
 
       pushToast("success", `Excel exportado con ${sortedRows.length} filas.`);
@@ -915,6 +884,45 @@ export default function RendimientosPage() {
             >
               Exportar Excel
             </button>
+            <div className="column-selector-wrapper" ref={columnSelectorRef}>
+              <button
+                type="button"
+                className="button-secondary button-sm"
+                onClick={() => setColumnSelectorOpen((prev) => !prev)}
+              >
+                Columnas ({visibleColumns.size}/{RENDIMIENTOS_COLUMNS.length})
+              </button>
+              {columnSelectorOpen && (
+                <div className="column-selector-dropdown">
+                  <div className="column-selector-actions">
+                    <button
+                      type="button"
+                      className="column-selector-link"
+                      onClick={() => setVisibleColumns(new Set(RENDIMIENTOS_COLUMNS.map((c) => c.key)))}
+                    >
+                      Todas
+                    </button>
+                    <button
+                      type="button"
+                      className="column-selector-link"
+                      onClick={() => setVisibleColumns(new Set())}
+                    >
+                      Ninguna
+                    </button>
+                  </div>
+                  {RENDIMIENTOS_COLUMNS.map((col) => (
+                    <label key={col.key} className="column-selector-option">
+                      <input
+                        type="checkbox"
+                        checked={visibleColumns.has(col.key)}
+                        onChange={() => toggleColumn(col.key)}
+                      />
+                      <span>{col.label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -1014,7 +1022,7 @@ export default function RendimientosPage() {
             <table className="rendimientos-table">
               <thead>
                 <tr>
-                  {sortableColumns.map((column) => {
+                  {activeColumns.map((column) => {
                     const isActive = sortConfig.key === column.key;
                     const directionSymbol = isActive ? (sortConfig.direction === "asc" ? "▲" : "▼") : "↕";
 
@@ -1036,98 +1044,86 @@ export default function RendimientosPage() {
               </thead>
               <tbody>
                 {sortedRows.map((row) => {
-                  const kpg = row.fuel_gallons > 0 && row.kms_ecm !== null && row.kms_ecm !== undefined
-                    ? row.kms_ecm / row.fuel_gallons
-                    : null;
-                  const gph = row.hours_ecm > 0 && row.fuel_gallons !== null && row.fuel_gallons !== undefined
-                    ? row.fuel_gallons / row.hours_ecm
-                    : null;
+                  const ctx = { connStats, availabilityByPlate };
 
                   return (
                     <tr key={`${row.customer_database_id}-${row.plate}-${row.period_month}`}>
-                      <td data-label="Estado">
-                        <span
-                          className={`status-dot ${getStatusClass(row.calculation_status)}`}
-                          title={getStatusLabel(row.calculation_status)}
-                        />
-                      </td>
-                      <td data-label="Cliente">{row.client_name || "-"}</td>
-                      <td data-label="Database">{row.database_name || "-"}</td>
-                      <td data-label="Motor">{row.engine_name || "Sin catalogar"}</td>
-                      <td data-label="Placa">
-                        <strong>{row.plate}</strong>
-                      </td>
-                      <td data-label="Odo ini">{formatMetric(row.odo_start, 0)}</td>
-                      <td data-label="Odo fin">{formatMetric(row.odo_end, 0)}</td>
-                      <td data-label="Kms ECM">{formatMetric(row.kms_ecm, 0)}</td>
-                      <td data-label="Kms GPS">{formatMetric(row.kms_gps, 0)}</td>
-                      <td data-label="Horo ini">{formatMetric(row.horo_start, 0)}</td>
-                      <td data-label="Horo fin">{formatMetric(row.horo_end, 0)}</td>
-                      <td data-label="Hrs ECM">{formatMetric(row.hours_ecm, 0)}</td>
-                      <td data-label="Hrs GPS">{formatMetric(row.hours_gps, 0)}</td>
-                      <td data-label="Galones">{formatMetric(row.fuel_gallons, 0)}</td>
-                      <td data-label="KPG">{formatMetric(kpg, 2)}</td>
-                      <td data-label="GPH">{formatMetric(gph, 2)}</td>
-                      <td data-label="Conexion %">
-                        {(() => {
+                      {activeColumns.map((col) => {
+                        if (col.key === "status") {
+                          return (
+                            <td key={col.key} data-label={col.label}>
+                              <span
+                                className={`status-dot ${getStatusClass(row.calculation_status)}`}
+                                title={getStatusLabel(row.calculation_status)}
+                              />
+                            </td>
+                          );
+                        }
+                        if (col.key === "plate") {
+                          return (
+                            <td key={col.key} data-label={col.label}>
+                              <strong>{row.plate}</strong>
+                            </td>
+                          );
+                        }
+                        if (col.key === "conn_pct") {
                           const cs = connStats[row.plate];
-                          if (!cs) return <span className="conn-pct-badge conn-pct-none">--</span>;
-                          const level = cs.connection_pct >= 80 ? "good" : cs.connection_pct >= 50 ? "warn" : "bad";
-                          const alert = cs.consecutive_disconnected >= 3;
                           return (
-                            <span
-                              className={`conn-pct-badge conn-pct-${level}${alert ? " conn-pct-alert" : ""}`}
-                              title={`${cs.days_connected}/${cs.days_checked} dias conectado${alert ? ` | ${cs.consecutive_disconnected} dias seguidos desconectado` : ""}`}
-                            >
-                              <span className="conn-pct-bar">
-                                <span className="conn-pct-fill" style={{ width: `${cs.connection_pct}%` }} />
-                              </span>
-                              <span className="conn-pct-label">{Math.round(cs.connection_pct)}%</span>
-                            </span>
+                            <td key={col.key} data-label={col.label}>
+                              {!cs ? (
+                                <span className="conn-pct-badge conn-pct-none">--</span>
+                              ) : (
+                                (() => {
+                                  const level = cs.connection_pct >= 80 ? "good" : cs.connection_pct >= 50 ? "warn" : "bad";
+                                  const alert = cs.consecutive_disconnected >= 3;
+                                  return (
+                                    <span
+                                      className={`conn-pct-badge conn-pct-${level}${alert ? " conn-pct-alert" : ""}`}
+                                      title={`${cs.days_connected}/${cs.days_checked} dias conectado${alert ? ` | ${cs.consecutive_disconnected} dias seguidos desconectado` : ""}`}
+                                    >
+                                      <span className="conn-pct-bar">
+                                        <span className="conn-pct-fill" style={{ width: `${cs.connection_pct}%` }} />
+                                      </span>
+                                      <span className="conn-pct-label">{Math.round(cs.connection_pct)}%</span>
+                                    </span>
+                                  );
+                                })()
+                              )}
+                            </td>
                           );
-                        })()}
-                      </td>
-                      <td data-label="Disp %">
-                        {(() => {
+                        }
+                        if (col.key === "availability_pct") {
                           const a = availabilityByPlate[row.plate];
-                          if (!a) {
-                            return <span className="availability-badge availability-empty">Sin Datos</span>;
-                          }
-                          if (a.calculation_status === "not_in_cloudfleet") {
-                            return (
-                              <span
-                                className="availability-badge availability-na"
-                                title="La placa no aparece en CloudFleet"
-                              >
-                                No Aplica
-                              </span>
-                            );
-                          }
-                          if (a.calculation_status === "error") {
-                            return (
-                              <span
-                                className="availability-badge availability-error"
-                                title={a.error_message || "Error en el calculo"}
-                              >
-                                Error
-                              </span>
-                            );
-                          }
-                          const pct = a.project_availability_pct ?? 0;
-                          const level = pct >= 97 ? "good" : pct >= 96 ? "warn" : "bad";
-                          const title = a.calculation_status === "no_orders"
-                            ? "Sin ordenes en el mes"
-                            : `${a.orders_considered} orden(es) consideradas | h_no_disp=${Number(a.h_no_disp || 0).toFixed(1)} / h_total=${Number(a.h_total || 0).toFixed(1)}`;
                           return (
-                            <span
-                              className={`availability-badge availability-${level}`}
-                              title={title}
-                            >
-                              {pct.toFixed(1)}%
-                            </span>
+                            <td key={col.key} data-label={col.label}>
+                              {!a ? (
+                                <span className="availability-badge availability-empty">Sin Datos</span>
+                              ) : a.calculation_status === "not_in_cloudfleet" ? (
+                                <span className="availability-badge availability-na" title="La placa no aparece en CloudFleet">No Aplica</span>
+                              ) : a.calculation_status === "error" ? (
+                                <span className="availability-badge availability-error" title={a.error_message || "Error en el calculo"}>Error</span>
+                              ) : (
+                                (() => {
+                                  const pct = a.project_availability_pct ?? 0;
+                                  const level = pct >= 97 ? "good" : pct >= 96 ? "warn" : "bad";
+                                  const title = a.calculation_status === "no_orders"
+                                    ? "Sin ordenes en el mes"
+                                    : `${a.orders_considered} orden(es) consideradas | h_no_disp=${Number(a.h_no_disp || 0).toFixed(1)} / h_total=${Number(a.h_total || 0).toFixed(1)}`;
+                                  return (
+                                    <span className={`availability-badge availability-${level}`} title={title}>
+                                      {pct.toFixed(1)}%
+                                    </span>
+                                  );
+                                })()
+                              )}
+                            </td>
                           );
-                        })()}
-                      </td>
+                        }
+                        if (col.key === "source_provider") {
+                          return <td key={col.key} data-label={col.label}>{row.source_provider || "-"}</td>;
+                        }
+                        return <td key={col.key} data-label={col.label}>{col.getValue(row, ctx)}</td>;
+                      })}
                     </tr>
                   );
                 })}

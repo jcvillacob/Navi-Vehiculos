@@ -55,9 +55,13 @@ def batch_lookup(
 ):
     def generate():
         for result in batch_lookup_vehicles_stream(
-            payload.identifiers, force=payload.force
+            payload.identifiers, force=payload.force, scope=payload.scope, skip_geotab=payload.skip_geotab
         ):
-            yield result.model_dump_json() + "\n"
+            try:
+                yield result.model_dump_json() + "\n"
+            except Exception:
+                import json
+                yield json.dumps({"status": "error", "message": "Error serializando resultado"}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
 

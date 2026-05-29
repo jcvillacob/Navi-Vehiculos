@@ -157,6 +157,13 @@ def _build_record(row: dict[str, Any]) -> MonthlyPerformanceRecord:
         calculation_status=str(row["calculation_status"]),
         warnings=list(row.get("warnings") or []),
         calculated_at=row.get("calculated_at"),
+        vin=row.get("vin"),
+        cpl=row.get("cpl"),
+        marca=row.get("marca"),
+        linea=row.get("linea"),
+        ano_modelo=row.get("ano_modelo"),
+        tipo_combustible=row.get("tipo_combustible"),
+        nombre_vehiculo=row.get("nombre_vehiculo"),
     )
 
 
@@ -718,12 +725,21 @@ def list_monthly_performance(
                         mp.fuel_gallons,
                         mp.calculation_status,
                         mp.warnings,
-                        mp.calculated_at
+                        mp.calculated_at,
+                        a.vin,
+                        a.cpl,
+                        a.marca,
+                        a.linea,
+                        a.ano_modelo,
+                        a.tipo_combustible,
+                        a.nombre_vehiculo
                     FROM monthly_vehicle_performance mp
                     LEFT JOIN customers c
                         ON c.id = mp.customer_id
                     LEFT JOIN customer_databases cd
                         ON cd.id = mp.customer_database_id
+                    LEFT JOIN vehicle_motor_assignments a
+                        ON a.plate = mp.plate
                     WHERE {" AND ".join(where_clauses)}
                     ORDER BY c.name ASC NULLS LAST, cd.database_name ASC NULLS LAST, mp.plate ASC;
                     """,
@@ -764,15 +780,25 @@ def list_monthly_performance(
                             WHEN BOOL_OR(mp.calculation_status = 'partial') THEN 'partial'
                             ELSE 'calculated'
                         END AS calculation_status,
-                        MAX(mp.calculated_at) AS calculated_at
+                        MAX(mp.calculated_at) AS calculated_at,
+                        a.vin,
+                        a.cpl,
+                        a.marca,
+                        a.linea,
+                        a.ano_modelo,
+                        a.tipo_combustible,
+                        a.nombre_vehiculo
                     FROM monthly_vehicle_performance mp
                     LEFT JOIN customers c
                         ON c.id = mp.customer_id
                     LEFT JOIN customer_databases cd
                         ON cd.id = mp.customer_database_id
+                    LEFT JOIN vehicle_motor_assignments a
+                        ON a.plate = mp.plate
                     WHERE {" AND ".join(where_clauses)}
                     GROUP BY mp.customer_id, mp.customer_database_id, c.name, cd.database_name,
-                             mp.plate, mp.technical_number, mp.engine_name
+                             mp.plate, mp.technical_number, mp.engine_name,
+                             a.vin, a.cpl, a.marca, a.linea, a.ano_modelo, a.tipo_combustible, a.nombre_vehiculo
                     ORDER BY c.name ASC NULLS LAST, cd.database_name ASC NULLS LAST, mp.plate ASC;
                     """,
                     params,

@@ -11,61 +11,92 @@ const BulkRefreshContext = createContext(null);
 
 export function BulkRefreshProvider({ children }) {
   const [state, setState] = useState(null);
-  const cancelRef = useRef(false);
+  const abortRef = useRef(null);
   const runningRef = useRef(false);
 
-  const start = useCallback(async (plates) => {
+  const start = useCallback(async (plates, { scope = "all", skipGeotab = false } = {}) => {
     if (runningRef.current || !plates.length) return;
     runningRef.current = true;
-    cancelRef.current = false;
 
+    const BATCH_SIZE = 500;
     const total = plates.length;
     const errors = [];
     let done = 0;
+    let cancelled = false;
+
+    const abortController = new AbortController();
+    abortRef.current = abortController;
 
     setState({ status: "running", total, done: 0, currentPlate: plates[0], errors });
 
-    try {
-      await batchLookupVehiclesStream(plates, {
-        force: true,
-        onResult: (result, count) => {
-          done = count;
-          const plate = plates[count - 1] || "";
+    for (let offset = 0; offset < total; offset += BATCH_SIZE) {
+      if (abortController.signal.aborted) {
+        cancelled = true;
+        break;
+      }
 
-          if (result?.status === "error") {
-            errors.push(plate);
-          }
+      const chunk = plates.slice(offset, offset + BATCH_SIZE);
 
-          setState({
-            status: "running",
-            total,
-            done: count,
-            currentPlate: count < total ? plates[count] : plate,
-            errors,
-          });
-        },
-      });
-    } catch {
-      // If the entire stream fails, mark remaining plates as errors
-      const remaining = plates.slice(done);
-      errors.push(...remaining);
-      done = total;
+      try {
+        await batchLookupVehiclesStream(chunk, {
+          force: true,
+          scope,
+          skipGeotab,
+          signal: abortController.signal,
+          onResult: (result) => {
+            done += 1;
+            const plate = plates[done - 1] || "";
+
+            if (result?.status === "error") {
+              errors.push(plate);
+            }
+
+            setState({
+              status: "running",
+              total,
+              done,
+              currentPlate: done < total ? plates[done] : plate,
+              errors,
+            });
+          },
+        });
+      } catch (err) {
+        if (err?.name === "AbortError" || abortController.signal.aborted) {
+          cancelled = true;
+          break;
+        }
+        // If this chunk's stream fails, mark its remaining plates as errors
+        const chunkProcessed = done - offset;
+        const remaining = chunk.slice(chunkProcessed);
+        errors.push(...remaining);
+        done = offset + chunk.length;
+
+        setState({
+          status: "running",
+          total,
+          done,
+          currentPlate: done < total ? plates[done] : plates[done - 1] || "",
+          errors,
+        });
+      }
     }
 
-    const wasCancelled = cancelRef.current;
     runningRef.current = false;
+    abortRef.current = null;
 
     setState({
       status: "finished",
       total,
-      done: wasCancelled ? done - errors.length : done,
+      done: cancelled ? done - errors.length : done,
       errors,
-      wasCancelled,
+      wasCancelled: cancelled,
     });
   }, []);
 
   const cancel = useCallback(() => {
-    cancelRef.current = true;
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
   }, []);
 
   const acknowledge = useCallback(() => {

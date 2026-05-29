@@ -417,6 +417,13 @@ class MonthlyPerformanceRecord(BaseModel):
     )
     warnings: list[str] = Field(default_factory=list, description="Advertencias del calculo")
     calculated_at: datetime | None = Field(default=None, description="Fecha del ultimo calculo")
+    vin: str | None = Field(default=None, description="VIN del vehiculo")
+    cpl: str | None = Field(default=None, description="CPL del vehiculo")
+    marca: str | None = Field(default=None, description="Marca del vehiculo")
+    linea: str | None = Field(default=None, description="Linea del vehiculo")
+    ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo")
+    tipo_combustible: str | None = Field(default=None, description="Tipo de combustible")
+    nombre_vehiculo: str | None = Field(default=None, description="Nombre del vehiculo")
 
 
 class AvailabilitySummary(BaseModel):
@@ -519,6 +526,15 @@ class BatchLookupRequest(BaseModel):
     force: bool = Field(
         default=False,
         description="Forzar consulta externa ignorando cache local",
+    )
+    scope: str = Field(
+        default="all",
+        pattern="^(all|fenix|cummins)$",
+        description="Alcance del reprocesamiento: all (todo), fenix (solo datos Fenix/Geotab), cummins (solo datos Cummins)",
+    )
+    skip_geotab: bool = Field(
+        default=False,
+        description="Omitir consultas a Geotab (mas rapido)",
     )
 
 

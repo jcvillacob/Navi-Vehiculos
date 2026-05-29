@@ -172,6 +172,8 @@ export default function VehiclesPage() {
   const [filterMotor, setFilterMotor] = useState([]);
   const [filterDatabase, setFilterDatabase] = useState([]);
   const [filterConnection, setFilterConnection] = useState([]);
+  const [reprocessPromptPlates, setReprocessPromptPlates] = useState(null);
+  const [reprocessSkipGeotab, setReprocessSkipGeotab] = useState(false);
   const selectAllRef = useRef(null);
   const { loading, vehicles, error, search, setSearch, loadVehicles } = useVehicleAssignments();
   const { customers, loading: customersLoading } = useCustomersCatalog();
@@ -658,7 +660,7 @@ export default function VehiclesPage() {
                 type="button"
                 className="button button-sm"
                 onClick={() =>
-                  startBulkRefresh(
+                  setReprocessPromptPlates(
                     selectedVehicles.length > 0
                       ? selectedVehicles.map((v) => v.plate)
                       : filteredVehicles.map((v) => v.plate)
@@ -944,6 +946,72 @@ export default function VehiclesPage() {
         onClose={() => setBulkAssignOpen(false)}
         onSubmit={handleBulkAssignVehicles}
       />
+
+      {reprocessPromptPlates && (
+        <div className="modal-overlay" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) setReprocessPromptPlates(null); }}>
+          <section className="card modal-card reprocess-scope-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <header className="modal-header">
+              <div className="modal-heading">
+                <span className="eyebrow">Reprocesar</span>
+                <h3>{reprocessPromptPlates.length} vehiculos</h3>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setReprocessPromptPlates(null)}>
+                &times;
+              </button>
+            </header>
+            <p className="reprocess-scope-description">
+              Selecciona que datos quieres actualizar:
+            </p>
+            <div className="reprocess-scope-options">
+              <button
+                type="button"
+                className="button-secondary reprocess-scope-button"
+                onClick={() => {
+                  startBulkRefresh(reprocessPromptPlates, { scope: "fenix", skipGeotab: reprocessSkipGeotab });
+                  setReprocessPromptPlates(null);
+                  setReprocessSkipGeotab(false);
+                }}
+              >
+                <strong>Solo Fenix</strong>
+                <span>Actualizar datos del vehiculo (marca, linea, nombre, VIN) desde SQL Server</span>
+              </button>
+              <button
+                type="button"
+                className="button-secondary reprocess-scope-button"
+                onClick={() => {
+                  startBulkRefresh(reprocessPromptPlates, { scope: "cummins" });
+                  setReprocessPromptPlates(null);
+                  setReprocessSkipGeotab(false);
+                }}
+              >
+                <strong>Solo Cummins</strong>
+                <span>Re-consultar QuickServe para actualizar TEC# y CPL usando el numero de motor almacenado</span>
+              </button>
+              <button
+                type="button"
+                className="button reprocess-scope-button"
+                onClick={() => {
+                  startBulkRefresh(reprocessPromptPlates, { scope: "all", skipGeotab: reprocessSkipGeotab });
+                  setReprocessPromptPlates(null);
+                  setReprocessSkipGeotab(false);
+                }}
+              >
+                <strong>Ambos</strong>
+                <span>Reprocesar completamente: Fenix y Cummins</span>
+              </button>
+            </div>
+            <label className="reprocess-geotab-toggle">
+              <input
+                type="checkbox"
+                checked={!reprocessSkipGeotab}
+                onChange={(e) => setReprocessSkipGeotab(!e.target.checked)}
+              />
+              <span>Consultar Geotab</span>
+              <span className="reprocess-geotab-hint">Verificar existencia del vehiculo en Geotab (mas lento)</span>
+            </label>
+          </section>
+        </div>
+      )}
     </section>
   );
 }
