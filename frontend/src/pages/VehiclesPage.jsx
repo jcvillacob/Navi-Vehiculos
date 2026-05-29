@@ -734,16 +734,186 @@ export default function VehiclesPage() {
           </p>
         ) : null}
 
-        {!loading && filteredVehicles.length === 0 ? (
-          <article className="card empty-state-card vehicles-empty-state">
-            <span className="eyebrow">Sin resultados</span>
-            <h3>No hay vehiculos asociados para mostrar.</h3>
-            <p>
-              Ejecuta una consulta exitosa por placa o VIN para que la asociacion quede persistida y
-              aparezca aqui.
-            </p>
-          </article>
-        ) : null}
+        <div className="vehicles-table-shell">
+          <table className="vehicles-table">
+            <thead>
+              <tr>
+                <th>
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={handleToggleVisibleSelection}
+                    aria-label="Seleccionar vehiculos visibles"
+                  />
+                </th>
+                {activeColumns.map((col) => (
+                  <th key={col.key}>
+                    {col.key === "client_name" && (
+                      <MultiSelectFilter
+                        label={col.label}
+                        options={clientOptions}
+                        selected={filterClient}
+                        onChange={setFilterClient}
+                      />
+                    )}
+                    {col.key === "engine_name" && (
+                      <MultiSelectFilter
+                        label={col.label}
+                        options={motorOptions}
+                        selected={filterMotor}
+                        onChange={setFilterMotor}
+                      />
+                    )}
+                    {col.key === "database_name" && (
+                      <MultiSelectFilter
+                        label={col.label}
+                        options={databaseOptions}
+                        selected={filterDatabase}
+                        onChange={setFilterDatabase}
+                      />
+                    )}
+                    {col.key === "db_connection" && (
+                      <MultiSelectFilter
+                        label={col.label}
+                        options={[
+                          { value: "active", label: "Activos" },
+                          { value: "inactive", label: "Inactivos" },
+                          { value: "unchecked", label: "Sin revisar" },
+                          { value: "not_applicable", label: "No aplica" }
+                        ]}
+                        selected={filterConnection}
+                        onChange={setFilterConnection}
+                      />
+                    )}
+                    {![ "client_name", "engine_name", "database_name", "db_connection" ].includes(col.key) && (
+                      <span>{col.label}</span>
+                    )}
+                  </th>
+                ))}
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredVehicles.length === 0 ? (
+                <tr>
+                  <td colSpan={activeColumns.length + 2} className="table-empty-row">
+                    {loading ? "Cargando..." : "No hay vehiculos que coincidan con los filtros actuales."}
+                  </td>
+                </tr>
+              ) : (
+                filteredVehicles.map((vehicle) => (
+                  <tr key={vehicle.plate} className={selectedPlates.has(vehicle.plate) ? "is-selected" : ""}>
+                    <td data-label="Seleccion">
+                      <input
+                        type="checkbox"
+                        checked={selectedPlates.has(vehicle.plate)}
+                        onChange={() => handleToggleVehicleSelection(vehicle.plate)}
+                        aria-label={`Seleccionar ${vehicle.plate}`}
+                      />
+                    </td>
+                    {activeColumns.map((col) => {
+                      if (col.key === "plate") {
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            <strong>{vehicle.plate}</strong>
+                          </td>
+                        );
+                      }
+                      if (col.key === "db_connection") {
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            <DbConnectionBadge
+                              vehicle={vehicle}
+                              result={connectionResults[vehicle.plate]}
+                              checking={checkingConnections}
+                            />
+                          </td>
+                        );
+                      }
+                      if (col.key === "has_motor_rules") {
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            <span
+                              className={`rules-dot ${vehicle.has_motor_rules ? "rules-dot-active" : "rules-dot-inactive"}`}
+                              title={vehicle.has_motor_rules ? "Motor con reglas configuradas" : "Sin reglas"}
+                            />
+                          </td>
+                        );
+                      }
+                      if (col.key === "attachments") {
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            {vehicle.attachments?.length ? (
+                              <div className="attachment-list attachment-list-compact">
+                                {vehicle.attachments.map((attachment) => (
+                                  <a
+                                    key={attachment.id}
+                                    className="attachment-chip"
+                                    href={`${API_BASE}${attachment.download_url}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title={`${attachment.original_filename} | CPL ${attachment.cpl || "Sin CPL"}`}
+                                    aria-label={`Abrir adjunto ${attachment.original_filename} del CPL ${attachment.cpl || "sin cpl"} en otra pestana`}
+                                  >
+                                    <AttachmentIcon contentType={attachment.content_type} />
+                                  </a>
+                                ))}
+                              </div>
+                            ) : (
+                              "Sin adjuntos"
+                            )}
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={col.key} data-label={col.label}>
+                          {col.getValue(vehicle)}
+                        </td>
+                      );
+                    })}
+                    <td data-label="Acciones">
+                      <div className="actions-row vehicles-row-actions">
+                        <button
+                          type="button"
+                          className="button-secondary button-sm"
+                          onClick={() => setSelectedVehicle(vehicle)}
+                        >
+                          Detalles
+                        </button>
+                        <Can permission="vehicles.refresh">
+                          <button
+                            type="button"
+                            className="icon-button"
+                            title="Actualizar datos del vehiculo"
+                            onClick={() => handleRefreshVehicle(vehicle.plate)}
+                            disabled={refreshingPlates.has(vehicle.plate)}
+                          >
+                            <svg
+                              className={refreshingPlates.has(vehicle.plate) ? "spin" : ""}
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M21 2v6h-6" />
+                              <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+                              <path d="M21 12a9 9 0 0 1-9 9c-4.2 0-7.7-2.8-8.8-6.7" />
+                            </svg>
+                          </button>
+                        </Can>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
 
         {filteredVehicles.length > 0 ? (
           <div className="vehicles-table-shell">

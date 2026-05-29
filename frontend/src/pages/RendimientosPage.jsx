@@ -1008,42 +1008,39 @@ export default function RendimientosPage() {
 
         </div>
 
-        {filteredRows.length === 0 ? (
-          <article className="card empty-state-card rendimientos-empty-state">
-            <span className="eyebrow">Sin resultados</span>
-            <h3>No hay cortes para los filtros actuales.</h3>
-            <p>
-              Selecciona un rango de meses, ejecuta el calculo y luego filtra por cliente, database, motor o
-              placa.
-            </p>
-          </article>
-        ) : (
-          <div className="rendimientos-table-shell">
-            <table className="rendimientos-table">
-              <thead>
-                <tr>
-                  {activeColumns.map((column) => {
-                    const isActive = sortConfig.key === column.key;
-                    const directionSymbol = isActive ? (sortConfig.direction === "asc" ? "▲" : "▼") : "↕";
+        <div className="rendimientos-table-shell">
+          <table className="rendimientos-table">
+            <thead>
+              <tr>
+                {activeColumns.map((column) => {
+                  const isActive = sortConfig.key === column.key;
+                  const directionSymbol = isActive ? (sortConfig.direction === "asc" ? "▲" : "▼") : "↕";
 
-                    return (
-                      <th key={column.key}>
-                        <button
-                          type="button"
-                          className={`table-sort-button ${isActive ? "is-active" : ""}`}
-                          onClick={() => handleSort(column.key)}
-                          aria-label={`Ordenar por ${column.label} ${isActive && sortConfig.direction === "asc" ? "descendente" : "ascendente"}`}
-                        >
-                          <span>{column.label}</span>
-                          <span className="table-sort-indicator" aria-hidden="true">{directionSymbol}</span>
-                        </button>
-                      </th>
-                    );
-                  })}
+                  return (
+                    <th key={column.key}>
+                      <button
+                        type="button"
+                        className={`table-sort-button ${isActive ? "is-active" : ""}`}
+                        onClick={() => handleSort(column.key)}
+                        aria-label={`Ordenar por ${column.label} ${isActive && sortConfig.direction === "asc" ? "descendente" : "ascendente"}`}
+                      >
+                        <span>{column.label}</span>
+                        <span className="table-sort-indicator" aria-hidden="true">{directionSymbol}</span>
+                      </button>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.length === 0 ? (
+                <tr>
+                  <td colSpan={activeColumns.length} className="table-empty-row">
+                    No hay cortes para los filtros actuales.
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {sortedRows.map((row) => {
+              ) : (
+                sortedRows.map((row) => {
                   const ctx = { connStats, availabilityByPlate };
 
                   return (
@@ -1126,11 +1123,11 @@ export default function RendimientosPage() {
                       })}
                     </tr>
                   );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="card rendimientos-history-card">

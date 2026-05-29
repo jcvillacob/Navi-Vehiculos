@@ -2977,6 +2977,27 @@ input[type="checkbox"] {
   color: var(--text);
 }
 
+.table-empty-row td {
+  padding: 48px 14px !important;
+  text-align: center;
+  vertical-align: middle;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.table-empty-row td::before {
+  content: "";
+  display: block;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 10px;
+  background: var(--text-subtle);
+  border-radius: 50%;
+  opacity: 0.4;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.5'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E") center/45% no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.5'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E") center/45% no-repeat;
+}
+
 .rules-dot {
   display: inline-block;
   width: 10px;
