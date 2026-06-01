@@ -558,3 +558,59 @@ export async function deleteGeotabRuleGroup(groupId) {
     throw new Error(`Error eliminando grupo de reglas (${response.status})`);
   }
 }
+
+/* ── Roles & permissions ────────────────────────────────────────────── */
+
+export async function fetchModules() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/roles/modules"));
+  return parseJsonOrThrow(response, "Error cargando catalogo de modulos");
+}
+
+export async function listRoles() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/roles"));
+  return parseJsonOrThrow(response, "Error listando roles");
+}
+
+export async function createRole(payload) {
+  const response = await fetchWithAuth(buildUrl("/api/v1/roles"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error creando rol");
+}
+
+export async function updateRole(key, payload) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/roles/${encodeURIComponent(key)}`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error actualizando rol");
+}
+
+export async function deleteRole(key) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/roles/${encodeURIComponent(key)}`), {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Error eliminando rol (${response.status})`);
+  }
+}
+
+export async function fetchRolePermissions(key) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/roles/${encodeURIComponent(key)}/permissions`));
+  return parseJsonOrThrow(response, "Error cargando permisos del rol");
+}
+
+export async function updateRolePermissions(key, matrix) {
+  const response = await fetchWithAuth(
+    buildUrl(`/api/v1/roles/${encodeURIComponent(key)}/permissions`),
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modules: matrix }),
+    }
+  );
+  return parseJsonOrThrow(response, "Error guardando permisos del rol");
+}

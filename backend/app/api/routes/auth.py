@@ -15,6 +15,7 @@ from app.services.auth_service import (
     blacklist_token,
     build_user_payload,
     create_refresh_token,
+    enforce_max_concurrent_sessions,
     get_refresh_token_record,
     get_user_by_id,
     get_user_by_username,
@@ -75,6 +76,13 @@ def _request_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def _request_user_agent(request: Request) -> str | None:
+    ua = request.headers.get("User-Agent")
+    if ua and len(ua) > 512:
+        ua = ua[:512]
+    return ua or None
+
+
 def _build_token(user: dict) -> str:
     now = datetime.now(tz=timezone.utc)
     expire = now + timedelta(minutes=settings.jwt_expire_minutes)
@@ -125,8 +133,11 @@ async def login(request: Request, response: Response) -> dict:
 
     reset_login_state(user["id"])
     user = get_user_by_id(user["id"]) or user
+    enforce_max_concurrent_sessions(user["id"], settings.max_concurrent_sessions)
     token = _build_token(user)
-    refresh_token, _expires_at = create_refresh_token(user["id"], ip_address)
+    refresh_token, _expires_at = create_refresh_token(
+        user["id"], ip_address, _request_user_agent(request)
+    )
     _set_access_cookie(response, token)
     _set_refresh_cookie(response, refresh_token)
     return build_user_payload(user)
@@ -135,6 +146,7 @@ async def login(request: Request, response: Response) -> dict:
 @router.post("/refresh")
 def refresh(request: Request, response: Response) -> dict:
     ip_address = _request_ip(request)
+    user_agent = _request_user_agent(request)
     refresh_token = request.cookies.get(_REFRESH_COOKIE_NAME)
     if not refresh_token:
         log_security_event("refresh_failed", ip_address=ip_address, reason="missing_cookie")
@@ -154,7 +166,7 @@ def refresh(request: Request, response: Response) -> dict:
         raise HTTPException(status_code=401, detail="Usuario inactivo o no encontrado")
 
     revoke_refresh_token(refresh_token)
-    new_refresh_token, _expires_at = create_refresh_token(user["id"], ip_address)
+    new_refresh_token, _expires_at = create_refresh_token(user["id"], ip_address, user_agent)
     access_token = _build_token(user)
     _set_access_cookie(response, access_token)
     _set_refresh_cookie(response, new_refresh_token)
@@ -221,7 +233,9 @@ def change_password(
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
     revoke_all_refresh_tokens(user["id"])
-    refresh_token, _expires_at = create_refresh_token(user["id"], _request_ip(request))
+    refresh_token, _expires_at = create_refresh_token(
+        user["id"], _request_ip(request), _request_user_agent(request)
+    )
     access_token = _build_token(updated_user)
     _set_access_cookie(response, access_token)
     _set_refresh_cookie(response, refresh_token)
@@ -257,6 +271,7 @@ def sessions(
             "created_at": row["created_at"],
             "expires_at": row["expires_at"],
             "ip_address": row.get("ip_address"),
+            "user_agent": row.get("user_agent"),
             "is_current": str(row["id"]) == current_session_id,
         }
         for row in rows

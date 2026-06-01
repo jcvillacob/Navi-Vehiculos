@@ -10,6 +10,7 @@ from app.services.auth_service import (
     create_user,
     get_user_by_id,
     list_users,
+    list_valid_role_keys,
     revoke_all_refresh_tokens,
     update_user,
     update_user_password,
@@ -18,6 +19,15 @@ from app.services.auth_service import (
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _ensure_valid_role(role: str) -> None:
+    valid = list_valid_role_keys()
+    if role not in valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Rol invalido. Debe ser uno de: {', '.join(sorted(valid))}",
+        )
 
 
 @router.get("", response_model=list[UserRecord])
@@ -32,9 +42,7 @@ def create_user_route(
     payload: UserCreateRequest,
     _user: dict = Depends(require_permission("users.create")),
 ) -> dict:
-    valid_roles = {"admin", "editor", "viewer"}
-    if payload.role not in valid_roles:
-        raise HTTPException(status_code=422, detail=f"Rol invalido. Debe ser uno de: {', '.join(valid_roles)}")
+    _ensure_valid_role(payload.role)
     try:
         user = create_user(
             username=payload.username,
@@ -59,8 +67,8 @@ def update_user_route(
     payload: UserUpdateRequest,
     _user: dict = Depends(require_permission("users.edit")),
 ) -> dict:
-    if payload.role is not None and payload.role not in {"admin", "editor", "viewer"}:
-        raise HTTPException(status_code=422, detail="Rol invalido")
+    if payload.role is not None:
+        _ensure_valid_role(payload.role)
     row = update_user(user_id, payload.email, payload.role, payload.is_active)
     if not row:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")

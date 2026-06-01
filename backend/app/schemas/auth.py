@@ -15,10 +15,11 @@ class UserRecord(BaseModel):
     id: int
     username: str
     email: str
-    role: str = Field(..., description="admin | editor | viewer")
+    role: str = Field(..., description="Key del rol (ver /api/v1/roles)")
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    last_login_at: datetime | None = None
     permissions: list[str] = Field(default_factory=list)
 
 
@@ -30,12 +31,12 @@ class UserCreateRequest(BaseModel):
     username: str = Field(..., min_length=3, description="Nombre de usuario")
     email: str = Field(..., min_length=5, description="Correo electronico")
     password: str = Field(..., min_length=10, description="Contrasena (min 10 caracteres)")
-    role: str = Field(default="viewer", description="admin | editor | viewer")
+    role: str = Field(default="viewer", description="Key del rol a asignar")
 
 
 class UserUpdateRequest(BaseModel):
     email: str | None = Field(default=None, description="Nuevo correo electronico")
-    role: str | None = Field(default=None, description="Nuevo rol: admin | editor | viewer")
+    role: str | None = Field(default=None, description="Nueva key de rol")
     is_active: bool | None = Field(default=None, description="Estado activo/inactivo")
 
 
@@ -54,6 +55,7 @@ class SessionRecord(BaseModel):
     created_at: datetime
     expires_at: datetime
     ip_address: str | None = None
+    user_agent: str | None = None
     is_current: bool = False
 
 

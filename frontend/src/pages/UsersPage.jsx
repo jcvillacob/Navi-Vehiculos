@@ -1,15 +1,39 @@
 import { useCallback, useEffect, useState } from "react";
 import Can from "../components/Can";
-import { fetchSessions, listUsers, createUser, resetUserPassword, revokeSession, updateUser } from "../api/vehicleApi";
+import { fetchSessions, listUsers, listRoles, createUser, resetUserPassword, revokeSession, updateUser } from "../api/vehicleApi";
 import PasswordInput from "../components/PasswordInput";
 import { validatePasswordStrength } from "../utils/passwordValidation";
 
-const ROLE_LABELS = { admin: "Admin", editor: "Editor", viewer: "Viewer" };
-const ROLES = ["admin", "editor", "viewer"];
+const ROLE_STATUS_CLASS = {
+  admin: "status-error",
+  editor: "status-partial",
+  viewer: "status-ok",
+};
+
+function RoleSelect({ roles, value, onChange, id }) {
+  return (
+    <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+      {roles.length === 0 ? (
+        <option value="">Cargando roles...</option>
+      ) : (
+        roles.map((r) => (
+          <option key={r.key} value={r.key}>
+            {r.label}
+          </option>
+        ))
+      )}
+    </select>
+  );
+}
 
 /* ── Create User Modal ──────────────────────────────────────────────── */
-function CreateUserModal({ loading, onClose, onSubmit }) {
-  const [form, setForm] = useState({ username: "", email: "", password: "", role: "viewer" });
+function CreateUserModal({ loading, roles, onClose, onSubmit }) {
+  const [form, setForm] = useState({
+    username: "",
+    email: "",
+    password: "",
+    role: roles[0]?.key ?? "viewer",
+  });
   const set = (key) => (e) => setForm((prev) => ({ ...prev, [key]: e.target.value }));
   const passwordErrors = validatePasswordStrength(form.password, form.username);
 
@@ -22,7 +46,8 @@ function CreateUserModal({ loading, onClose, onSubmit }) {
     form.username.trim().length >= 3 &&
     form.email.includes("@") &&
     form.password.length >= 10 &&
-    passwordErrors.length === 0;
+    passwordErrors.length === 0 &&
+    form.role.length > 0;
 
   return (
     <div className="modal-overlay" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -46,16 +71,14 @@ function CreateUserModal({ loading, onClose, onSubmit }) {
           </div>
           <div className="form-field">
             <label htmlFor="cu-password">Contrasena</label>
-            <PasswordInput id="cu-password" value={form.password} onChange={set("password")} placeholder="min 8 caracteres" required />
+            <PasswordInput id="cu-password" value={form.password} onChange={set("password")} placeholder="min 10 caracteres" required />
           </div>
           {form.password && passwordErrors.length ? (
             <div className="notice-banner notice-soft">{passwordErrors.join(" ")}</div>
           ) : null}
           <div className="form-field">
             <label htmlFor="cu-role">Rol</label>
-            <select id="cu-role" value={form.role} onChange={set("role")}>
-              {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-            </select>
+            <RoleSelect id="cu-role" roles={roles} value={form.role} onChange={set("role")} />
           </div>
 
           <div className="actions-row modal-actions">
@@ -71,7 +94,7 @@ function CreateUserModal({ loading, onClose, onSubmit }) {
 }
 
 /* ── Edit User Modal ────────────────────────────────────────────────── */
-function EditUserModal({ user, loading, onClose, onSubmit }) {
+function EditUserModal({ user, loading, roles, onClose, onSubmit }) {
   const [form, setForm] = useState({
     email: user.email,
     role: user.role,
@@ -106,9 +129,7 @@ function EditUserModal({ user, loading, onClose, onSubmit }) {
           </div>
           <div className="form-field">
             <label htmlFor="eu-role">Rol</label>
-            <select id="eu-role" value={form.role} onChange={set("role")}>
-              {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-            </select>
+            <RoleSelect id="eu-role" roles={roles} value={form.role} onChange={set("role")} />
           </div>
           <div className="form-field">
             <label htmlFor="eu-active">Estado</label>
@@ -225,6 +246,7 @@ function UserSessionsModal({ user, onClose }) {
                   <th>Creada</th>
                   <th>Expira</th>
                   <th>IP</th>
+                  <th>Dispositivo</th>
                   <th>Estado</th>
                   <th>Accion</th>
                 </tr>
@@ -235,6 +257,11 @@ function UserSessionsModal({ user, onClose }) {
                     <td>{new Date(session.created_at).toLocaleString("es-CO")}</td>
                     <td>{new Date(session.expires_at).toLocaleString("es-CO")}</td>
                     <td>{session.ip_address || "—"}</td>
+                    <td>
+                      <span className="session-useragent" title={session.user_agent || ""}>
+                        {session.user_agent ? session.user_agent.slice(0, 60) : "—"}
+                      </span>
+                    </td>
                     <td>{session.is_current ? "Actual" : "Activa"}</td>
                     <td>
                       <button
@@ -249,7 +276,7 @@ function UserSessionsModal({ user, onClose }) {
                 ))}
                 {sessions.length === 0 ? (
                   <tr>
-                    <td colSpan="5">Sin sesiones activas.</td>
+                    <td colSpan="6">Sin sesiones activas.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -264,6 +291,7 @@ function UserSessionsModal({ user, onClose }) {
 /* ── Users Page ──────────────────────────────────────────────────────── */
 export default function UsersPage() {
   const [users, setUsers] = useState([]);
+  const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -273,8 +301,9 @@ export default function UsersPage() {
     setLoading(true);
     setError("");
     try {
-      const data = await listUsers();
-      setUsers(data);
+      const [usersData, rolesData] = await Promise.all([listUsers(), listRoles()]);
+      setUsers(usersData);
+      setRoles(rolesData);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -285,6 +314,8 @@ export default function UsersPage() {
   useEffect(() => {
     fetchUsers();
   }, [fetchUsers]);
+
+  const roleLabel = (key) => roles.find((r) => r.key === key)?.label ?? key;
 
   const handleCreate = async (form) => {
     setSaving(true);
@@ -334,6 +365,17 @@ export default function UsersPage() {
     });
   };
 
+  const formatDateTime = (iso) => {
+    if (!iso) return "—";
+    return new Date(iso).toLocaleString("es-CO", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
   return (
     <section className="panel">
       <header className="page-header page-header-row">
@@ -377,6 +419,7 @@ export default function UsersPage() {
                 <th>Rol</th>
                 <th>Estado</th>
                 <th>Creado</th>
+                <th>Ultimo acceso</th>
                 <th>Acciones</th>
               </tr>
             </thead>
@@ -388,8 +431,8 @@ export default function UsersPage() {
                   </td>
                   <td data-label="Email">{u.email}</td>
                   <td data-label="Rol">
-                    <span className={`status ${u.role === "admin" ? "status-error" : u.role === "editor" ? "status-partial" : "status-ok"}`}>
-                      {ROLE_LABELS[u.role] ?? u.role}
+                    <span className={`status ${ROLE_STATUS_CLASS[u.role] ?? "status-soft"}`}>
+                      {roleLabel(u.role)}
                     </span>
                   </td>
                   <td data-label="Estado">
@@ -398,6 +441,7 @@ export default function UsersPage() {
                     </span>
                   </td>
                   <td data-label="Creado">{formatDate(u.created_at)}</td>
+                  <td data-label="Ultimo acceso">{formatDateTime(u.last_login_at)}</td>
                   <td data-label="Acciones">
                     <Can permission="users.edit">
                       <div className="actions-row">
@@ -430,10 +474,10 @@ export default function UsersPage() {
       )}
 
       {modal === "create" && (
-        <CreateUserModal loading={saving} onClose={() => setModal(null)} onSubmit={handleCreate} />
+        <CreateUserModal loading={saving} roles={roles} onClose={() => setModal(null)} onSubmit={handleCreate} />
       )}
       {modal?.mode === "edit" && (
-        <EditUserModal user={modal.user} loading={saving} onClose={() => setModal(null)} onSubmit={handleEdit} />
+        <EditUserModal user={modal.user} loading={saving} roles={roles} onClose={() => setModal(null)} onSubmit={handleEdit} />
       )}
       {modal?.mode === "reset" && (
         <ResetPasswordModal user={modal.user} loading={saving} onClose={() => setModal(null)} onSubmit={handleResetPassword} />

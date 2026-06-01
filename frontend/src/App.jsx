@@ -11,6 +11,7 @@ import { validatePasswordStrength } from "./utils/passwordValidation";
 import LoginPage from "./pages/LoginPage";
 import AuditPage from "./pages/AuditPage";
 import UsersPage from "./pages/UsersPage";
+import RolesPage from "./pages/RolesPage";
 import HomePage from "./pages/HomePage";
 import RendimientosPage from "./pages/RendimientosPage";
 import CustomersPage from "./pages/CustomersPage";
@@ -144,6 +145,7 @@ function SessionsModal({ user, onClose }) {
                   <th>Creada</th>
                   <th>Expira</th>
                   <th>IP</th>
+                  <th>Dispositivo</th>
                   <th>Estado</th>
                   <th>Accion</th>
                 </tr>
@@ -154,6 +156,11 @@ function SessionsModal({ user, onClose }) {
                     <td>{new Date(session.created_at).toLocaleString("es-CO")}</td>
                     <td>{new Date(session.expires_at).toLocaleString("es-CO")}</td>
                     <td>{session.ip_address || "—"}</td>
+                    <td>
+                      <span className="session-useragent" title={session.user_agent || ""}>
+                        {session.user_agent ? session.user_agent.slice(0, 60) : "—"}
+                      </span>
+                    </td>
                     <td>{session.is_current ? "Actual" : "Activa"}</td>
                     <td>
                       {session.is_current ? "—" : (
@@ -246,7 +253,13 @@ function AppShell() {
                   <Can permission="users.list">
                     <NavLink to="/usuarios">
                       <span>Usuarios</span>
-                      <small>Roles y accesos</small>
+                      <small>Cuentas y accesos</small>
+                    </NavLink>
+                  </Can>
+                  <Can permission="roles.manage">
+                    <NavLink to="/roles">
+                      <span>Roles y permisos</span>
+                      <small>Matriz por modulo</small>
                     </NavLink>
                   </Can>
                   <Can permission="audit.view">
@@ -300,6 +313,14 @@ function AppShell() {
                 element={
                   <ProtectedRoute permissions={["users.list"]}>
                     <UsersPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/roles"
+                element={
+                  <ProtectedRoute permissions={["roles.manage"]}>
+                    <RolesPage />
                   </ProtectedRoute>
                 }
               />

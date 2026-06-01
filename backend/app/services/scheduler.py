@@ -16,8 +16,10 @@ import os
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.jobs.rendimientos_cron import _run as run_rendimientos_cron
+from app.services.auth_service import cleanup_expired_refresh_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,7 @@ logger = logging.getLogger(__name__)
 _CRON_TZ = "America/Bogota"
 _CRON_HOUR = 5
 _CRON_MINUTE = 0
+_CLEANUP_INTERVAL_MINUTES = 60
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -59,6 +62,15 @@ def start() -> None:
         max_instances=1,
         misfire_grace_time=60 * 60,  # si el contenedor estaba caido al cruzar las 5am, corre dentro de 1h
     )
+    scheduler.add_job(
+        _safe_cleanup_refresh_tokens,
+        trigger=IntervalTrigger(minutes=_CLEANUP_INTERVAL_MINUTES),
+        id="refresh_tokens_cleanup",
+        name="Cleanup expired/revoked refresh tokens",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
     scheduler.start()
     _scheduler = scheduler
 
@@ -79,3 +91,15 @@ def shutdown() -> None:
         logger.exception("Fallo apagando el scheduler")
     finally:
         _scheduler = None
+
+
+def _safe_cleanup_refresh_tokens() -> int:
+    """Wrapper que loggea excepciones del job periodico."""
+    try:
+        deleted = cleanup_expired_refresh_tokens()
+        if deleted:
+            logger.info("Limpieza de refresh_tokens: %d filas eliminadas.", deleted)
+        return deleted
+    except Exception:
+        logger.exception("Fallo en cleanup de refresh_tokens")
+        return 0

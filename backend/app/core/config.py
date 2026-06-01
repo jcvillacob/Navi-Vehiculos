@@ -27,6 +27,7 @@ class Settings:
     refresh_token_expire_days: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
     redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     environment: str = os.getenv("ENVIRONMENT", "development").strip().lower()
+    max_concurrent_sessions: int = int(os.getenv("MAX_CONCURRENT_SESSIONS", "0"))
 
     @property
     def is_production(self) -> bool:
