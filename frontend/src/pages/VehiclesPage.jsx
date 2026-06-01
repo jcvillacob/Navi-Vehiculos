@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
 import Can from "../components/Can";
+import ColumnSelectorDrawer from "../components/ColumnSelectorDrawer";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import { usePermission } from "../context/AuthContext";
@@ -185,29 +186,9 @@ export default function VehiclesPage() {
 
   const [visibleColumns, setVisibleColumns] = useState(() => new Set(VEHICLE_COLUMNS.map((c) => c.key)));
   const [columnSelectorOpen, setColumnSelectorOpen] = useState(false);
-  const columnSelectorRef = useRef(null);
 
-  useEffect(() => {
-    if (!columnSelectorOpen) return;
-    function handleClickOutside(event) {
-      if (columnSelectorRef.current && !columnSelectorRef.current.contains(event.target)) {
-        setColumnSelectorOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [columnSelectorOpen]);
-
-  const toggleColumn = useCallback((key) => {
-    setVisibleColumns((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
+  const handleApplyColumns = useCallback((nextKeys) => {
+    setVisibleColumns(new Set(nextKeys));
   }, []);
 
   // React to bulk refresh finishing (works even if user navigated away and came back)
@@ -588,45 +569,15 @@ export default function VehiclesPage() {
           </div>
 
           <div className="actions-row section-heading-actions">
-            <div className="column-selector-wrapper" ref={columnSelectorRef}>
-              <button
-                type="button"
-                className="button-secondary button-sm"
-                onClick={() => setColumnSelectorOpen((prev) => !prev)}
-              >
-                Columnas ({visibleColumns.size}/{VEHICLE_COLUMNS.length})
-              </button>
-              {columnSelectorOpen && (
-                <div className="column-selector-dropdown">
-                  <div className="column-selector-actions">
-                    <button
-                      type="button"
-                      className="column-selector-link"
-                      onClick={() => setVisibleColumns(new Set(VEHICLE_COLUMNS.map((c) => c.key)))}
-                    >
-                      Todas
-                    </button>
-                    <button
-                      type="button"
-                      className="column-selector-link"
-                      onClick={() => setVisibleColumns(new Set())}
-                    >
-                      Ninguna
-                    </button>
-                  </div>
-                  {VEHICLE_COLUMNS.map((col) => (
-                    <label key={col.key} className="column-selector-option">
-                      <input
-                        type="checkbox"
-                        checked={visibleColumns.has(col.key)}
-                        onChange={() => toggleColumn(col.key)}
-                      />
-                      <span>{col.label}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
+            <button
+              type="button"
+              className="button-secondary button-sm"
+              onClick={() => setColumnSelectorOpen(true)}
+              aria-haspopup="dialog"
+              aria-expanded={columnSelectorOpen}
+            >
+              Columnas ({visibleColumns.size}/{VEHICLE_COLUMNS.length})
+            </button>
             <button
               type="button"
               className="button-secondary button-sm"
@@ -1115,6 +1066,16 @@ export default function VehiclesPage() {
         vehicles={selectedVehicles}
         onClose={() => setBulkAssignOpen(false)}
         onSubmit={handleBulkAssignVehicles}
+      />
+
+      <ColumnSelectorDrawer
+        open={columnSelectorOpen}
+        title="Columnas de vehiculos"
+        description="Elige las columnas que quieres ver en la tabla y aplica los cambios cuando estes listo."
+        columns={VEHICLE_COLUMNS}
+        visibleKeys={visibleColumns}
+        onApply={handleApplyColumns}
+        onClose={() => setColumnSelectorOpen(false)}
       />
 
       {reprocessPromptPlates && (

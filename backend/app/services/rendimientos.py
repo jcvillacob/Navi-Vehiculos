@@ -14,6 +14,7 @@ from app.schemas.vehicle import (
     MonthlyPerformanceResponse,
     MonthlyPerformanceSummary,
 )
+from app.core.config import load_geotab_config
 from app.services.motor_catalog import _database_dsn, _ensure_motor_tables
 from app.services.performance_providers import get_monthly_performance_provider
 from app.services.performance_types import BindingSnapshot, PerformanceTarget
@@ -115,6 +116,12 @@ def _run_performance_tables_ddl_inner(conn: psycopg.Connection) -> None:
             );
             """
         )
+        cur.execute(
+            """
+            ALTER TABLE monthly_vehicle_performance
+            ADD COLUMN IF NOT EXISTS is_adhoc BOOLEAN NOT NULL DEFAULT FALSE;
+            """
+        )
 
 
 def _normalize_month(value: str) -> tuple[str, int, int]:
@@ -133,12 +140,129 @@ def _previous_month(month: str) -> str:
     return f"{year}-{value - 1:02d}"
 
 
+_SYSTEM_DB_CACHE: tuple[int, int] | None = None
+
+
+def _ensure_system_database(conn: psycopg.Connection) -> tuple[int, int]:
+    """
+    Garantiza que exista un customer '__navitrans_system__' y una database
+    Geotab asociada con las credenciales globales de Navitrans. Retorna
+    (customer_id, customer_database_id). Se cachea en memoria por proceso.
+    """
+    global _SYSTEM_DB_CACHE
+    if _SYSTEM_DB_CACHE is not None:
+        return _SYSTEM_DB_CACHE
+
+    geotab_cfg = load_geotab_config()
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            INSERT INTO customers (name) VALUES ('__navitrans_system__')
+            ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+            RETURNING id;
+            """,
+        )
+        customer_id = int(cur.fetchone()["id"])
+
+        cur.execute(
+            """
+            INSERT INTO customer_databases (customer_id, database_name, username, password, connection_type)
+            VALUES (%s, %s, %s, %s, 'geotab')
+            ON CONFLICT (customer_id, database_name, username)
+            DO UPDATE SET password = EXCLUDED.password
+            RETURNING id;
+            """,
+            (customer_id, geotab_cfg.database, geotab_cfg.username, geotab_cfg.password),
+        )
+        database_id = int(cur.fetchone()["id"])
+    conn.commit()
+
+    _SYSTEM_DB_CACHE = (customer_id, database_id)
+    return _SYSTEM_DB_CACHE
+
+
+def _fetch_adhoc_targets(
+    conn: psycopg.Connection,
+    *,
+    system_customer_id: int,
+    system_database_id: int,
+    geotab_username: str,
+    geotab_password: str,
+    geotab_database: str,
+    adhoc_plates: list[str] | None = None,
+    adhoc_filters: dict[str, list[str]] | None = None,
+) -> list[PerformanceTarget]:
+    """
+    Obtiene vehiculos sin customer_database_id que coincidan con los filtros.
+    Retorna PerformanceTarget con credenciales Navitrans Geotab.
+    """
+    clean_plates = sorted({p.strip().upper() for p in (adhoc_plates or []) if p.strip()})
+    filters = adhoc_filters or {}
+    clean_marcas = sorted({v.strip() for v in filters.get("marca", []) if v.strip()})
+    clean_lineas = sorted({v.strip() for v in filters.get("linea", []) if v.strip()})
+    clean_nombres = sorted({v.strip() for v in filters.get("nombre_vehiculo", []) if v.strip()})
+
+    if not clean_plates and not clean_marcas and not clean_lineas and not clean_nombres:
+        return []
+
+    where_clauses = ["a.customer_database_id IS NULL"]
+    params: list[Any] = []
+
+    if clean_plates:
+        where_clauses.append("UPPER(a.plate) = ANY(%s)")
+        params.append(clean_plates)
+    if clean_marcas:
+        where_clauses.append("a.marca = ANY(%s)")
+        params.append(clean_marcas)
+    if clean_lineas:
+        where_clauses.append("a.linea = ANY(%s)")
+        params.append(clean_lineas)
+    if clean_nombres:
+        where_clauses.append("a.nombre_vehiculo = ANY(%s)")
+        params.append(clean_nombres)
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            f"""
+            SELECT
+                a.plate,
+                a.technical_number,
+                mc.engine_name
+            FROM vehicle_motor_assignments a
+            LEFT JOIN motor_catalog mc
+                ON mc.technical_number = a.technical_number
+            WHERE {" AND ".join(where_clauses)}
+            ORDER BY a.plate ASC;
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+
+    return [
+        PerformanceTarget(
+            provider_key="geotab",
+            customer_id=system_customer_id,
+            customer_database_id=system_database_id,
+            client_name="Navitrans",
+            database_name=geotab_database,
+            plate=str(row["plate"]),
+            technical_number=row.get("technical_number"),
+            engine_name=row.get("engine_name"),
+            username=geotab_username,
+            password=geotab_password,
+            provider_config={},
+        )
+        for row in rows
+    ]
+
+
 def _build_record(row: dict[str, Any]) -> MonthlyPerformanceRecord:
+    is_adhoc = bool(row.get("is_adhoc", False))
     return MonthlyPerformanceRecord(
         customer_id=row.get("customer_id"),
         customer_database_id=int(row["customer_database_id"]),
-        client_name=row.get("client_name"),
-        database_name=row.get("database_name"),
+        client_name="Navitrans" if is_adhoc else row.get("client_name"),
+        database_name="Geotab Global" if is_adhoc else row.get("database_name"),
         source_provider=str(row.get("source_provider") or "artimo"),
         plate=str(row["plate"]),
         provider_vehicle_id=row.get("provider_vehicle_id"),
@@ -164,6 +288,7 @@ def _build_record(row: dict[str, Any]) -> MonthlyPerformanceRecord:
         ano_modelo=row.get("ano_modelo"),
         tipo_combustible=row.get("tipo_combustible"),
         nombre_vehiculo=row.get("nombre_vehiculo"),
+        is_adhoc=bool(row.get("is_adhoc", False)),
     )
 
 
@@ -415,11 +540,12 @@ def _upsert_monthly_record(
                 fuel_gallons,
                 calculation_status,
                 warnings,
+                is_adhoc,
                 calculated_at,
                 updated_at
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW()
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, NOW(), NOW()
             )
             ON CONFLICT (customer_database_id, plate, period_month)
             DO UPDATE SET
@@ -439,6 +565,7 @@ def _upsert_monthly_record(
                 fuel_gallons = EXCLUDED.fuel_gallons,
                 calculation_status = EXCLUDED.calculation_status,
                 warnings = EXCLUDED.warnings,
+                is_adhoc = EXCLUDED.is_adhoc,
                 calculated_at = NOW(),
                 updated_at = NOW()
             RETURNING
@@ -463,6 +590,7 @@ def _upsert_monthly_record(
                 fuel_gallons,
                 calculation_status,
                 warnings,
+                is_adhoc,
                 calculated_at;
             """,
             (
@@ -485,6 +613,7 @@ def _upsert_monthly_record(
                 record.fuel_gallons,
                 record.calculation_status,
                 Jsonb(record.warnings),
+                record.is_adhoc,
                 record.client_name,
                 record.database_name,
             ),
@@ -525,12 +654,32 @@ def calculate_monthly_performance(
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_performance_tables(conn)
-        targets = _fetch_targets(
-            conn,
-            customer_id=payload.customer_id,
-            customer_ids=payload.customer_ids,
-            customer_database_id=payload.customer_database_id,
-        )
+        targets: list[PerformanceTarget] = []
+        if not payload.adhoc_only:
+            targets = _fetch_targets(
+                conn,
+                customer_id=payload.customer_id,
+                customer_ids=payload.customer_ids,
+                customer_database_id=payload.customer_database_id,
+            )
+
+        adhoc_db_id: int | None = None
+        if payload.include_adhoc:
+            geotab_cfg = load_geotab_config()
+            sys_cust_id, sys_db_id = _ensure_system_database(conn)
+            adhoc_db_id = sys_db_id
+            adhoc_targets = _fetch_adhoc_targets(
+                conn,
+                system_customer_id=sys_cust_id,
+                system_database_id=sys_db_id,
+                geotab_username=geotab_cfg.username,
+                geotab_password=geotab_cfg.password,
+                geotab_database=geotab_cfg.database,
+                adhoc_plates=payload.adhoc_plates or None,
+                adhoc_filters=payload.adhoc_filters or None,
+            )
+            targets = targets + adhoc_targets
+
         if not targets:
             _emit_progress(0, 0)
             return MonthlyPerformanceResponse(month=month, summary=MonthlyPerformanceSummary(), rows=[])
@@ -558,6 +707,7 @@ def calculate_monthly_performance(
 
         for (provider_key, _database_id), database_targets in grouped_targets.items():
             sample_target = database_targets[0]
+            is_adhoc_group = adhoc_db_id is not None and _database_id == adhoc_db_id
             provider = get_monthly_performance_provider(provider_key)
             if provider is None:
                 for target in database_targets:
@@ -575,6 +725,7 @@ def calculate_monthly_performance(
                             period_month=month,
                             calculation_status="error",
                             warnings=[f"El proveedor {target.provider_key} aun no tiene adapter de rendimientos."],
+                            is_adhoc=is_adhoc_group,
                         ),
                     )
                     rows.append(saved)
@@ -617,6 +768,7 @@ def calculate_monthly_performance(
                             period_month=month,
                             calculation_status="error",
                             warnings=[f"No fue posible consultar {sample_target.provider_key}: {exc}"],
+                            is_adhoc=is_adhoc_group,
                         ),
                     )
                     rows.append(saved)
@@ -635,6 +787,8 @@ def calculate_monthly_performance(
                 )
 
             for record in provider_result.records:
+                if is_adhoc_group:
+                    record = record.model_copy(update={"is_adhoc": True})
                 rows.append(_upsert_monthly_record(conn, record))
 
             # Reconciliacion: el provider pudo haber bumpeado per-placa (in_flight)
@@ -725,6 +879,7 @@ def list_monthly_performance(
                         mp.fuel_gallons,
                         mp.calculation_status,
                         mp.warnings,
+                        mp.is_adhoc,
                         mp.calculated_at,
                         a.vin,
                         a.cpl,
@@ -781,6 +936,7 @@ def list_monthly_performance(
                             ELSE 'calculated'
                         END AS calculation_status,
                         MAX(mp.calculated_at) AS calculated_at,
+                        BOOL_OR(mp.is_adhoc) AS is_adhoc,
                         a.vin,
                         a.cpl,
                         a.marca,
@@ -815,3 +971,32 @@ def list_monthly_performance(
         summary=_build_summary(rows),
         rows=rows,
     )
+
+
+def list_adhoc_filter_options() -> dict[str, Any]:
+    """
+    Retorna los valores unicos de filtro para vehiculos sin customer_database_id.
+    """
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    ARRAY_AGG(DISTINCT marca ORDER BY marca) FILTER (WHERE marca IS NOT NULL) AS marcas,
+                    ARRAY_AGG(DISTINCT linea ORDER BY linea) FILTER (WHERE linea IS NOT NULL) AS lineas,
+                    ARRAY_AGG(DISTINCT nombre_vehiculo ORDER BY nombre_vehiculo) FILTER (WHERE nombre_vehiculo IS NOT NULL) AS nombres,
+                    ARRAY_AGG(DISTINCT tipo_combustible ORDER BY tipo_combustible) FILTER (WHERE tipo_combustible IS NOT NULL) AS tipos_combustible
+                FROM vehicle_motor_assignments
+                WHERE customer_database_id IS NULL;
+                """,
+            )
+            row = cur.fetchone()
+
+    return {
+        "total": int(row["total"]) if row else 0,
+        "marcas": list(row.get("marcas") or []) if row else [],
+        "lineas": list(row.get("lineas") or []) if row else [],
+        "nombres": list(row.get("nombres") or []) if row else [],
+        "tipos_combustible": list(row.get("tipos_combustible") or []) if row else [],
+    }

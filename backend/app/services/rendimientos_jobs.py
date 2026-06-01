@@ -99,6 +99,30 @@ def _ensure_jobs_table(conn: psycopg.Connection | None = None) -> None:
                 ADD COLUMN IF NOT EXISTS compute_availability BOOLEAN NOT NULL DEFAULT FALSE;
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE performance_calculation_jobs
+                ADD COLUMN IF NOT EXISTS include_adhoc BOOLEAN NOT NULL DEFAULT FALSE;
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE performance_calculation_jobs
+                ADD COLUMN IF NOT EXISTS adhoc_plates JSONB NOT NULL DEFAULT '[]'::jsonb;
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE performance_calculation_jobs
+                ADD COLUMN IF NOT EXISTS adhoc_filters JSONB NOT NULL DEFAULT '{}'::jsonb;
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE performance_calculation_jobs
+                ADD COLUMN IF NOT EXISTS adhoc_only BOOLEAN NOT NULL DEFAULT FALSE;
+                """
+            )
         own_conn.commit()
     finally:
         own_conn.close()
@@ -124,7 +148,8 @@ def _compute_scope_key(payload: MonthlyPerformanceCalculateRequest) -> str:
     cids_part = ",".join(str(c) for c in sorted(cids)) if cids else "all"
     db_part = str(payload.customer_database_id) if payload.customer_database_id is not None else "any"
     avail_part = "av" if payload.compute_availability else "noav"
-    return f"{cids_part}|{db_part}|{avail_part}"
+    adhoc_part = "adhoconly" if payload.adhoc_only else ("adhoc" if payload.include_adhoc else "std")
+    return f"{cids_part}|{db_part}|{avail_part}|{adhoc_part}"
 
 
 def _row_to_job(row: dict[str, Any]) -> PerformanceCalculationJob:
@@ -147,6 +172,8 @@ def _row_to_job(row: dict[str, Any]) -> PerformanceCalculationJob:
         customer_database_id=row.get("customer_database_id"),
         force_recalculate=bool(row.get("force_recalculate")),
         compute_availability=bool(row.get("compute_availability")),
+        include_adhoc=bool(row.get("include_adhoc")),
+        adhoc_only=bool(row.get("adhoc_only")),
         total_targets=total,
         processed_targets=processed,
         progress_pct=progress,
@@ -217,9 +244,10 @@ def create_job(
                         status, month, scope_key,
                         customer_id, customer_ids, customer_database_id,
                         force_recalculate, compute_availability,
+                        include_adhoc, adhoc_plates, adhoc_filters, adhoc_only,
                         triggered_by, created_by_user_id
                     )
-                    VALUES ('queued', %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                    VALUES ('queued', %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
                     RETURNING *;
                     """,
                     (
@@ -230,6 +258,10 @@ def create_job(
                         payload.customer_database_id,
                         payload.force_recalculate,
                         payload.compute_availability,
+                        payload.include_adhoc,
+                        Jsonb(list(payload.adhoc_plates or [])),
+                        Jsonb(dict(payload.adhoc_filters or {})),
+                        payload.adhoc_only,
                         triggered_by,
                         user_id,
                     ),
@@ -336,6 +368,22 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
         # Ya termino o esta en estado raro; no reejecutar.
         return job
 
+    # Recuperar campos ad-hoc desde la fila del job.
+    adhoc_plates: list[str] = []
+    adhoc_filters: dict[str, list[str]] = {}
+    adhoc_only: bool = False
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as _rc:
+        with _rc.cursor() as _rcur:
+            _rcur.execute(
+                "SELECT include_adhoc, adhoc_plates, adhoc_filters, adhoc_only FROM performance_calculation_jobs WHERE id = %s;",
+                (job_id,),
+            )
+            _adhoc_row = _rcur.fetchone()
+            if _adhoc_row:
+                adhoc_plates = list(_adhoc_row.get("adhoc_plates") or [])
+                adhoc_filters = dict(_adhoc_row.get("adhoc_filters") or {})
+                adhoc_only = bool(_adhoc_row.get("adhoc_only"))
+
     payload = MonthlyPerformanceCalculateRequest(
         month=job.month,
         customer_id=job.customer_id,
@@ -343,6 +391,10 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
         customer_database_id=job.customer_database_id,
         force_recalculate=job.force_recalculate,
         compute_availability=job.compute_availability,
+        include_adhoc=job.include_adhoc,
+        adhoc_only=adhoc_only,
+        adhoc_plates=adhoc_plates,
+        adhoc_filters=adhoc_filters,
     )
 
     _mark_running(job_id)
@@ -472,6 +524,32 @@ def _count_availability_targets(payload: MonthlyPerformanceCalculateRequest) -> 
     except Exception:
         _logger.exception("No fue posible contar targets de disponibilidad")
         return 0
+
+
+def cancel_job(job_id: int) -> PerformanceCalculationJob:
+    """Marca un job activo como cancelado (status='error')."""
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_jobs_table(conn)
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                UPDATE performance_calculation_jobs
+                SET status = 'error',
+                    error_message = 'Cancelado por el usuario',
+                    finished_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s AND status IN ('queued', 'running')
+                RETURNING *;
+                """,
+                (job_id,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if row is None:
+        job = get_job(job_id)  # exists but not active
+        return job
+    return _row_to_job(row)
 
 
 def get_job(job_id: int) -> PerformanceCalculationJob:

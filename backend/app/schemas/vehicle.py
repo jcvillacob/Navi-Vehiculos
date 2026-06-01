@@ -386,6 +386,22 @@ class MonthlyPerformanceCalculateRequest(BaseModel):
         default=False,
         description="Si es true, despues de los rendimientos calcula tambien la disponibilidad de proyectos desde CloudFleet.",
     )
+    include_adhoc: bool = Field(
+        default=False,
+        description="Si true, incluye vehiculos sin database asignada usando credenciales Navitrans Geotab.",
+    )
+    adhoc_plates: list[str] = Field(
+        default_factory=list,
+        description="Placas especificas a calcular en modo ad-hoc (vacio = todas las que apliquen por filtros).",
+    )
+    adhoc_filters: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Filtros avanzados ad-hoc: {marca: [...], linea: [...], nombre_vehiculo: [...]}",
+    )
+    adhoc_only: bool = Field(
+        default=False,
+        description="Si true, calcula SOLO vehiculos ad-hoc sin incluir clientes asignados.",
+    )
 
 
 class MonthlyPerformanceRecord(BaseModel):
@@ -424,6 +440,7 @@ class MonthlyPerformanceRecord(BaseModel):
     ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo")
     tipo_combustible: str | None = Field(default=None, description="Tipo de combustible")
     nombre_vehiculo: str | None = Field(default=None, description="Nombre del vehiculo")
+    is_adhoc: bool = Field(default=False, description="True si fue calculado con credenciales Navitrans (ad-hoc)")
 
 
 class AvailabilitySummary(BaseModel):
@@ -496,6 +513,14 @@ class PerformanceCalculationJob(BaseModel):
     compute_availability: bool = Field(
         default=False,
         description="Si es true, el job tambien corrio el calculo de disponibilidad CloudFleet.",
+    )
+    include_adhoc: bool = Field(
+        default=False,
+        description="Si true, el job incluye vehiculos ad-hoc (sin cliente, con Navitrans Geotab).",
+    )
+    adhoc_only: bool = Field(
+        default=False,
+        description="Si true, el job calcula SOLO vehiculos ad-hoc sin incluir clientes.",
     )
     total_targets: int = Field(default=0)
     processed_targets: int = Field(default=0)

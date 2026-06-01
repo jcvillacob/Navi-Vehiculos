@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
 import Can from "../components/Can";
+import ColumnSelectorDrawer from "../components/ColumnSelectorDrawer";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import {
   calculateMonthlyPerformance,
+  cancelPerformanceJob,
   fetchActivePerformanceJobs,
+  fetchAdhocFilterOptions,
   fetchConnectionStats,
   fetchMonthlyAvailability,
   fetchMonthlyPerformance,
@@ -76,8 +79,17 @@ function filterRows(rows, filters, omit = "") {
       return false;
     }
     if (omit !== "plateSearch" && filters.plateSearch) {
-      const normalizedPlate = (row.plate || "").toUpperCase();
-      if (!normalizedPlate.includes(filters.plateSearch)) return false;
+      const q = filters.plateSearch.toUpperCase();
+      const plate = (row.plate || "").toUpperCase();
+      const nombre = (row.nombre_vehiculo || "").toUpperCase();
+      const marca = (row.marca || "").toUpperCase();
+      const linea = (row.linea || "").toUpperCase();
+      if (
+        !plate.includes(q) &&
+        !nombre.includes(q) &&
+        !marca.includes(q) &&
+        !linea.includes(q)
+      ) return false;
     }
     return true;
   });
@@ -167,6 +179,70 @@ function compareValues(left, right, direction = "asc") {
   return direction === "desc" ? result * -1 : result;
 }
 
+function FilterDropdown({ label, options, selected, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) { setSearch(""); return; }
+    function handleClickOutside(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  const filtered = search ? options.filter((opt) => opt.toLowerCase().includes(search.toLowerCase())) : options;
+
+  const toggle = (value) => {
+    onChange(
+      selected.includes(value)
+        ? selected.filter((v) => v !== value)
+        : [...selected, value]
+    );
+  };
+
+  return (
+    <div className={`client-picker ${open ? "is-open" : ""}`} ref={ref}>
+      <button type="button" className="client-picker-summary" onClick={() => setOpen(!open)}>
+        <span className="client-picker-label">{label}</span>
+        {selected.length > 0 && (
+          <span className="client-picker-badge">{selected.length}</span>
+        )}
+        <span className="client-picker-caret" aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <div className="client-picker-panel">
+          <div className="client-picker-search">
+            <input
+              type="text"
+              placeholder="Buscar..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              autoFocus
+            />
+          </div>
+          {filtered.length === 0 ? (
+            <p className="support-copy" style={{ padding: "8px 12px", margin: 0 }}>Sin resultados</p>
+          ) : (
+            filtered.map((opt) => (
+              <label className="client-picker-option" key={opt}>
+                <input
+                  type="checkbox"
+                  checked={selected.includes(opt)}
+                  onChange={() => toggle(opt)}
+                />
+                <span>{opt}</span>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RendimientosPage() {
   const { toasts, pushToast } = useToasts();
 
@@ -187,6 +263,14 @@ export default function RendimientosPage() {
   const [selectedCustomerIds, setSelectedCustomerIds] = useState([]);
   const [consultOpen, setConsultOpen] = useState(false);
   const [calcAvailability, setCalcAvailability] = useState(false);
+  const [includeAdhoc, setIncludeAdhoc] = useState(false);
+  const [adhocOnly, setAdhocOnly] = useState(false);
+  const [adhocFilterOptions, setAdhocFilterOptions] = useState(null);
+  const [adhocLoadingFilters, setAdhocLoadingFilters] = useState(false);
+  const [adhocSelectedMarcas, setAdhocSelectedMarcas] = useState([]);
+  const [adhocSelectedLineas, setAdhocSelectedLineas] = useState([]);
+  const [adhocSelectedNombres, setAdhocSelectedNombres] = useState([]);
+  const [adhocPlatesText, setAdhocPlatesText] = useState("");
   const pollingCancelledRef = useRef(false);
 
   // ── Table range controls ──
@@ -209,24 +293,9 @@ export default function RendimientosPage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(() => new Set(RENDIMIENTOS_COLUMNS.map((c) => c.key)));
   const [columnSelectorOpen, setColumnSelectorOpen] = useState(false);
-  const columnSelectorRef = useRef(null);
 
-  useEffect(() => {
-    if (!columnSelectorOpen) return;
-    function handleClickOutside(e) {
-      if (columnSelectorRef.current && !columnSelectorRef.current.contains(e.target)) setColumnSelectorOpen(false);
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [columnSelectorOpen]);
-
-  const toggleColumn = useCallback((key) => {
-    setVisibleColumns((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  const handleApplyColumns = useCallback((nextKeys) => {
+    setVisibleColumns(new Set(nextKeys));
   }, []);
 
   const activeColumns = useMemo(
@@ -395,6 +464,18 @@ export default function RendimientosPage() {
       current.filter((customerId) => eligibleClients.some((client) => client.id === customerId))
     );
   }, [eligibleClients]);
+
+  // Load adhoc filter options when toggled on
+  useEffect(() => {
+    if (!includeAdhoc || adhocFilterOptions) return;
+    let cancelled = false;
+    setAdhocLoadingFilters(true);
+    fetchAdhocFilterOptions()
+      .then((data) => { if (!cancelled) setAdhocFilterOptions(data); })
+      .catch((err) => { if (!cancelled) pushToast("error", err instanceof Error ? err.message : "Error cargando filtros ad-hoc"); })
+      .finally(() => { if (!cancelled) setAdhocLoadingFilters(false); });
+    return () => { cancelled = true; };
+  }, [includeAdhoc, adhocFilterOptions, pushToast]);
 
   // Auto-load table when range changes
   useEffect(() => {
@@ -615,6 +696,22 @@ export default function RendimientosPage() {
     return null;
   }, []);
 
+  const handleCancelJob = async () => {
+    pollingCancelledRef.current = true;
+    const jobId = calcProgress.jobId;
+    if (jobId) {
+      try {
+        await cancelPerformanceJob(jobId);
+        pushToast("info", "Cálculo cancelado.");
+      } catch {
+        pushToast("error", "No se pudo cancelar el job en el servidor.");
+      }
+    }
+    setCalculating(false);
+    setCalcProgress({ current: 0, total: 0, currentMonth: "", processedTargets: 0, totalTargets: 0, jobId: null });
+    reloadRecentJobs();
+  };
+
   const handleCalculate = async () => {
     const from = calcMonthFrom <= calcMonthTo ? calcMonthFrom : calcMonthTo;
     const to = calcMonthFrom <= calcMonthTo ? calcMonthTo : calcMonthFrom;
@@ -627,6 +724,15 @@ export default function RendimientosPage() {
     // Pedimos permiso para notificaciones del navegador la primera vez
     await ensureNotificationPermission();
 
+    const adhocPlates = adhocPlatesText
+      .split(/[,\n\s]+/)
+      .map((p) => p.trim().toUpperCase())
+      .filter(Boolean);
+    const adhocFilters = {};
+    if (adhocSelectedMarcas.length) adhocFilters.marca = adhocSelectedMarcas;
+    if (adhocSelectedLineas.length) adhocFilters.linea = adhocSelectedLineas;
+    if (adhocSelectedNombres.length) adhocFilters.nombre_vehiculo = adhocSelectedNombres;
+
     let errors = 0;
     for (let i = 0; i < months.length; i++) {
       if (pollingCancelledRef.current) break;
@@ -637,9 +743,15 @@ export default function RendimientosPage() {
       try {
         createResponse = await calculateMonthlyPerformance({
           month: m,
-          customer_ids: selectedCustomerIds,
+          customer_ids: adhocOnly ? [] : selectedCustomerIds,
           force_recalculate: true,
-          compute_availability: calcAvailability
+          compute_availability: calcAvailability,
+          include_adhoc: includeAdhoc,
+          adhoc_only: adhocOnly,
+          ...(includeAdhoc && {
+            adhoc_plates: adhocPlates,
+            adhoc_filters: adhocFilters,
+          }),
         });
       } catch (err) {
         errors++;
@@ -709,22 +821,27 @@ export default function RendimientosPage() {
       const ctx = { connStats, availabilityByPlate };
 
       const headers = activeColumns.map((col) => col.label);
+      const metricKeys = new Set([
+        "odo_start", "odo_end", "kms_ecm", "kms_gps",
+        "horo_start", "horo_end", "hours_ecm", "hours_gps",
+        "fuel_gallons", "ano_modelo"
+      ]);
       const rows = sortedRows.map((row) =>
         activeColumns.map((col) => {
           if (col.key === "status") return getStatusLabel(row.calculation_status);
           if (col.key === "conn_pct") {
             const cs = connStats[row.plate];
-            return cs ? cs.connection_pct : null;
+            return cs?.connection_pct ?? null;
           }
           if (col.key === "availability_pct") {
             const a = availabilityByPlate[row.plate];
-            if (!a) return "Sin Datos";
-            if (a.calculation_status === "not_in_cloudfleet") return "No Aplica";
-            if (a.calculation_status === "error") return "Error";
-            return a.project_availability_pct;
+            if (!a || a.calculation_status === "not_in_cloudfleet" || a.calculation_status === "error") return null;
+            return a.project_availability_pct ?? null;
           }
-          const val = col.getValue(row, ctx);
-          return val;
+          if (metricKeys.has(col.key)) return row[col.key] ?? null;
+          if (col.key === "kpg") return (row.fuel_gallons > 0 && row.kms_ecm != null) ? +(row.kms_ecm / row.fuel_gallons).toFixed(2) : null;
+          if (col.key === "gph") return (row.hours_ecm > 0 && row.fuel_gallons != null) ? +(row.fuel_gallons / row.hours_ecm).toFixed(2) : null;
+          return col.getValue(row, ctx);
         })
       );
 
@@ -741,6 +858,17 @@ export default function RendimientosPage() {
       const matrix = [headers, ...rows];
       const dataSheet = XLSX.utils.aoa_to_sheet(matrix);
       const filtersDataSheet = XLSX.utils.json_to_sheet(filtersSheet);
+
+      if (dataSheet["!ref"]) {
+        const range = XLSX.utils.decode_range(dataSheet["!ref"]);
+        for (let R = range.s.r + 1; R <= range.e.r; R++) {
+          for (let C = range.s.c; C <= range.e.c; C++) {
+            const addr = XLSX.utils.encode_cell({ r: R, c: C });
+            const cell = dataSheet[addr];
+            if (cell && cell.t === "n") cell.z = "0.00";
+          }
+        }
+      }
 
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, dataSheet, "Rendimientos");
@@ -819,6 +947,14 @@ export default function RendimientosPage() {
                   style={{ width: `${overallPct || monthsPct}%` }}
                 />
               </div>
+              <button
+                type="button"
+                className="button-secondary button-sm"
+                style={{ marginTop: 6, alignSelf: "flex-end" }}
+                onClick={handleCancelJob}
+              >
+                Cancelar
+              </button>
             </div>
           );
         })()}
@@ -884,45 +1020,15 @@ export default function RendimientosPage() {
             >
               Exportar Excel
             </button>
-            <div className="column-selector-wrapper" ref={columnSelectorRef}>
-              <button
-                type="button"
-                className="button-secondary button-sm"
-                onClick={() => setColumnSelectorOpen((prev) => !prev)}
-              >
-                Columnas ({visibleColumns.size}/{RENDIMIENTOS_COLUMNS.length})
-              </button>
-              {columnSelectorOpen && (
-                <div className="column-selector-dropdown">
-                  <div className="column-selector-actions">
-                    <button
-                      type="button"
-                      className="column-selector-link"
-                      onClick={() => setVisibleColumns(new Set(RENDIMIENTOS_COLUMNS.map((c) => c.key)))}
-                    >
-                      Todas
-                    </button>
-                    <button
-                      type="button"
-                      className="column-selector-link"
-                      onClick={() => setVisibleColumns(new Set())}
-                    >
-                      Ninguna
-                    </button>
-                  </div>
-                  {RENDIMIENTOS_COLUMNS.map((col) => (
-                    <label key={col.key} className="column-selector-option">
-                      <input
-                        type="checkbox"
-                        checked={visibleColumns.has(col.key)}
-                        onChange={() => toggleColumn(col.key)}
-                      />
-                      <span>{col.label}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
+            <button
+              type="button"
+              className="button-secondary button-sm"
+              onClick={() => setColumnSelectorOpen(true)}
+              aria-haspopup="dialog"
+              aria-expanded={columnSelectorOpen}
+            >
+              Columnas ({visibleColumns.size}/{RENDIMIENTOS_COLUMNS.length})
+            </button>
           </div>
         </header>
 
@@ -967,12 +1073,12 @@ export default function RendimientosPage() {
 
         <div className="rendimientos-filter-bar">
           <div className="form-field rendimientos-search-field">
-            <label htmlFor="rendimientos-plate-search">Placas</label>
+            <label htmlFor="rendimientos-plate-search">Buscar</label>
             <input
               id="rendimientos-plate-search"
               value={filters.plateSearch}
               onChange={handleChange("plateSearch")}
-              placeholder="Buscar por placa"
+              placeholder="Placa, nombre, marca o línea"
             />
           </div>
 
@@ -1061,6 +1167,18 @@ export default function RendimientosPage() {
                             <td key={col.key} data-label={col.label}>
                               <strong>{row.plate}</strong>
                             </td>
+                          );
+                        }
+                        if (col.key === "client" && row.is_adhoc) {
+                          return (
+                            <td key={col.key} data-label={col.label}>
+                              <span className="adhoc-badge" title="Calculado con credenciales Navitrans Geotab">Navitrans</span>
+                            </td>
+                          );
+                        }
+                        if (col.key === "database" && row.is_adhoc) {
+                          return (
+                            <td key={col.key} data-label={col.label}>Geotab Global</td>
                           );
                         }
                         if (col.key === "conn_pct") {
@@ -1377,6 +1495,116 @@ export default function RendimientosPage() {
                 </span>
               </label>
 
+              <label className="client-picker-option" style={{ margin: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={includeAdhoc}
+                  onChange={(event) => {
+                    setIncludeAdhoc(event.target.checked);
+                    if (!event.target.checked) setAdhocOnly(false);
+                  }}
+                />
+                <span>
+                  Incluir vehículos sin cliente (Navitrans Geotab)
+                  <small>Calcula rendimientos con credenciales globales de Navitrans para vehículos sin asignar.</small>
+                </span>
+              </label>
+
+              {includeAdhoc && (
+                <div className="adhoc-scope-radios" style={{ marginLeft: "1.75rem", marginBottom: "0.5rem" }}>
+                  <label className="client-picker-option" style={{ margin: 0 }}>
+                    <input
+                      type="radio"
+                      name="adhoc-scope"
+                      checked={!adhocOnly}
+                      onChange={() => setAdhocOnly(false)}
+                    />
+                    <span>
+                      Clientes + vehículos ad-hoc
+                      <small>Calcula los clientes seleccionados y además los vehículos ad-hoc.</small>
+                    </span>
+                  </label>
+                  <label className="client-picker-option" style={{ margin: 0 }}>
+                    <input
+                      type="radio"
+                      name="adhoc-scope"
+                      checked={adhocOnly}
+                      onChange={() => setAdhocOnly(true)}
+                    />
+                    <span>
+                      Solo vehículos ad-hoc
+                      <small>Calcula únicamente los vehículos filtrados abajo, sin incluir clientes.</small>
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              {includeAdhoc && (
+                <div className="adhoc-filters-section">
+                  <span className="eyebrow" style={{ marginBottom: "0.5rem", display: "block" }}>Filtros avanzados</span>
+
+                  {adhocLoadingFilters ? (
+                    <p className="support-copy">Cargando filtros...</p>
+                  ) : !adhocFilterOptions ? (
+                    <p className="support-copy">No se pudieron cargar los filtros.</p>
+                  ) : adhocFilterOptions.total === 0 ? (
+                    <p className="support-copy">No hay vehículos sin cliente en el sistema.</p>
+                  ) : (
+                    <>
+                      <p className="support-copy" style={{ marginBottom: "0.5rem" }}>
+                        {adhocFilterOptions.total} vehículos sin cliente disponibles. Selecciona al menos un filtro.
+                      </p>
+                      <div className="adhoc-filters-grid">
+                        {adhocFilterOptions.marcas.length > 0 && (
+                          <FilterDropdown
+                            label="Marca"
+                            options={adhocFilterOptions.marcas}
+                            selected={adhocSelectedMarcas}
+                            onChange={setAdhocSelectedMarcas}
+                          />
+                        )}
+
+                        {adhocFilterOptions.lineas.length > 0 && (
+                          <FilterDropdown
+                            label="Línea"
+                            options={adhocFilterOptions.lineas}
+                            selected={adhocSelectedLineas}
+                            onChange={setAdhocSelectedLineas}
+                          />
+                        )}
+
+                        {adhocFilterOptions.nombres.length > 0 && (
+                          <FilterDropdown
+                            label="Nombre"
+                            options={adhocFilterOptions.nombres}
+                            selected={adhocSelectedNombres}
+                            onChange={setAdhocSelectedNombres}
+                          />
+                        )}
+                      </div>
+
+                      <div className="form-field" style={{ marginTop: "0.75rem" }}>
+                        <label htmlFor="adhoc-plates-input">Placas específicas</label>
+                        <textarea
+                          id="adhoc-plates-input"
+                          className="form-textarea"
+                          rows={3}
+                          placeholder="Pega placas separadas por coma, espacio o salto de línea"
+                          value={adhocPlatesText}
+                          onChange={(event) => setAdhocPlatesText(event.target.value)}
+                        />
+                      </div>
+
+                      {(adhocSelectedMarcas.length === 0 && adhocSelectedLineas.length === 0 && adhocSelectedNombres.length === 0 && !adhocPlatesText.trim()) && (
+                        <p className="notice-banner notice-soft" style={{ marginTop: "0.5rem" }}>
+                          Selecciona al menos un filtro o ingresa placas para el cálculo ad-hoc.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
               <div className="actions-row modal-actions">
                 <button type="submit" disabled={calculating || !calcMonthFrom || !calcMonthTo}>
                   {calculating ? "Calculando..." : "Calcular"}
@@ -1393,6 +1621,16 @@ export default function RendimientosPage() {
           </section>
         </div>
       )}
+
+      <ColumnSelectorDrawer
+        open={columnSelectorOpen}
+        title="Columnas de rendimientos"
+        description="Selecciona las columnas que quieres ver en el reporte y aplica los cambios al final."
+        columns={RENDIMIENTOS_COLUMNS}
+        visibleKeys={visibleColumns}
+        onApply={handleApplyColumns}
+        onClose={() => setColumnSelectorOpen(false)}
+      />
     </section>
   );
 }

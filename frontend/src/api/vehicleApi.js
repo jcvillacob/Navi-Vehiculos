@@ -225,9 +225,21 @@ export async function calculateMonthlyPerformance(payload) {
   return parseJsonOrThrow(response, "Error calculando rendimientos mensuales");
 }
 
+export async function fetchAdhocFilterOptions() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/rendimientos/adhoc-filters"));
+  return parseJsonOrThrow(response, "Error cargando filtros ad-hoc");
+}
+
 export async function fetchPerformanceJob(jobId) {
   const response = await fetchWithAuth(buildUrl(`/api/v1/rendimientos/jobs/${jobId}`));
   return parseJsonOrThrow(response, "Error consultando el job de rendimientos");
+}
+
+export async function cancelPerformanceJob(jobId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/rendimientos/jobs/${jobId}/cancel`), {
+    method: "POST",
+  });
+  return parseJsonOrThrow(response, "Error cancelando el job de rendimientos");
 }
 
 export async function fetchActivePerformanceJobs() {

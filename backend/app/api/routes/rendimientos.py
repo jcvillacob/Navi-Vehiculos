@@ -10,10 +10,11 @@ from app.schemas.vehicle import (
     PerformanceJobListResponse,
 )
 from app.services.availability_store import list_monthly_availability
-from app.services.rendimientos import list_monthly_performance
+from app.services.rendimientos import list_adhoc_filter_options, list_monthly_performance
 from app.services.rendimientos_jobs import (
     JobAlreadyRunning,
     JobNotFound,
+    cancel_job,
     create_job,
     get_job,
     list_active_jobs,
@@ -89,6 +90,16 @@ def calculate_monthly_performance_route(
     return job
 
 
+@router.get("/adhoc-filters")
+def get_adhoc_filter_options(
+    _user: dict = Depends(require_permission("rendimientos.refresh")),
+) -> dict:
+    """
+    Retorna las opciones de filtro disponibles para vehiculos sin cliente asignado.
+    """
+    return list_adhoc_filter_options()
+
+
 @router.get("/jobs", response_model=PerformanceJobListResponse)
 def list_performance_jobs(
     active: bool = Query(default=False, description="Solo jobs queued/running del usuario actual"),
@@ -109,6 +120,17 @@ def get_performance_job(
 ) -> PerformanceCalculationJob:
     try:
         return get_job(job_id)
+    except JobNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=PerformanceCalculationJob)
+def cancel_performance_job(
+    job_id: int,
+    _user: dict = Depends(require_permission("rendimientos.refresh")),
+) -> PerformanceCalculationJob:
+    try:
+        return cancel_job(job_id)
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
