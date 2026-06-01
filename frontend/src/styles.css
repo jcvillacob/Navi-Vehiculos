@@ -5155,3 +5155,150 @@ input[type="checkbox"] {
   background: var(--surface);
   color: var(--text);
 }
+
+/* ── Módulo Disponibilidad (dashboard de flotas) ─────────────────────────── */
+.disp-toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.disp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.disp-field input,
+.disp-field select {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+  min-width: 150px;
+}
+
+.disp-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.disp-charts-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) 1.3fr 1.2fr;
+  gap: 16px;
+  margin-top: 16px;
+  align-items: start;
+}
+
+.disp-chart-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+}
+
+.disp-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.disp-hint,
+.disp-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.disp-empty {
+  padding: 32px 0;
+  text-align: center;
+}
+
+.disp-gauge-wrap {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.disp-gauge-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.disp-gauge-value {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 34px;
+  line-height: 1;
+}
+
+.disp-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.disp-breakdown-chip {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+}
+
+.disp-breakdown-chip strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.disp-ranking-card {
+  margin-top: 16px;
+  padding: 18px 20px;
+}
+
+.disp-ranking-title {
+  margin: 2px 0 0;
+  font-size: 16px;
+}
+
+.disp-ranking-actions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 1100px) {
+  .disp-charts-grid {
+    grid-template-columns: 1fr;
+  }
+  .disp-kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .disp-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}

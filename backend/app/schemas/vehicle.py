@@ -488,6 +488,64 @@ class MonthlyVehicleAvailabilityResponse(BaseModel):
     rows: list[MonthlyVehicleAvailabilityRow] = Field(default_factory=list)
 
 
+# ── Dashboard de Disponibilidad (agregaciones por flota/cliente) ──────────────
+
+
+class AvailabilityFleet(BaseModel):
+    customer_id: int | None = Field(default=None, description="Id del cliente (None = sin cliente)")
+    customer_name: str = Field(..., description="Nombre del cliente/flota")
+    vehicle_count: int = Field(default=0, description="Placas con dato en el mes")
+    h_total: float = Field(default=0.0, description="Horas teoricas sumadas")
+    h_no_disp: float = Field(default=0.0, description="Horas no disponibles sumadas")
+    availability_pct: float | None = Field(default=None, description="Disponibilidad agregada de la flota")
+    status: str = Field(default="no_data", description="good | warning | critical | no_data")
+    status_breakdown: dict[str, int] = Field(default_factory=dict, description="Conteo por calculation_status")
+
+
+class AvailabilityOverall(BaseModel):
+    vehicle_count: int = Field(default=0)
+    h_total: float = Field(default=0.0)
+    h_no_disp: float = Field(default=0.0)
+    availability_pct: float | None = Field(default=None)
+    status: str = Field(default="no_data")
+    status_breakdown: dict[str, int] = Field(default_factory=dict)
+    critical_fleets: int = Field(default=0, description="Flotas en estado critico")
+    fleet_count: int = Field(default=0, description="Total de flotas con datos")
+
+
+class AvailabilityOverviewResponse(BaseModel):
+    month: str = Field(..., description="Mes consultado YYYY-MM")
+    generated_at: str = Field(..., description="Timestamp de generacion")
+    overall: AvailabilityOverall = Field(default_factory=AvailabilityOverall)
+    fleets: list[AvailabilityFleet] = Field(default_factory=list)
+
+
+class AvailabilityRankingItem(BaseModel):
+    plate: str
+    customer_id: int | None = Field(default=None)
+    customer_name: str = Field(...)
+    availability_pct: float = Field(...)
+    h_no_disp: float = Field(default=0.0)
+    h_total: float = Field(default=0.0)
+    orders_considered: int = Field(default=0)
+    status: str = Field(default="no_data")
+
+
+class AvailabilityRankingResponse(BaseModel):
+    month: str = Field(...)
+    customer_id: int | None = Field(default=None)
+    order: str = Field(default="worst")
+    items: list[AvailabilityRankingItem] = Field(default_factory=list)
+
+
+class AvailabilityTrendResponse(BaseModel):
+    month_from: str = Field(...)
+    month_to: str = Field(...)
+    customer_id: int | None = Field(default=None)
+    labels: list[str] = Field(default_factory=list)
+    availability_pct: list[float | None] = Field(default_factory=list)
+
+
 class MonthlyPerformanceResponse(BaseModel):
     month: str = Field(..., description="Mes consultado o calculado en formato YYYY-MM")
     month_from: str | None = Field(default=None, description="Inicio del rango cuando es consulta por rango")

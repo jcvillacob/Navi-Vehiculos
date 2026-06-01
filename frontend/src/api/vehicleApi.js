@@ -262,6 +262,29 @@ export async function fetchMonthlyAvailability({ month_from, month_to }) {
   return Array.isArray(data?.rows) ? data.rows : [];
 }
 
+// ── Disponibilidad (dashboard) ────────────────────────────────────────────────
+
+export async function fetchAvailabilityOverview({ month }) {
+  const query = new URLSearchParams({ month });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/disponibilidad/overview?${query.toString()}`));
+  return parseJsonOrThrow(response, "Error cargando el resumen de disponibilidad");
+}
+
+export async function fetchAvailabilityRanking({ month, customer_id = null, limit = 20, order = "worst" }) {
+  const query = new URLSearchParams({ month, limit: String(limit), order });
+  if (customer_id) query.set("customer_id", String(customer_id));
+  const response = await fetchWithAuth(buildUrl(`/api/v1/disponibilidad/ranking?${query.toString()}`));
+  const data = await parseJsonOrThrow(response, "Error cargando el ranking de vehiculos");
+  return Array.isArray(data?.items) ? data.items : [];
+}
+
+export async function fetchAvailabilityTrend({ month_to, months = 6, customer_id = null }) {
+  const query = new URLSearchParams({ month_to, months: String(months) });
+  if (customer_id) query.set("customer_id", String(customer_id));
+  const response = await fetchWithAuth(buildUrl(`/api/v1/disponibilidad/trend?${query.toString()}`));
+  return parseJsonOrThrow(response, "Error cargando la tendencia de disponibilidad");
+}
+
 // ── Vehicle ───────────────────────────────────────────────────────────────────
 
 export async function lookupVehicle(identifier, { force = false } = {}) {

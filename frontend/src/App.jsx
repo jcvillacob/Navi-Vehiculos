@@ -14,6 +14,7 @@ import UsersPage from "./pages/UsersPage";
 import RolesPage from "./pages/RolesPage";
 import HomePage from "./pages/HomePage";
 import RendimientosPage from "./pages/RendimientosPage";
+import DisponibilidadPage from "./pages/DisponibilidadPage";
 import CustomersPage from "./pages/CustomersPage";
 import EngineLookupPage from "./pages/EngineLookupPage";
 import MotorsPage from "./pages/MotorsPage";
@@ -232,6 +233,10 @@ function AppShell() {
                 <span>Rendimientos</span>
                 <small>Kms, horas y consumo</small>
               </NavLink>
+              <NavLink to="/disponibilidad">
+                <span>Disponibilidad</span>
+                <small>Panel de flotas</small>
+              </NavLink>
               <NavLink to="/vehiculos">
                 <span>Vehiculos</span>
                 <small>Placas asociadas</small>
@@ -308,6 +313,7 @@ function AppShell() {
               <Route path="/clientes" element={<CustomersPage />} />
               <Route path="/vehiculos" element={<VehiclesPage />} />
               <Route path="/rendimientos" element={<RendimientosPage />} />
+              <Route path="/disponibilidad" element={<DisponibilidadPage />} />
               <Route
                 path="/usuarios"
                 element={
