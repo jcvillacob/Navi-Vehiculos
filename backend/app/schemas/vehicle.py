@@ -146,6 +146,13 @@ class VehicleAssignmentRecord(BaseModel):
     geotab_customer_database_id: int | None = Field(
         default=None, description="ID de la database Geotab del cliente usada para validar"
     )
+    geotab_device_id: str | None = Field(
+        default=None,
+        description="Codigo interno del device en la db Geotab del cliente (geotab_customer_database_id)",
+    )
+    geotab_device_synced_at: datetime | None = Field(
+        default=None, description="Ultima vez que se sincronizo el geotab_device_id"
+    )
     engine_number: str | None = Field(default=None, description="Numero de motor")
     technical_number: str = Field(..., description="Numero tecnico de motor")
     cpl: str | None = Field(default=None, description="CPL del motor consultado")
@@ -255,8 +262,40 @@ class CustomerDatabaseUpdateRequest(BaseModel):
     )
 
 
+class CustomerDatabaseCredentialCreateRequest(BaseModel):
+    username: str = Field(..., min_length=1, description="Usuario de la credencial")
+    password: str = Field(..., min_length=1, description="Contrasena de la credencial")
+    label: str | None = Field(default=None, description="Etiqueta descriptiva (ej. 'cuenta reportes')")
+    is_active: bool = Field(default=True, description="Si la credencial participa en la rotacion")
+
+
+class CustomerDatabaseCredentialUpdateRequest(BaseModel):
+    username: str | None = Field(default=None, min_length=1, description="Nuevo usuario (None = no cambiar)")
+    password: str | None = Field(default=None, min_length=1, description="Nueva contrasena (None = no cambiar)")
+    label: str | None = Field(default=None, description="Nueva etiqueta (None = no cambiar)")
+    is_active: bool | None = Field(default=None, description="Activar/desactivar (None = no cambiar)")
+
+
+class CustomerDatabaseCredentialRecord(BaseModel):
+    id: int = Field(..., description="ID de la credencial")
+    customer_database_id: int = Field(..., description="ID de la database asociada")
+    username: str = Field(..., description="Usuario de la credencial")
+    label: str | None = Field(default=None, description="Etiqueta descriptiva")
+    is_active: bool = Field(default=True, description="Si participa en la rotacion")
+    last_used_at: datetime | None = Field(default=None, description="Ultimo uso en la rotacion")
+    last_auth_error_at: datetime | None = Field(
+        default=None, description="Ultimo fallo de autenticacion registrado"
+    )
+    created_at: datetime = Field(..., description="Fecha de creacion")
+    updated_at: datetime = Field(..., description="Fecha de actualizacion")
+
+
 class GeotabRuleCreateRequest(BaseModel):
     rule_id: str = Field(..., min_length=1, description="ID alfanumerico de la regla en Geotab")
+    category: str = Field(
+        default="operacion",
+        description="Categoria de la regla: 'operacion' (motor) o 'habito_seguro'",
+    )
 
 
 class GeotabRuleRecord(BaseModel):
@@ -264,6 +303,10 @@ class GeotabRuleRecord(BaseModel):
     database_id: int = Field(..., description="ID de la database Geotab asociada")
     name: str = Field(..., description="Nombre descriptivo de la regla")
     rule_id: str = Field(..., description="ID alfanumerico de la regla en Geotab")
+    category: str = Field(
+        default="operacion",
+        description="Categoria de la regla: 'operacion' (motor) o 'habito_seguro'",
+    )
     created_at: datetime = Field(..., description="Fecha de creacion")
 
 

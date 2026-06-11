@@ -5,7 +5,7 @@ Este módulo tiene un único objetivo:
 
 1. Recibir una placa.
 2. Buscar el VIN en Geotab.
-3. Buscar el número de motor (ESN) en `dbo.T_DIM_VEHICULO`.
+3. Buscar el número de motor (ESN) en `dbo.T_DIM_VEHICULO_CONFIABILIDAD`.
 4. Consultar QuickServe con ese ESN.
 5. Devolver `Technical Engine Configuration #`.
 
@@ -137,7 +137,7 @@ def run(plate: str):
             conn.close()
 
     if not row:
-        print("No se encontro el VIN en dbo.T_DIM_VEHICULO.")
+        print("No se encontro el VIN en dbo.T_DIM_VEHICULO_CONFIABILIDAD.")
         return 0
 
     esn = row.get("numero_motor")
@@ -312,7 +312,7 @@ def find_engine_number_by_vin(conn, vin: str):
     SELECT TOP 1
         VIN,
         [Número de motor] AS numero_motor
-    FROM dbo.T_DIM_VEHICULO
+    FROM dbo.T_DIM_VEHICULO_CONFIABILIDAD
     WHERE VIN = %s
     """
     with conn.cursor(as_dict=True) as cursor:

@@ -4,6 +4,9 @@ from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
     CustomerCreateRequest,
     CustomerDatabaseCreateRequest,
+    CustomerDatabaseCredentialCreateRequest,
+    CustomerDatabaseCredentialRecord,
+    CustomerDatabaseCredentialUpdateRequest,
     CustomerDatabaseRecord,
     CustomerDatabaseUpdateRequest,
     CustomerRecord,
@@ -17,15 +20,19 @@ from app.schemas.vehicle import (
 from app.services.motor_catalog import (
     create_customer,
     create_customer_database,
+    create_database_credential,
     create_geotab_rule_group,
     create_geotab_rule,
+    delete_database_credential,
     delete_geotab_rule_group,
     delete_geotab_rule,
     inspect_geotab_rule_record,
     list_customers,
+    list_database_credentials,
     resolve_geotab_rule,
     update_customer,
     update_customer_database,
+    update_database_credential,
 )
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -81,6 +88,68 @@ def update_database_record(
 ) -> CustomerDatabaseRecord:
     try:
         return update_customer_database(database_id, payload)
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.get(
+    "/databases/{database_id}/credentials",
+    response_model=list[CustomerDatabaseCredentialRecord],
+)
+def list_credentials(
+    database_id: int = Path(..., gt=0, description="ID de la database"),
+    _user: dict = Depends(require_permission("customers.list")),
+) -> list[CustomerDatabaseCredentialRecord]:
+    try:
+        return list_database_credentials(database_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/databases/{database_id}/credentials",
+    response_model=CustomerDatabaseCredentialRecord,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_credential_record(
+    payload: CustomerDatabaseCredentialCreateRequest,
+    database_id: int = Path(..., gt=0, description="ID de la database"),
+    _user: dict = Depends(require_permission("customers.edit")),
+) -> CustomerDatabaseCredentialRecord:
+    try:
+        return create_database_credential(database_id, payload)
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.put(
+    "/databases/credentials/{credential_id}",
+    response_model=CustomerDatabaseCredentialRecord,
+)
+def update_credential_record(
+    payload: CustomerDatabaseCredentialUpdateRequest,
+    credential_id: int = Path(..., gt=0, description="ID de la credencial"),
+    _user: dict = Depends(require_permission("customers.edit")),
+) -> CustomerDatabaseCredentialRecord:
+    try:
+        return update_database_credential(credential_id, payload)
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/databases/credentials/{credential_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_credential_record(
+    credential_id: int = Path(..., gt=0, description="ID de la credencial"),
+    _user: dict = Depends(require_permission("customers.edit")),
+) -> None:
+    try:
+        delete_database_credential(credential_id)
     except ValueError as exc:
         status_code = 404 if "no existe" in str(exc).lower() else 409
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc

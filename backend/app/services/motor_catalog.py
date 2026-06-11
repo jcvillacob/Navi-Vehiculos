@@ -17,6 +17,9 @@ from app.schemas.vehicle import (
     AssignedDatabaseSummary,
     CustomerCreateRequest,
     CustomerDatabaseCreateRequest,
+    CustomerDatabaseCredentialCreateRequest,
+    CustomerDatabaseCredentialRecord,
+    CustomerDatabaseCredentialUpdateRequest,
     CustomerDatabaseRecord,
     CustomerDatabaseUpdateRequest,
     CustomerRecord,
@@ -82,6 +85,16 @@ def _normalize_match_mode(value: str | None) -> str:
 
 def _normalize_connection_type(value: str | None) -> str:
     return normalize_provider_key(value)
+
+
+RULE_CATEGORIES = ("operacion", "habito_seguro")
+
+
+def _normalize_rule_category(value: str | None) -> str:
+    normalized = (value or "operacion").strip().lower()
+    if normalized not in RULE_CATEGORIES:
+        raise ValueError("La categoria de la regla debe ser 'operacion' o 'habito_seguro'.")
+    return normalized
 
 
 def _normalize_motor_payload(payload: MotorCatalogUpsertRequest) -> dict[str, Any]:
@@ -483,6 +496,18 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
         )
         cur.execute(
             """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS geotab_device_id TEXT NULL;
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS geotab_device_synced_at TIMESTAMPTZ NULL;
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS motor_attachments (
                 id BIGSERIAL PRIMARY KEY,
                 motor_id BIGINT NOT NULL REFERENCES motor_catalog(id) ON DELETE CASCADE,
@@ -528,9 +553,59 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 database_id BIGINT NOT NULL REFERENCES customer_databases(id) ON DELETE CASCADE,
                 name TEXT NOT NULL,
                 rule_id TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'operacion',
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 UNIQUE (database_id, rule_id)
             );
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE geotab_rules
+            ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'operacion';
+            """
+        )
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_geotab_rules_category'
+                ) THEN
+                    ALTER TABLE geotab_rules
+                    ADD CONSTRAINT ck_geotab_rules_category
+                    CHECK (category IN ('operacion', 'habito_seguro'));
+                END IF;
+            END $$;
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS customer_database_credentials (
+                id BIGSERIAL PRIMARY KEY,
+                customer_database_id BIGINT NOT NULL
+                    REFERENCES customer_databases(id) ON DELETE CASCADE,
+                username TEXT NOT NULL,
+                password TEXT NOT NULL,
+                label TEXT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                last_used_at TIMESTAMPTZ NULL,
+                last_auth_error_at TIMESTAMPTZ NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (customer_database_id, username)
+            );
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO customer_database_credentials (customer_database_id, username, password)
+            SELECT id, username, password
+            FROM customer_databases
+            WHERE username IS NOT NULL AND username <> ''
+              AND password IS NOT NULL AND password <> ''
+            ON CONFLICT (customer_database_id, username) DO NOTHING;
             """
         )
         cur.execute(
@@ -1227,6 +1302,8 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     a.geotab_status,
                     a.geotab_customer_status,
                     a.geotab_customer_database_id,
+                    a.geotab_device_id,
+                    a.geotab_device_synced_at,
                     a.engine_number,
                     a.technical_number,
                     a.cpl,
@@ -1251,8 +1328,8 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                         INNER JOIN customer_databases sibling_db
                             ON sibling_db.id = grg.database_id
                         WHERE cd.connection_type = 'geotab'
-                          AND sibling_db.database_name = cd.database_name
-                          AND sibling_db.username = cd.username
+                          AND sibling_db.connection_type = 'geotab'
+                          AND LOWER(sibling_db.database_name) = LOWER(cd.database_name)
                     ) AS has_motor_rules,
                     a.created_at,
                     a.updated_at,
@@ -1609,7 +1686,7 @@ def list_customers() -> list[CustomerRecord]:
 
             cur.execute(
                 """
-                SELECT id, database_id, name, rule_id, created_at
+                SELECT id, database_id, name, rule_id, category, created_at
                 FROM geotab_rules
                 ORDER BY database_id ASC, name ASC;
                 """
@@ -1658,7 +1735,9 @@ def list_customers() -> list[CustomerRecord]:
 
     groups_by_database = _build_rule_group_records(group_rows, group_rule_rows)
 
-    credential_to_db_ids: dict[tuple[str, str], list[int]] = {}
+    # Filas que apuntan a la misma db fisica de Geotab (mismo database_name)
+    # comparten reglas y grupos, sin importar el cliente o la credencial.
+    database_name_to_db_ids: dict[str, list[int]] = {}
     geotab_db_ids: set[int] = set()
     for row in database_rows:
         effective_provider = infer_provider_key(
@@ -1668,12 +1747,12 @@ def list_customers() -> list[CustomerRecord]:
             provider_config=row.get("provider_config"),
         )
         if effective_provider == "geotab":
-            key = (str(row["database_name"]).lower(), str(row["username"]).lower())
-            credential_to_db_ids.setdefault(key, []).append(int(row["id"]))
+            key = str(row["database_name"]).lower()
+            database_name_to_db_ids.setdefault(key, []).append(int(row["id"]))
             geotab_db_ids.add(int(row["id"]))
 
     db_id_to_siblings: dict[int, list[int]] = {}
-    for sibling_ids in credential_to_db_ids.values():
+    for sibling_ids in database_name_to_db_ids.values():
         for db_id in sibling_ids:
             db_id_to_siblings[db_id] = sibling_ids
 
@@ -1818,6 +1897,10 @@ def create_customer_database(
                     ),
                 )
                 row = cur.fetchone()
+            if row is not None:
+                _sync_primary_credential(
+                    conn, int(row["id"]), normalized_username, normalized_password
+                )
             conn.commit()
         except UniqueViolation:
             conn.rollback()
@@ -1955,6 +2038,8 @@ def update_customer_database(
                         ),
                     )
                 row = cur.fetchone()
+            if row is not None:
+                _sync_primary_credential(conn, database_id, normalized_username, effective_password)
             conn.commit()
         except UniqueViolation:
             conn.rollback()
@@ -1974,7 +2059,349 @@ def update_customer_database(
     return CustomerDatabaseRecord(**result_payload, rules=rules, rule_groups=rule_groups)
 
 
+# ── Pool de credenciales por database ──────────────────────────────
+
+
+_CREDENTIAL_COLUMNS = """
+    id,
+    customer_database_id,
+    username,
+    label,
+    is_active,
+    last_used_at,
+    last_auth_error_at,
+    created_at,
+    updated_at
+"""
+
+
+def _sync_primary_credential(
+    conn: psycopg.Connection, database_id: int, username: str, password: str
+) -> None:
+    """Mantiene la credencial legacy de customer_databases dentro del pool."""
+    normalized_username = (username or "").strip()
+    normalized_password = (password or "").strip()
+    if not normalized_username or not normalized_password:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO customer_database_credentials (customer_database_id, username, password)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (customer_database_id, username)
+            DO UPDATE SET
+                password = EXCLUDED.password,
+                is_active = TRUE,
+                updated_at = NOW();
+            """,
+            (database_id, normalized_username, normalized_password),
+        )
+
+
+def list_database_credentials(database_id: int) -> list[CustomerDatabaseCredentialRecord]:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM customer_databases WHERE id = %s;", (database_id,))
+            if cur.fetchone() is None:
+                raise ValueError("La database no existe.")
+            cur.execute(
+                f"""
+                SELECT {_CREDENTIAL_COLUMNS}
+                FROM customer_database_credentials
+                WHERE customer_database_id = %s
+                ORDER BY is_active DESC, username ASC;
+                """,
+                (database_id,),
+            )
+            rows = cur.fetchall()
+    return [CustomerDatabaseCredentialRecord(**row) for row in rows]
+
+
+def create_database_credential(
+    database_id: int, payload: CustomerDatabaseCredentialCreateRequest
+) -> CustomerDatabaseCredentialRecord:
+    normalized_username = payload.username.strip()
+    normalized_password = payload.password.strip()
+    if not normalized_username or not normalized_password:
+        raise ValueError("Usuario y contrasena son obligatorios.")
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM customer_databases WHERE id = %s;", (database_id,))
+            if cur.fetchone() is None:
+                raise ValueError("La database no existe.")
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO customer_database_credentials (
+                        customer_database_id, username, password, label, is_active
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING {_CREDENTIAL_COLUMNS};
+                    """,
+                    (
+                        database_id,
+                        normalized_username,
+                        normalized_password,
+                        _normalize_optional_text(payload.label),
+                        bool(payload.is_active),
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        except UniqueViolation:
+            conn.rollback()
+            raise ValueError("Ya existe una credencial con ese usuario para esta database.") from None
+
+    if row is None:
+        raise RuntimeError("No se pudo crear la credencial.")
+    return CustomerDatabaseCredentialRecord(**row)
+
+
+def update_database_credential(
+    credential_id: int, payload: CustomerDatabaseCredentialUpdateRequest
+) -> CustomerDatabaseCredentialRecord:
+    set_clauses: list[str] = []
+    params: list[Any] = []
+
+    if payload.username is not None:
+        normalized_username = payload.username.strip()
+        if not normalized_username:
+            raise ValueError("El usuario no puede quedar vacio.")
+        set_clauses.append("username = %s")
+        params.append(normalized_username)
+    if payload.password is not None:
+        normalized_password = payload.password.strip()
+        if not normalized_password:
+            raise ValueError("La contrasena no puede quedar vacia.")
+        set_clauses.append("password = %s")
+        params.append(normalized_password)
+    if payload.label is not None:
+        set_clauses.append("label = %s")
+        params.append(_normalize_optional_text(payload.label))
+    if payload.is_active is not None:
+        set_clauses.append("is_active = %s")
+        params.append(bool(payload.is_active))
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        if not set_clauses:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {_CREDENTIAL_COLUMNS} FROM customer_database_credentials WHERE id = %s;",
+                    (credential_id,),
+                )
+                row = cur.fetchone()
+            if row is None:
+                raise ValueError("La credencial no existe.")
+            return CustomerDatabaseCredentialRecord(**row)
+
+        if payload.is_active is False:
+            _ensure_not_last_active_credential(conn, credential_id)
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE customer_database_credentials
+                    SET {", ".join(set_clauses)}, updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING {_CREDENTIAL_COLUMNS};
+                    """,
+                    (*params, credential_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        except UniqueViolation:
+            conn.rollback()
+            raise ValueError("Ya existe una credencial con ese usuario para esta database.") from None
+
+    if row is None:
+        raise ValueError("La credencial no existe.")
+    return CustomerDatabaseCredentialRecord(**row)
+
+
+def _ensure_not_last_active_credential(conn: psycopg.Connection, credential_id: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT customer_database_id, is_active
+            FROM customer_database_credentials
+            WHERE id = %s;
+            """,
+            (credential_id,),
+        )
+        credential_row = cur.fetchone()
+        if credential_row is None:
+            raise ValueError("La credencial no existe.")
+        if not credential_row["is_active"]:
+            return
+        # El pool abarca la db fisica completa: si otra fila hermana todavia
+        # tiene credenciales activas, esta se puede eliminar sin dejar la
+        # database sin acceso.
+        sibling_ids = _sibling_database_ids(conn, int(credential_row["customer_database_id"]))
+        cur.execute(
+            """
+            SELECT COUNT(*) AS active_count
+            FROM customer_database_credentials
+            WHERE customer_database_id = ANY(%s)
+              AND is_active
+              AND id <> %s;
+            """,
+            (sibling_ids, credential_id),
+        )
+        remaining = cur.fetchone()
+    if int(remaining["active_count"]) == 0:
+        raise ValueError(
+            "No se puede eliminar o desactivar la ultima credencial activa de la database."
+        )
+
+
+def delete_database_credential(credential_id: int) -> None:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        _ensure_not_last_active_credential(conn, credential_id)
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM customer_database_credentials WHERE id = %s RETURNING id;",
+                (credential_id,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    if row is None:
+        raise ValueError("La credencial no existe.")
+
+
+def report_credential_auth_failure(credential_id: int) -> None:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE customer_database_credentials
+                SET last_auth_error_at = NOW(), updated_at = NOW()
+                WHERE id = %s;
+                """,
+                (credential_id,),
+            )
+        conn.commit()
+
+
+def get_geotab_config_for_database(
+    database_id: int, *, exclude_credential_ids: tuple[int, ...] = ()
+) -> tuple[GeotabConfig, int | None]:
+    """Selecciona la credencial activa menos usada (LRU) de la db fisica.
+
+    El pool abarca todas las filas hermanas (mismo database_name): las
+    credenciales de cualquier cliente con esa database sirven y rotarlas
+    entre todas reparte mejor la carga sobre Geotab.
+
+    Retorna (config, credential_id). credential_id es None cuando se uso la
+    credencial legacy de customer_databases (pool vacio o agotado).
+    """
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, database_name, username, password, connection_type
+                FROM customer_databases
+                WHERE id = %s;
+                """,
+                (database_id,),
+            )
+            db_row = cur.fetchone()
+            if db_row is None:
+                raise ValueError("La database no existe.")
+            if db_row["connection_type"] != "geotab":
+                raise ValueError("La database no es de tipo Geotab.")
+
+        sibling_ids = _sibling_database_ids(conn, database_id)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE customer_database_credentials
+                SET last_used_at = NOW(), updated_at = NOW()
+                WHERE id = (
+                    SELECT id
+                    FROM customer_database_credentials
+                    WHERE customer_database_id = ANY(%s)
+                      AND is_active
+                      AND NOT (id = ANY(%s))
+                    ORDER BY last_used_at ASC NULLS FIRST, id ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                )
+                RETURNING id, username, password;
+                """,
+                (sibling_ids, list(exclude_credential_ids)),
+            )
+            credential_row = cur.fetchone()
+        conn.commit()
+
+    database_name = str(db_row["database_name"]).strip()
+    if credential_row is not None:
+        return (
+            GeotabConfig(
+                username=str(credential_row["username"]).strip(),
+                password=str(credential_row["password"]).strip(),
+                database=database_name,
+            ),
+            int(credential_row["id"]),
+        )
+
+    legacy_password = str(db_row.get("password") or "").strip()
+    legacy_username = str(db_row.get("username") or "").strip()
+    if not legacy_username or not legacy_password:
+        raise ValueError("La database Geotab no tiene credenciales configuradas.")
+    return (
+        GeotabConfig(username=legacy_username, password=legacy_password, database=database_name),
+        None,
+    )
+
+
+def call_with_geotab_credentials(database_id: int, fn, *, max_attempts: int = 3):
+    """Ejecuta fn(cfg) rotando credenciales del pool ante errores de autenticacion.
+
+    Los errores que no son de autenticacion se propagan de inmediato.
+    """
+    from app.clients.geotab_client import _invalidate_session, _is_auth_error
+
+    excluded: list[int] = []
+    last_exc: Exception | None = None
+    for _ in range(max_attempts):
+        cfg, credential_id = get_geotab_config_for_database(
+            database_id, exclude_credential_ids=tuple(excluded)
+        )
+        try:
+            return fn(cfg)
+        except Exception as exc:
+            if not _is_auth_error(exc):
+                raise
+            last_exc = exc
+            _invalidate_session(cfg.username, cfg.database)
+            if credential_id is None:
+                raise
+            _logger.warning(
+                "Credencial %s fallo autenticacion en db %s; rotando a la siguiente.",
+                credential_id,
+                cfg.database,
+            )
+            report_credential_auth_failure(credential_id)
+            excluded.append(credential_id)
+    raise last_exc  # type: ignore[misc]
+
+
 def _sibling_database_ids(conn: psycopg.Connection, database_id: int) -> list[int]:
+    """IDs de todas las filas que apuntan a la misma db fisica de Geotab.
+
+    El nombre de database es unico globalmente en MyGeotab, asi que dos filas
+    con el mismo database_name (sin importar cliente ni credencial) son la
+    misma db: comparten reglas, grupos y pool de credenciales.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -1982,8 +2409,7 @@ def _sibling_database_ids(conn: psycopg.Connection, database_id: int) -> list[in
             FROM customer_databases s
             INNER JOIN customer_databases origin
                 ON origin.id = %s
-            WHERE s.database_name = origin.database_name
-              AND s.username = origin.username
+            WHERE LOWER(s.database_name) = LOWER(origin.database_name)
               AND s.connection_type = 'geotab'
               AND origin.connection_type = 'geotab';
             """,
@@ -1999,7 +2425,7 @@ def _list_rules_for_database(database_id: int) -> list[GeotabRuleRecord]:
         sibling_ids = _sibling_database_ids(conn, database_id)
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, database_id, name, rule_id, created_at FROM geotab_rules WHERE database_id = ANY(%s) ORDER BY name ASC;",
+                "SELECT id, database_id, name, rule_id, category, created_at FROM geotab_rules WHERE database_id = ANY(%s) ORDER BY name ASC;",
                 (sibling_ids,),
             )
             seen: set[str] = set()
@@ -2116,33 +2542,9 @@ def _get_rule_group_record(group_id: int) -> GeotabRuleGroupRecord:
 
 
 def _get_geotab_database_config(database_id: int) -> GeotabConfig:
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_motor_tables(conn)
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, database_name, username, password, connection_type
-                FROM customer_databases
-                WHERE id = %s;
-                """,
-                (database_id,),
-            )
-            row = cur.fetchone()
-
-    if row is None:
-        raise ValueError("La database no existe.")
-    if row["connection_type"] != "geotab":
-        raise ValueError("Solo se pueden administrar reglas en databases de tipo Geotab.")
-
-    password = str(row.get("password") or "").strip()
-    if not password:
-        raise ValueError("La database Geotab no tiene contrasena configurada.")
-
-    return GeotabConfig(
-        username=str(row["username"]).strip(),
-        password=password,
-        database=str(row["database_name"]).strip(),
-    )
+    """Config Geotab de la database usando el pool de credenciales (LRU)."""
+    cfg, _credential_id = get_geotab_config_for_database(database_id)
+    return cfg
 
 
 def resolve_geotab_rule(database_id: int, rule_id: str) -> GeotabRuleInspection:
@@ -2150,15 +2552,18 @@ def resolve_geotab_rule(database_id: int, rule_id: str) -> GeotabRuleInspection:
     if not normalized_rule_id:
         raise ValueError("El ID de la regla es obligatorio.")
 
-    cfg = _get_geotab_database_config(database_id)
     try:
-        inspection = build_rule_inspection(cfg, normalized_rule_id)
+        inspection = call_with_geotab_credentials(
+            database_id,
+            lambda cfg: build_rule_inspection(cfg, normalized_rule_id),
+        )
+    except ValueError:
+        raise
     except Exception as exc:
         _logger.warning(
-            "No se pudo resolver la regla %s en Geotab (db=%s, user=%s)",
+            "No se pudo resolver la regla %s en Geotab (db=%s)",
             normalized_rule_id,
-            cfg.database,
-            cfg.username,
+            database_id,
             exc_info=True,
         )
         raise RuntimeError("No fue posible consultar la regla en Geotab.") from exc
@@ -2170,21 +2575,41 @@ def create_geotab_rule(
     database_id: int, payload: GeotabRuleCreateRequest
 ) -> GeotabRuleRecord:
     normalized_rule_id = payload.rule_id.strip()
+    normalized_category = _normalize_rule_category(payload.category)
     inspection = resolve_geotab_rule(database_id, normalized_rule_id)
     if not inspection.exists or not inspection.name:
         raise ValueError("La regla no existe en Geotab.")
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
+        # La regla pertenece a la db fisica: si ya esta registrada bajo otra
+        # fila de la misma database (otro cliente), no se vuelve a registrar.
+        sibling_ids = _sibling_database_ids(conn, database_id)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM geotab_rules
+                WHERE database_id = ANY(%s)
+                  AND rule_id = %s
+                LIMIT 1;
+                """,
+                (sibling_ids, normalized_rule_id),
+            )
+            if cur.fetchone() is not None:
+                raise ValueError(
+                    "Ya existe una regla con ese ID para esta database "
+                    "(las reglas se comparten entre clientes con la misma database Geotab)."
+                )
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO geotab_rules (database_id, name, rule_id)
-                    VALUES (%s, %s, %s)
-                    RETURNING id, database_id, name, rule_id, created_at;
+                    INSERT INTO geotab_rules (database_id, name, rule_id, category)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id, database_id, name, rule_id, category, created_at;
                     """,
-                    (database_id, inspection.name, normalized_rule_id),
+                    (database_id, inspection.name, normalized_rule_id, normalized_category),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -2249,7 +2674,7 @@ def create_geotab_rule_group(
             sibling_ids_for_rules = _sibling_database_ids(conn, database_id)
             cur.execute(
                 """
-                SELECT id, name, rule_id
+                SELECT id, name, rule_id, category
                 FROM geotab_rules
                 WHERE database_id = ANY(%s)
                   AND id = ANY(%s)
@@ -2260,6 +2685,15 @@ def create_geotab_rule_group(
             rule_rows = cur.fetchall()
             if len(rule_rows) != len(unique_rule_record_ids):
                 raise ValueError("Todas las reglas del grupo deben pertenecer a esa database.")
+
+            non_operation_rules = [
+                str(row["name"]) for row in rule_rows if row.get("category") != "operacion"
+            ]
+            if non_operation_rules:
+                raise ValueError(
+                    "Los grupos de motor solo aceptan reglas de operacion. "
+                    f"Reglas de habito seguro: {', '.join(non_operation_rules)}."
+                )
 
             cur.execute(
                 """
@@ -2356,9 +2790,8 @@ def inspect_geotab_rule_record(rule_record_id: int) -> GeotabRuleInspection:
                     gr.id,
                     gr.name,
                     gr.rule_id,
+                    gr.database_id,
                     cd.database_name,
-                    cd.username,
-                    cd.password,
                     cd.connection_type
                 FROM geotab_rules gr
                 INNER JOIN customer_databases cd
@@ -2374,26 +2807,23 @@ def inspect_geotab_rule_record(rule_record_id: int) -> GeotabRuleInspection:
     if row["connection_type"] != "geotab":
         raise ValueError("La regla no pertenece a una database Geotab.")
 
-    cfg = GeotabConfig(
-        username=str(row["username"]).strip(),
-        password=str(row["password"]).strip(),
-        database=str(row["database_name"]).strip(),
-    )
     try:
-        inspection = build_rule_inspection(
-            cfg,
-            str(row["rule_id"]).strip(),
-            fallback_name=str(row["name"]).strip(),
+        inspection = call_with_geotab_credentials(
+            int(row["database_id"]),
+            lambda cfg: build_rule_inspection(
+                cfg,
+                str(row["rule_id"]).strip(),
+                fallback_name=str(row["name"]).strip(),
+            ),
         )
         if not inspection.get("exists") and not inspection.get("message"):
             inspection["message"] = "La regla ya no existe en Geotab; se muestra el nombre guardado."
         return GeotabRuleInspection(**inspection)
     except Exception:
         _logger.warning(
-            "No se pudo inspeccionar la regla %s en Geotab (db=%s, user=%s)",
+            "No se pudo inspeccionar la regla %s en Geotab (db=%s)",
             row["rule_id"],
-            cfg.database,
-            cfg.username,
+            row["database_name"],
             exc_info=True,
         )
         return GeotabRuleInspection(
@@ -2524,76 +2954,113 @@ def _get_or_create_customer_database(
 
     if row is None:
         raise RuntimeError("No se pudo resolver la database del cliente.")
+    _sync_primary_credential(conn, int(row["id"]), payload.username.strip(), normalized_password)
     return int(row["id"])
 
 
 def _validate_vehicle_in_customer_geotab(
     plate: str,
     vin: str | None,
-    database_name: str,
-    username: str,
-    password: str,
+    database_id: int,
     plate_prefix: str | None = None,
-) -> str:
-    try:
-        from app.clients.geotab_client import get_cached_device_from_plate, get_cached_device_from_vin
-        from app.core.config import GeotabConfig
+) -> tuple[str, str | None]:
+    """Valida el vehiculo en la db Geotab del cliente usando el pool de credenciales.
 
-        customer_geotab_cfg = GeotabConfig(
-            username=username,
-            password=password,
-            database=database_name,
-        )
-        if plate and get_cached_device_from_plate(plate, customer_geotab_cfg, plate_prefix=plate_prefix):
-            return "found"
-        if vin and get_cached_device_from_vin(vin, customer_geotab_cfg):
-            return "found"
-        return "not_found"
+    Retorna (status, geotab_device_id). El device id es el codigo interno de
+    Geotab del vehiculo EN ESA database (los ids cambian entre databases).
+    """
+    from app.clients.geotab_client import get_cached_device_from_plate, get_cached_device_from_vin
+
+    def _check(cfg: GeotabConfig) -> tuple[str, str | None]:
+        device = None
+        if plate:
+            device = get_cached_device_from_plate(plate, cfg, plate_prefix=plate_prefix)
+        if device is None and vin:
+            device = get_cached_device_from_vin(vin, cfg)
+        if device is not None:
+            device_id = str(device.get("id") or "").strip() or None
+            return "found", device_id
+        return "not_found", None
+
+    try:
+        return call_with_geotab_credentials(database_id, _check)
     except Exception:
         _logger.warning(
-            "No se pudo validar el vehiculo %s en Geotab del cliente (db=%s, user=%s)",
+            "No se pudo validar el vehiculo %s en Geotab del cliente (db=%s)",
             plate,
-            database_name,
-            username,
+            database_id,
             exc_info=True,
         )
-        return "unknown"
+        return "unknown", None
 
 
 def _update_geotab_customer_status(
-    plate: str, geotab_customer_status: str, geotab_customer_database_id: int | None
+    plate: str,
+    geotab_customer_status: str,
+    geotab_customer_database_id: int | None,
+    geotab_device_id: str | None = None,
 ) -> None:
     normalized_plate = plate.strip().upper()
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE vehicle_motor_assignments
-                SET
-                    geotab_customer_status = %s,
-                    geotab_customer_database_id = %s,
-                    updated_at = NOW()
-                WHERE plate = %s;
-                """,
-                (geotab_customer_status, geotab_customer_database_id, normalized_plate),
-            )
+            if geotab_customer_status == "found":
+                cur.execute(
+                    """
+                    UPDATE vehicle_motor_assignments
+                    SET
+                        geotab_customer_status = %s,
+                        geotab_customer_database_id = %s,
+                        geotab_device_id = COALESCE(%s::text, geotab_device_id),
+                        geotab_device_synced_at = CASE WHEN %s::text IS NOT NULL THEN NOW() ELSE geotab_device_synced_at END,
+                        updated_at = NOW()
+                    WHERE plate = %s;
+                    """,
+                    (
+                        geotab_customer_status,
+                        geotab_customer_database_id,
+                        geotab_device_id,
+                        geotab_device_id,
+                        normalized_plate,
+                    ),
+                )
+            else:
+                # not_found / unknown / not_applicable: limpiar el device id para
+                # no dejar ids huerfanos de una db anterior (salvo unknown, que
+                # conserva el ultimo valor conocido).
+                clear_device = geotab_customer_status in ("not_found", "not_applicable")
+                cur.execute(
+                    """
+                    UPDATE vehicle_motor_assignments
+                    SET
+                        geotab_customer_status = %s,
+                        geotab_customer_database_id = %s,
+                        geotab_device_id = CASE WHEN %s::boolean THEN NULL ELSE geotab_device_id END,
+                        geotab_device_synced_at = CASE WHEN %s::boolean THEN NULL ELSE geotab_device_synced_at END,
+                        updated_at = NOW()
+                    WHERE plate = %s;
+                    """,
+                    (
+                        geotab_customer_status,
+                        geotab_customer_database_id,
+                        clear_device,
+                        clear_device,
+                        normalized_plate,
+                    ),
+                )
         conn.commit()
 
 
 def _validate_and_store_customer_geotab(
     plate: str,
     vin: str | None,
-    database_name: str,
-    username: str,
-    password: str,
     customer_database_id: int,
     plate_prefix: str | None = None,
 ) -> None:
-    status = _validate_vehicle_in_customer_geotab(
-        plate, vin, database_name, username, password, plate_prefix=plate_prefix
+    status, device_id = _validate_vehicle_in_customer_geotab(
+        plate, vin, customer_database_id, plate_prefix=plate_prefix
     )
-    _update_geotab_customer_status(plate, status, customer_database_id)
+    _update_geotab_customer_status(plate, status, customer_database_id, device_id)
 
 
 def revalidate_vehicle_customer_geotab(plate: str) -> dict[str, Any]:
@@ -2646,21 +3113,97 @@ def revalidate_vehicle_customer_geotab(plate: str) -> dict[str, Any]:
     if isinstance(prov_cfg, str):
         import json as _json
         prov_cfg = _json.loads(prov_cfg)
-    status = _validate_vehicle_in_customer_geotab(
+    db_id = int(row["customer_database_id"])
+    status, device_id = _validate_vehicle_in_customer_geotab(
         normalized_plate,
         row.get("vin"),
-        row["database_name"],
-        row["username"],
-        row["password"],
+        db_id,
         plate_prefix=prov_cfg.get("plate_prefix"),
     )
-    db_id = int(row["customer_database_id"])
-    _update_geotab_customer_status(normalized_plate, status, db_id)
+    _update_geotab_customer_status(normalized_plate, status, db_id, device_id)
     return {
         "geotab_customer_status": status,
         "geotab_customer_database_id": db_id,
+        "geotab_device_id": device_id,
         "message": f"Validacion Geotab cliente completada: {status}.",
     }
+
+
+def backfill_geotab_device_ids() -> dict[str, Any]:
+    """Rellena geotab_device_id para vehiculos ya validados en la db del cliente.
+
+    Recorre cada database Geotab una sola vez (1 llamada de devices por db,
+    cacheada) y matchea los vehiculos asignados por placa/VIN.
+    """
+    from app.clients.geotab_client import _find_device_in_collection, get_cached_devices
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    a.plate,
+                    a.vin,
+                    a.geotab_customer_database_id,
+                    cd.database_name,
+                    cd.username,
+                    cd.password,
+                    cd.provider_config
+                FROM vehicle_motor_assignments a
+                INNER JOIN customer_databases cd
+                    ON cd.id = a.geotab_customer_database_id
+                WHERE a.geotab_customer_database_id IS NOT NULL
+                  AND cd.connection_type = 'geotab'
+                ORDER BY a.geotab_customer_database_id ASC, a.plate ASC;
+                """
+            )
+            vehicles = cur.fetchall()
+
+    summary = {"total": len(vehicles), "updated": 0, "not_found": 0, "errors": 0}
+    devices_by_db: dict[int, list[dict[str, Any]] | None] = {}
+
+    for vehicle in vehicles:
+        db_id = int(vehicle["geotab_customer_database_id"])
+        if db_id not in devices_by_db:
+            try:
+                devices_by_db[db_id] = get_cached_devices(
+                    str(vehicle["username"]).strip(),
+                    str(vehicle["password"]).strip(),
+                    str(vehicle["database_name"]).strip(),
+                )
+            except Exception:
+                _logger.warning(
+                    "Backfill: no se pudo listar devices de la db %s", db_id, exc_info=True
+                )
+                devices_by_db[db_id] = None
+
+        devices = devices_by_db[db_id]
+        if devices is None:
+            summary["errors"] += 1
+            continue
+
+        prov_cfg = vehicle.get("provider_config") or {}
+        if isinstance(prov_cfg, str):
+            import json as _json
+            prov_cfg = _json.loads(prov_cfg)
+
+        device = _find_device_in_collection(
+            devices,
+            plate=vehicle["plate"],
+            vin=vehicle.get("vin"),
+            plate_prefix=prov_cfg.get("plate_prefix"),
+        )
+        if device is None:
+            summary["not_found"] += 1
+            _update_geotab_customer_status(vehicle["plate"], "not_found", db_id)
+            continue
+
+        device_id = str(device.get("id") or "").strip() or None
+        _update_geotab_customer_status(vehicle["plate"], "found", db_id, device_id)
+        summary["updated"] += 1
+
+    return summary
 
 
 def assign_vehicle_database(
@@ -2826,9 +3369,6 @@ def assign_vehicle_database(
             _validate_and_store_customer_geotab(
                 normalized_plate,
                 vehicle_vin,
-                selected_database["database_name"],
-                selected_database["database_username"],
-                selected_database["password"],
                 int(selected_database["id"]),
                 plate_prefix=db_prov_cfg.get("plate_prefix"),
             )

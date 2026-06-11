@@ -568,6 +568,13 @@ def lookup_vehicle(
             message=message,
         )
     except Exception:
+        _logger.exception(
+            "Vehicle lookup failed para identifier=%s lookup_type=%s scope=%s skip_geotab=%s",
+            normalized_identifier,
+            lookup_type,
+            scope,
+            skip_geotab,
+        )
         return _error_response(
             normalized_identifier,
             lookup_type,

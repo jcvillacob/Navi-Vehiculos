@@ -1699,6 +1699,14 @@ input[readonly] {
   flex-shrink: 0;
 }
 
+.rule-add-form select {
+  flex-shrink: 0;
+  height: 34px;
+  font-size: 12px;
+  padding: 0 8px;
+  border-radius: var(--radius-md);
+}
+
 /* ── Rule summary & inspector cards ── */
 
 .rule-summary-card,

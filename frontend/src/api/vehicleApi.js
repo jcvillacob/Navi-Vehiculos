@@ -533,6 +533,54 @@ export async function updateCustomerDatabase(databaseId, payload) {
   return parseJsonOrThrow(response, "Error actualizando database del cliente");
 }
 
+export async function listDatabaseCredentials(databaseId) {
+  const response = await fetchWithAuth(
+    buildUrl(`/api/v1/customers/databases/${databaseId}/credentials`)
+  );
+  return parseJsonOrThrow(response, "Error listando credenciales");
+}
+
+export async function createDatabaseCredential(databaseId, payload) {
+  const response = await fetchWithAuth(
+    buildUrl(`/api/v1/customers/databases/${databaseId}/credentials`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  return parseJsonOrThrow(response, "Error creando credencial");
+}
+
+export async function updateDatabaseCredential(credentialId, payload) {
+  const response = await fetchWithAuth(
+    buildUrl(`/api/v1/customers/databases/credentials/${credentialId}`),
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  return parseJsonOrThrow(response, "Error actualizando credencial");
+}
+
+export async function deleteDatabaseCredential(credentialId) {
+  const response = await fetchWithAuth(
+    buildUrl(`/api/v1/customers/databases/credentials/${credentialId}`),
+    { method: "DELETE" }
+  );
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = body?.detail || "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(detail || `Error eliminando credencial (${response.status})`);
+  }
+}
+
 export async function createGeotabRule(databaseId, payload) {
   const response = await fetchWithAuth(buildUrl(`/api/v1/customers/databases/${databaseId}/rules`), {
     method: "POST",

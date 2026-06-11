@@ -5,11 +5,11 @@ Este documento resume la forma esperada de las tres consultas principales que us
 Importante:
 
 - el script exploratorio debe traer la respuesta cruda mas completa posible de cada fuente
-- en Fenix eso implica consultar `SELECT TOP 1 *` sobre `dbo.T_DIM_VEHICULO`
+- en Fenix eso implica consultar `SELECT TOP 1 *` sobre `dbo.T_DIM_VEHICULO_CONFIABILIDAD`
 - adicionalmente el script genera una vista reducida llamada `fenix_selected`, que es la proyeccion minima que usa la app
 
 - `Geotab`: valida si la placa existe y, cuando aplica, devuelve el dispositivo.
-- `Fenix`: consulta SQL sobre `dbo.T_DIM_VEHICULO`.
+- `Fenix`: consulta SQL sobre `dbo.T_DIM_VEHICULO_CONFIABILIDAD`.
 - `Cummins`: dataplate del motor a partir del ESN / numero de motor.
 
 ## Script exploratorio
@@ -57,7 +57,7 @@ Forma general de la respuesta cruda:
 
 ```json
 {
-  "...": "todas las columnas disponibles de dbo.T_DIM_VEHICULO"
+  "...": "todas las columnas disponibles de dbo.T_DIM_VEHICULO_CONFIABILIDAD"
 }
 ```
 
@@ -73,7 +73,7 @@ Notas:
 }
 ```
 
-- `plate` dentro de `fenix_selected` se resuelve dinámicamente buscando la columna de placa real en `dbo.T_DIM_VEHICULO`
+- `plate` dentro de `fenix_selected` se resuelve dinámicamente buscando la columna de placa real en `dbo.T_DIM_VEHICULO_CONFIABILIDAD`
 - si Fenix no encuentra el vehículo, la respuesta es `null`
 
 ## Cummins

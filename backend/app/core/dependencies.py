@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import Cookie, Depends, HTTPException, Request
+import os
+import secrets
+
+from fastapi import Cookie, Depends, Header, HTTPException, Request
 from jose import JWTError, jwt
 
 from app.core.config import settings
@@ -43,6 +46,34 @@ def get_current_user_optional(access_token: str | None = Cookie(default=None)) -
         return get_current_user(access_token)
     except HTTPException:
         return None
+
+
+def _integration_api_keys() -> tuple[str, ...]:
+    raw = os.getenv("INTEGRATION_API_KEYS", "")
+    return tuple(key.strip() for key in raw.split(",") if key.strip())
+
+
+def require_integration_key(
+    request: Request,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> None:
+    """
+    Autenticacion servicio-a-servicio por header X-API-Key contra
+    INTEGRATION_API_KEYS (lista separada por comas, permite rotacion).
+    """
+    valid_keys = _integration_api_keys()
+    if not valid_keys:
+        raise HTTPException(status_code=503, detail="Integracion no configurada")
+    provided = (x_api_key or "").strip()
+    if not provided or not any(
+        secrets.compare_digest(provided, valid_key) for valid_key in valid_keys
+    ):
+        log_security_event(
+            "integration_key_denied",
+            user_id=None,
+            endpoint=request.url.path,
+        )
+        raise HTTPException(status_code=401, detail="API key invalida")
 
 
 def require_permission(*perms: str):

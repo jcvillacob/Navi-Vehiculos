@@ -54,7 +54,7 @@ def _find_plate_column(conn) -> str | None:
     INNER JOIN sys.objects o ON c.object_id = o.object_id
     INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
     WHERE s.name = 'dbo'
-      AND o.name = 'T_DIM_VEHICULO'
+      AND o.name = 'T_DIM_VEHICULO_CONFIABILIDAD'
     """
     with conn.cursor(as_dict=True) as cursor:
         cursor.execute(query)
@@ -100,7 +100,7 @@ def _extract_plate_from_row(row: dict | None) -> str | None:
 def _build_vehicle_select(plate_column: str | None) -> str:
     return """
     SELECT TOP 1 *
-    FROM dbo.T_DIM_VEHICULO
+    FROM dbo.T_DIM_VEHICULO_CONFIABILIDAD
     """
 
 
@@ -235,7 +235,7 @@ def find_vehicles_by_vins(conn, vins: list[str]) -> dict[str, dict]:
         placeholders = ", ".join(["%s"] * len(chunk))
         query = f"""
         SELECT *
-        FROM dbo.T_DIM_VEHICULO
+        FROM dbo.T_DIM_VEHICULO_CONFIABILIDAD
         WHERE VIN IN ({placeholders})
         """
         with conn.cursor(as_dict=True) as cursor:
@@ -262,7 +262,7 @@ def find_vehicles_by_plates(conn, plates: list[str]) -> dict[str, dict]:
         placeholders = ", ".join(["%s"] * len(chunk))
         query = f"""
         SELECT *
-        FROM dbo.T_DIM_VEHICULO
+        FROM dbo.T_DIM_VEHICULO_CONFIABILIDAD
         WHERE UPPER(LTRIM(RTRIM(CAST([{escaped_column}] AS NVARCHAR(100))))) IN ({placeholders})
         """
         with conn.cursor(as_dict=True) as cursor:

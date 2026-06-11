@@ -5,7 +5,15 @@ import PasswordInput from "../components/PasswordInput";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import { usePermission } from "../context/AuthContext";
-import { inspectGeotabRule, listMotors, resolveGeotabRule } from "../api/vehicleApi";
+import {
+  createDatabaseCredential,
+  deleteDatabaseCredential,
+  inspectGeotabRule,
+  listDatabaseCredentials,
+  listMotors,
+  resolveGeotabRule,
+  updateDatabaseCredential
+} from "../api/vehicleApi";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import {
   DATABASE_PROVIDERS,
@@ -755,6 +763,223 @@ function RuleInspectorPanel({ inspection, loading, error, selectedRule }) {
   );
 }
 
+/* ── Credentials pool panel (multiple credentials per database) ────── */
+function CredentialsPanel({ databaseId, canEdit = true }) {
+  const [credentials, setCredentials] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newUsername, setNewUsername] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  const refresh = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const records = await listDatabaseCredentials(databaseId);
+      setCredentials(records);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No fue posible cargar las credenciales");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [databaseId]);
+
+  const handleAdd = async (event) => {
+    event.preventDefault();
+    if (!newUsername.trim() || !newPassword.trim()) return;
+    setSaving(true);
+    setError("");
+    try {
+      await createDatabaseCredential(databaseId, {
+        username: newUsername.trim(),
+        password: newPassword.trim(),
+        label: newLabel.trim() || null
+      });
+      setNewUsername("");
+      setNewPassword("");
+      setNewLabel("");
+      setShowAddForm(false);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No fue posible crear la credencial");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleActive = async (credential) => {
+    setSaving(true);
+    setError("");
+    try {
+      await updateDatabaseCredential(credential.id, { is_active: !credential.is_active });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No fue posible actualizar la credencial");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (credentialId) => {
+    setSaving(true);
+    setError("");
+    try {
+      await deleteDatabaseCredential(credentialId);
+      setConfirmDeleteId(null);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No fue posible eliminar la credencial");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rules-motor-section">
+      <div className="rules-motor-section-header">
+        <div>
+          <span className="rules-label">Credenciales</span>
+          <span className="rules-count-subtle">
+            {credentials.length} {credentials.length === 1 ? "credencial" : "credenciales"} · rotación automática
+          </span>
+        </div>
+        {canEdit ? (
+          <button
+            type="button"
+            className={`button-sm ${showAddForm ? "button-secondary" : "button"}`}
+            onClick={() => setShowAddForm(!showAddForm)}
+          >
+            {showAddForm ? "Cancelar" : "Agregar credencial"}
+          </button>
+        ) : null}
+      </div>
+
+      {error ? <p className="notice-banner notice-error">{error}</p> : null}
+
+      {canEdit && showAddForm ? (
+        <form className="rule-assign-form" onSubmit={handleAdd}>
+          <div className="rule-assign-form-row">
+            <div className="form-field">
+              <label htmlFor={`credential-username-${databaseId}`}>Usuario</label>
+              <input
+                id={`credential-username-${databaseId}`}
+                value={newUsername}
+                onChange={(event) => setNewUsername(event.target.value)}
+                placeholder="usuario@dominio.com"
+                required
+                autoComplete="off"
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor={`credential-password-${databaseId}`}>Contraseña</label>
+              <input
+                id={`credential-password-${databaseId}`}
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                required
+                autoComplete="new-password"
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor={`credential-label-${databaseId}`}>Etiqueta (opcional)</label>
+              <input
+                id={`credential-label-${databaseId}`}
+                value={newLabel}
+                onChange={(event) => setNewLabel(event.target.value)}
+                placeholder="cuenta reportes"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <button type="submit" className="button button-sm" disabled={saving}>
+            Guardar credencial
+          </button>
+        </form>
+      ) : null}
+
+      {loading ? (
+        <p className="support-copy">Cargando credenciales...</p>
+      ) : credentials.length > 0 ? (
+        <div className="unassigned-rules-list">
+          {credentials.map((credential) => (
+            <div className="rule-list-item" key={`credential-${credential.id}`}>
+              <div className="rule-select-button" style={{ cursor: "default" }}>
+                <span className="rule-list-name">
+                  {credential.username}
+                  {credential.label ? <span className="rules-count-subtle"> · {credential.label}</span> : null}
+                </span>
+                <span className="rule-id-cell">
+                  {credential.is_active ? "Activa" : "Inactiva"}
+                  {credential.last_used_at
+                    ? ` · usada ${new Date(credential.last_used_at).toLocaleString()}`
+                    : " · sin uso"}
+                  {credential.last_auth_error_at ? " · ⚠ error de autenticación reciente" : ""}
+                </span>
+              </div>
+              {canEdit ? (
+                <>
+                  <button
+                    type="button"
+                    className="button-secondary button-sm"
+                    onClick={() => handleToggleActive(credential)}
+                    disabled={saving}
+                  >
+                    {credential.is_active ? "Desactivar" : "Activar"}
+                  </button>
+                  {confirmDeleteId === credential.id ? (
+                    <>
+                      <button
+                        type="button"
+                        className="button-secondary button-sm rule-confirm-delete"
+                        onClick={() => handleDelete(credential.id)}
+                        disabled={saving}
+                      >
+                        Confirmar
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button rule-delete-button"
+                        onClick={() => setConfirmDeleteId(null)}
+                        title="Cancelar"
+                      >
+                        &#8592;
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="icon-button rule-delete-button"
+                      onClick={() => setConfirmDeleteId(credential.id)}
+                      disabled={saving}
+                      title="Eliminar"
+                    >
+                      &#10005;
+                    </button>
+                  )}
+                </>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rules-empty-state">
+          <p>Sin credenciales registradas para esta database.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Database Detail Modal (info + rules for Geotab) ───────────────── */
 function DatabaseDetailModal({
   database,
@@ -770,6 +995,7 @@ function DatabaseDetailModal({
   canEdit = true
 }) {
   const [ruleId, setRuleId] = useState("");
+  const [ruleCategory, setRuleCategory] = useState("operacion");
   const [resolveStatus, setResolveStatus] = useState("idle");
   const [resolveError, setResolveError] = useState("");
   const [rulePreview, setRulePreview] = useState(null);
@@ -791,6 +1017,15 @@ function DatabaseDetailModal({
   const providerDetailRows = getProviderDetailRows(database.connection_type, database.provider_config);
   const selectedRule = rules.find((rule) => rule.id === selectedRuleId) || null;
 
+  const operationRules = useMemo(
+    () => rules.filter((rule) => (rule.category || "operacion") === "operacion"),
+    [rules]
+  );
+  const safeHabitRules = useMemo(
+    () => rules.filter((rule) => rule.category === "habito_seguro"),
+    [rules]
+  );
+
   const assignedRuleIds = useMemo(() => {
     const ids = new Set();
     for (const group of ruleGroups) {
@@ -802,8 +1037,8 @@ function DatabaseDetailModal({
   }, [ruleGroups]);
 
   const unassignedRules = useMemo(
-    () => rules.filter((rule) => !assignedRuleIds.has(rule.id)),
-    [rules, assignedRuleIds]
+    () => operationRules.filter((rule) => !assignedRuleIds.has(rule.id)),
+    [operationRules, assignedRuleIds]
   );
 
   useEffect(() => {
@@ -903,8 +1138,9 @@ function DatabaseDetailModal({
     if (!normalizedRuleId || resolveStatus !== "resolved" || rulePreview?.rule_id !== normalizedRuleId) {
       return;
     }
-    const created = await onAddRule({ rule_id: normalizedRuleId });
+    const created = await onAddRule({ rule_id: normalizedRuleId, category: ruleCategory });
     setRuleId("");
+    setRuleCategory("operacion");
     setResolveStatus("idle");
     setResolveError("");
     setRulePreview(null);
@@ -1007,6 +1243,15 @@ function DatabaseDetailModal({
                   required
                   autoComplete="off"
                 />
+                <select
+                  value={ruleCategory}
+                  onChange={(event) => setRuleCategory(event.target.value)}
+                  disabled={loading}
+                  aria-label="Categoria de la regla"
+                >
+                  <option value="operacion">Operación</option>
+                  <option value="habito_seguro">Hábito seguro</option>
+                </select>
                 {canEdit ? (
                   <button
                     type="submit"
@@ -1039,7 +1284,7 @@ function DatabaseDetailModal({
               <div className="rules-motor-section-header">
                 <div>
                   <span className="rules-label">Reglas por motor</span>
-                  <span className="rules-count-subtle">{ruleGroups.length} {ruleGroups.length === 1 ? "motor" : "motores"} · {rules.length} {rules.length === 1 ? "regla" : "reglas"}</span>
+                  <span className="rules-count-subtle">{ruleGroups.length} {ruleGroups.length === 1 ? "motor" : "motores"} · {operationRules.length} {operationRules.length === 1 ? "regla" : "reglas"}</span>
                 </div>
                 {canEdit && unassignedRules.length > 0 ? (
                   <button
@@ -1241,18 +1486,87 @@ function DatabaseDetailModal({
                 </div>
               ) : null}
 
-              {rules.length === 0 ? (
+              {operationRules.length === 0 ? (
                 <div className="rules-empty-state">
                   <p>Agrega reglas desde Geotab para asignarlas a motores.</p>
                 </div>
               ) : null}
 
-              {rules.length > 0 && unassignedRules.length === 0 && ruleGroups.length === 0 ? (
+              {operationRules.length > 0 && unassignedRules.length === 0 && ruleGroups.length === 0 ? (
                 <div className="rules-empty-state">
                   <p>Todas las reglas necesitan ser asignadas a un motor.</p>
                 </div>
               ) : null}
             </div>
+
+            {/* ── Safe-habit rules ── */}
+            <div className="rules-motor-section">
+              <div className="rules-motor-section-header">
+                <div>
+                  <span className="rules-label">Reglas de hábito seguro</span>
+                  <span className="rules-count-subtle">{safeHabitRules.length} {safeHabitRules.length === 1 ? "regla" : "reglas"}</span>
+                </div>
+              </div>
+              {safeHabitRules.length > 0 ? (
+                <div className="unassigned-rules-list">
+                  {safeHabitRules.map((rule) => (
+                    <div
+                      className={`rule-list-item ${selectedRuleId === rule.id ? "is-selected" : ""}`}
+                      key={`safe-habit-${rule.id}`}
+                    >
+                      <button
+                        type="button"
+                        className="rule-select-button"
+                        onClick={() => setSelectedRuleId(rule.id)}
+                      >
+                        <span className="rule-list-name">{rule.name}</span>
+                        <span className="rule-id-cell">{rule.rule_id}</span>
+                      </button>
+                      {canEdit && confirmDeleteRuleId === rule.id ? (
+                        <>
+                          <button
+                            type="button"
+                            className="button-secondary button-sm rule-confirm-delete"
+                            onClick={() => {
+                              setConfirmDeleteRuleId(null);
+                              onDeleteRule(rule);
+                            }}
+                            disabled={loading}
+                          >
+                            Confirmar
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-button rule-delete-button"
+                            onClick={() => setConfirmDeleteRuleId(null)}
+                            title="Cancelar"
+                          >
+                            &#8592;
+                          </button>
+                        </>
+                      ) : canEdit ? (
+                        <button
+                          type="button"
+                          className="icon-button rule-delete-button"
+                          onClick={() => setConfirmDeleteRuleId(rule.id)}
+                          disabled={loading}
+                          title="Eliminar"
+                        >
+                          &#10005;
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rules-empty-state">
+                  <p>Sin reglas de hábito seguro. Agrégalas con la categoría "Hábito seguro".</p>
+                </div>
+              )}
+            </div>
+
+            {/* ── Credentials pool ── */}
+            <CredentialsPanel databaseId={database.id} canEdit={canEdit} />
 
             {/* ── Inspector panel ── */}
             {selectedRule ? (

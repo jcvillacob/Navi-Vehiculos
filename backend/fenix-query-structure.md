@@ -1,18 +1,18 @@
 # Estructura completa de la consulta Fenix
 
-Este archivo documenta la estructura completa observada para la consulta de Fenix sobre `dbo.T_DIM_VEHICULO` en `DB_DynamicsBI_Prod`.
+Este archivo documenta la estructura completa observada para la consulta de Fenix sobre `dbo.T_DIM_VEHICULO_CONFIABILIDAD` en `DB_DynamicsBI_Prod`.
 
 Fuente:
 
 - inspeccion de metadatos de SQL Server sobre `sys.columns`
-- tabla: `dbo.T_DIM_VEHICULO`
+- tabla: `dbo.T_DIM_VEHICULO_CONFIABILIDAD`
 - base de datos: `DB_DynamicsBI_Prod`
 
 Consulta base usada por la app:
 
 ```sql
 SELECT TOP 1 *
-FROM dbo.T_DIM_VEHICULO
+FROM dbo.T_DIM_VEHICULO_CONFIABILIDAD
 ```
 
 Notas:
@@ -21,7 +21,7 @@ Notas:
 - en la estructura compartida no aparecen columnas llamadas exactamente `Número de clase` ni `Número de marca`
 - si se necesitan esos datos, habría que confirmar si existen en otra tabla, vista o con otro nombre funcional
 
-## Columnas de `dbo.T_DIM_VEHICULO`
+## Columnas de `dbo.T_DIM_VEHICULO_CONFIABILIDAD`
 
 | column_id | name | data_type | max_length | is_nullable |
 | --- | --- | --- | --- | --- |

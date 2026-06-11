@@ -12,6 +12,7 @@ from app.schemas.vehicle import (
 )
 from app.services.motor_catalog import (
     assign_vehicle_database,
+    backfill_geotab_device_ids,
     check_all_geotab_connections,
     get_connection_stats,
     list_vehicle_assignments,
@@ -122,6 +123,16 @@ def revalidate_customer_geotab(
     except ValueError as exc:
         status_code = 404 if "no existe" in str(exc).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.post(
+    "/backfill-geotab-ids",
+    description="Rellena el geotab_device_id de los vehiculos validados en la db Geotab del cliente",
+)
+def backfill_vehicle_geotab_ids(
+    _user: dict = Depends(require_permission("vehicles.refresh")),
+) -> dict:
+    return backfill_geotab_device_ids()
 
 
 @router.post(
