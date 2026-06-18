@@ -78,6 +78,7 @@ GET {NAVI_BASE_URL}/api/v1/integration/snapshot
               "rule_id": "aB1cD2eF3gH",
               "name": "RPM > 2200",
               "category": "operacion",
+              "motor_type": "ISD",
               "created_at": "2026-05-20T09:00:00Z"
             },
             {
@@ -85,6 +86,7 @@ GET {NAVI_BASE_URL}/api/v1/integration/snapshot
               "rule_id": "aX9yZ8wV7uT",
               "name": "Frenada brusca",
               "category": "habito_seguro",
+              "motor_type": null,
               "created_at": "2026-05-20T09:05:00Z"
             }
           ]
@@ -104,6 +106,7 @@ GET {NAVI_BASE_URL}/api/v1/integration/snapshot
       "geotab_customer_status": "found",
       "engine_number": "79123456",
       "technical_number": "D103005BX03",
+      "motor_type": "ISD",
       "cpl": "4955",
       "marca": "INTERNATIONAL",
       "linea": "PROSTAR",
@@ -125,6 +128,8 @@ Notas sobre los campos clave:
 | `vehicles[].geotab_customer_status` | `found` / `not_found` / `unknown` / `not_applicable`. Solo confiar en `geotab_device_id` cuando es `found`. |
 | `databases[].provider_config.plate_prefix` | Algunos clientes nombran devices con prefijo (ej. device `TRABC123` para placa `ABC123`). Relevante si Portal Clientes busca por placa en vez de por id. |
 | `rules[].category` | `operacion` (reglas de motor) o `habito_seguro`. `rule_id` es el id nativo de Geotab para consultar `ExceptionEvent` (`ruleSearch: {id: ...}`). |
+| `rules[].motor_type` | **Familia de motor** a la que aplica la regla (`engine_name` del motor; ej. `ISD`, `X15`). Solo las reglas `operacion` agrupadas traen valor; las `habito_seguro` y las `operacion` aún sin grupo traen `null`. Ver §2.3. |
+| `vehicles[].motor_type` | **Familia de motor** del vehículo (`engine_name` del motor cuyo `technical_number` coincide). `null` si el `technical_number` no está en el catálogo. Mismo vocabulario que `rules[].motor_type`, así que cruzan directo. Ver §2.3. |
 | `credentials[]` | Pool de credenciales de esa db. Portal Clientes debe **rotar** entre las activas (round-robin o LRU) para no saturar una sola sesión Geotab. |
 
 ### 2.2 Endpoints de conveniencia
@@ -137,6 +142,36 @@ GET /api/v1/integration/customers?include_credentials=true
 Mismos shapes que las secciones correspondientes del snapshot, con paginación para
 `vehicles` (flotas grandes; `limit` máx. 2000). La respuesta de `/vehicles` incluye
 `limit`, `offset` y `count` además del array `vehicles`.
+
+### 2.3 Reglas por tipo de motor (`motor_type`)
+
+Una database física puede tener vehículos de **distinto motor**. Las reglas de
+`operacion` (RPM, ralentí, etc.) dependen del motor: la de un `ISD` no aplica a un
+`X15`. Las de `habito_seguro` (frenada/aceleración/velocidad) aplican a toda la db.
+
+Por eso el snapshot anota `motor_type` (la **familia de motor**, `engine_name`) tanto
+en cada regla como en cada vehículo. Navi Vehículos es la fuente de verdad: una regla
+`operacion` queda asociada a un motor al meterla en un **grupo de motor**
+(`geotab_rule_groups`), y el vehículo conoce su motor por su `technical_number`. Ambos
+`motor_type` salen del mismo catálogo de motores, así que el vocabulario coincide.
+
+Resolución en Portal Clientes (intersección por `database_key` + `motor_type`):
+
+```sql
+SELECT r.*
+FROM vehicles v
+JOIN geotab_databases d   ON d.id = v.database_id
+JOIN geotab_databases sib ON sib.database_key = d.database_key   -- §3.1
+JOIN geotab_rules r       ON r.database_id = sib.id
+WHERE (
+    r.category = 'habito_seguro'                                  -- toda la db
+    OR (r.category = 'operacion' AND r.motor_type = v.motor_type) -- solo su motor
+);
+```
+
+Casos huérfanos (cero reglas de `operacion`, en silencio): vehículos con
+`motor_type = null`, o cuyo `motor_type` no tiene ninguna regla `operacion` agrupada
+en su `database_key`.
 
 ---
 

@@ -7,6 +7,7 @@ from app.schemas.vehicle import (
     BatchLookupRequest,
     ManualVehicleAssignmentRequest,
     VehicleAssignmentRecord,
+    VehicleCategoryUpdateRequest,
     VehicleDatabaseAssignmentRequest,
     VehicleLookupResponse,
 )
@@ -18,6 +19,7 @@ from app.services.motor_catalog import (
     list_vehicle_assignments,
     register_vehicle_assignment,
     revalidate_vehicle_customer_geotab,
+    set_vehicle_category,
 )
 from app.services.vehicle_lookup import (
     batch_lookup_vehicles_stream,
@@ -103,6 +105,19 @@ def manual_assign_vehicle(
         return {"registered": True, "plate": plate.strip().upper()}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/{plate}/category")
+def update_vehicle_category(
+    payload: VehicleCategoryUpdateRequest,
+    plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
+    _user: dict = Depends(require_permission("vehicles.edit")),
+) -> dict:
+    try:
+        return set_vehicle_category(plate, payload.category)
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.post("/{plate}/refresh", response_model=VehicleLookupResponse)

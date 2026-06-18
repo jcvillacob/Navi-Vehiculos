@@ -403,6 +403,22 @@ export async function refreshVehicle(plate) {
   return parseJsonOrThrow(response, "Error actualizando datos del vehiculo");
 }
 
+/**
+ * Fija (o limpia) el override de categoria de un vehiculo.
+ * @param {string} plate
+ * @param {string|null} category - "Ninguna" | "Experiencia Superior" | "Flota Administrada"
+ *   o null para volver a heredar la categoria del cliente.
+ */
+export async function setVehicleCategory(plate, category) {
+  const normalizedPlate = plate.trim().toUpperCase();
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/category`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category: category ?? null }),
+  });
+  return parseJsonOrThrow(response, "Error actualizando la categoria del vehiculo");
+}
+
 export async function revalidateCustomerGeotab(plate) {
   const normalizedPlate = plate.trim().toUpperCase();
   const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/revalidate-customer-geotab`), {

@@ -35,6 +35,18 @@ def _parse_since(since: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _normalize_motor_type(value: Any) -> str | None:
+    """engine_name (familia de motor) usado como motor_type en el snapshot.
+
+    Se normaliza (trim) en ambos lados —reglas y vehiculos— para que el cruce
+    r.motor_type = v.motor_type de Portal Clientes no se rompa por espacios.
+    """
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
 def _iso(value: Any) -> str | None:
     if isinstance(value, datetime):
         if value.tzinfo is None:
@@ -92,11 +104,29 @@ def _export_customers(
         )
         credential_rows = cur.fetchall()
 
+        # motor_type de una regla = engine_name del motor del grupo al que
+        # pertenece (geotab_rule_groups.motor_id -> motor_catalog). Una regla
+        # esta en <=1 grupo (uq_rule_one_group) y los grupos solo aceptan
+        # reglas 'operacion'; por eso las 'habito_seguro' y las 'operacion' aun
+        # no agrupadas (huerfanas) quedan con motor_type NULL.
         cur.execute(
             """
-            SELECT id, database_id, name, rule_id, category, created_at
-            FROM geotab_rules
-            ORDER BY database_id ASC, name ASC;
+            SELECT
+                gr.id,
+                gr.database_id,
+                gr.name,
+                gr.rule_id,
+                gr.category,
+                gr.created_at,
+                mc.engine_name AS motor_type
+            FROM geotab_rules gr
+            LEFT JOIN geotab_rule_group_rules grgr
+                ON grgr.geotab_rule_id = gr.id
+            LEFT JOIN geotab_rule_groups grg
+                ON grg.id = grgr.group_id
+            LEFT JOIN motor_catalog mc
+                ON mc.id = grg.motor_id
+            ORDER BY gr.database_id ASC, gr.name ASC;
             """
         )
         rule_rows = cur.fetchall()
@@ -122,6 +152,7 @@ def _export_customers(
                 "rule_id": row["rule_id"],
                 "name": row["name"],
                 "category": row["category"],
+                "motor_type": _normalize_motor_type(row.get("motor_type")),
                 "created_at": _iso(row["created_at"]),
             }
         )
@@ -222,6 +253,7 @@ def _export_vehicles(
                 a.geotab_customer_status,
                 a.engine_number,
                 a.technical_number,
+                mc.engine_name AS motor_type,
                 a.cpl,
                 a.marca,
                 a.linea,
@@ -230,6 +262,8 @@ def _export_vehicles(
                 a.nombre_vehiculo,
                 a.updated_at
             FROM vehicle_motor_assignments a
+            LEFT JOIN motor_catalog mc
+                ON mc.technical_number = a.technical_number
             {where_clause}
             ORDER BY a.plate ASC
             {pagination_clause};
@@ -250,6 +284,7 @@ def _export_vehicles(
             "geotab_customer_status": row.get("geotab_customer_status"),
             "engine_number": row.get("engine_number"),
             "technical_number": row.get("technical_number"),
+            "motor_type": _normalize_motor_type(row.get("motor_type")),
             "cpl": row.get("cpl"),
             "marca": row.get("marca"),
             "linea": row.get("linea"),

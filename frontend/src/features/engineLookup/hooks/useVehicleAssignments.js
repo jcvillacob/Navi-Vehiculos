@@ -29,12 +29,24 @@ export function useVehicleAssignments() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
+  // Aplica un patch parcial a un solo vehiculo en memoria (por placa), sin
+  // recargar toda la tabla.
+  const patchVehicle = (plate, patch) => {
+    const normalizedPlate = (plate || "").trim().toUpperCase();
+    setVehicles((prev) =>
+      prev.map((vehicle) =>
+        vehicle.plate === normalizedPlate ? { ...vehicle, ...patch } : vehicle
+      )
+    );
+  };
+
   return {
     loading,
     vehicles,
     error,
     search,
     setSearch,
-    loadVehicles
+    loadVehicles,
+    patchVehicle
   };
 }

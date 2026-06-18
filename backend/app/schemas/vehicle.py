@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+# Categorias de cliente/vehiculo. "Ninguna" es el valor por defecto/neutro.
+CustomerCategory = Literal["Ninguna", "Experiencia Superior", "Flota Administrada"]
+CUSTOMER_CATEGORIES: tuple[str, ...] = (
+    "Ninguna",
+    "Experiencia Superior",
+    "Flota Administrada",
+)
 
 
 class RecentMotorRecord(BaseModel):
@@ -163,6 +171,18 @@ class VehicleAssignmentRecord(BaseModel):
     nombre_vehiculo: str | None = Field(default=None, description="Nombre del vehiculo (Fenix)")
     engine_name: str | None = Field(default=None, description="Nombre visible del motor")
     client_name: str | None = Field(default=None, description="Cliente asociado al vehiculo")
+    category: CustomerCategory = Field(
+        default="Ninguna",
+        description="Categoria efectiva del vehiculo (override propio o heredada del cliente)",
+    )
+    category_is_inherited: bool = Field(
+        default=True,
+        description="True si la categoria se hereda del cliente (sin override propio en el vehiculo)",
+    )
+    customer_category: CustomerCategory = Field(
+        default="Ninguna",
+        description="Categoria del cliente del vehiculo, usada como valor heredado por defecto",
+    )
     database_name: str | None = Field(default=None, description="Database asociada al vehiculo")
     database_username: str | None = Field(
         default=None, description="Usuario de la database asociada al vehiculo"
@@ -204,6 +224,16 @@ class VehicleDatabaseAssignmentRequest(BaseModel):
     )
 
 
+class VehicleCategoryUpdateRequest(BaseModel):
+    category: CustomerCategory | None = Field(
+        default=None,
+        description=(
+            "Categoria override del vehiculo. None = heredar la del cliente; "
+            "Ninguna | Experiencia Superior | Flota Administrada = fijar override propio."
+        ),
+    )
+
+
 class ManualVehicleAssignmentRequest(BaseModel):
     technical_number: str = Field(..., min_length=1, description="Technical Engine Configuration #")
     cpl: str | None = Field(default=None, description="CPL del motor")
@@ -236,10 +266,18 @@ class CustomerDatabaseCreateRequest(BaseModel):
 
 class CustomerCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, description="Nombre del cliente")
+    category: CustomerCategory = Field(
+        default="Ninguna",
+        description="Categoria del cliente: Ninguna | Experiencia Superior | Flota Administrada",
+    )
 
 
 class CustomerUpdateRequest(BaseModel):
     name: str = Field(..., min_length=1, description="Nuevo nombre del cliente")
+    category: CustomerCategory = Field(
+        default="Ninguna",
+        description="Categoria del cliente: Ninguna | Experiencia Superior | Flota Administrada",
+    )
 
 
 class CustomerDatabaseUpdateRequest(BaseModel):
@@ -403,6 +441,10 @@ class CustomerDatabaseRecord(BaseModel):
 class CustomerRecord(BaseModel):
     id: int = Field(..., description="ID del cliente")
     name: str = Field(..., description="Nombre del cliente")
+    category: CustomerCategory = Field(
+        default="Ninguna",
+        description="Categoria del cliente: Ninguna | Experiencia Superior | Flota Administrada",
+    )
     database_count: int = Field(default=0, description="Cantidad de databases asociadas")
     databases: list[CustomerDatabaseRecord] = Field(
         default_factory=list, description="Databases configuradas para el cliente"

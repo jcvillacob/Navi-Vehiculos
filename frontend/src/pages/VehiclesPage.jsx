@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
 import Can from "../components/Can";
@@ -12,26 +12,30 @@ import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicle
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
 import BulkVehicleAssignmentModal from "../features/vehicles/components/BulkVehicleAssignmentModal";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
-import { assignVehicleDatabase, checkVehicleConnections, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab } from "../api/vehicleApi";
+import { assignVehicleDatabase, checkVehicleConnections, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory } from "../api/vehicleApi";
+import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../features/categories";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
+// width fija por columna: la tabla usa table-layout fixed para que los anchos
+// no salten al filtrar (si dependen del contenido, cambian con cada filtro).
 const VEHICLE_COLUMNS = [
-  { key: "plate", label: "Placa", getValue: (v) => v.plate },
-  { key: "nombre_vehiculo", label: "Nombre", getValue: (v) => v.nombre_vehiculo || "-" },
-  { key: "marca", label: "Marca", getValue: (v) => v.marca || "-" },
-  { key: "linea", label: "Linea", getValue: (v) => v.linea || "-" },
-  { key: "ano_modelo", label: "Año", getValue: (v) => v.ano_modelo || "-" },
-  { key: "tipo_combustible", label: "Combustible", getValue: (v) => v.tipo_combustible || "-" },
-  { key: "vin", label: "VIN", getValue: (v) => v.vin || "Sin VIN" },
-  { key: "cpl", label: "CPL", getValue: (v) => v.cpl || "Sin CPL" },
-  { key: "db_connection", label: "DB", getExportValue: (v) => v.database_connection_type || "-" },
-  { key: "engine_name", label: "Motor", getValue: (v) => v.engine_name || "Sin catalogar" },
-  { key: "technical_number", label: "TEC#", getValue: (v) => v.technical_number },
-  { key: "client_name", label: "Cliente", getValue: (v) => v.client_name || "Sin cliente" },
-  { key: "database_name", label: "Database", getValue: (v) => v.database_name || "Sin database" },
-  { key: "has_motor_rules", label: "Reglas", getExportValue: (v) => (v.has_motor_rules ? "Si" : "No") },
-  { key: "attachments", label: "Adjuntos", getExportValue: (v) => v.attachments?.length || 0 },
+  { key: "plate", label: "Placa", width: 86, getValue: (v) => v.plate },
+  { key: "nombre_vehiculo", label: "Nombre", width: 150, getValue: (v) => v.nombre_vehiculo || "-" },
+  { key: "marca", label: "Marca", width: 110, getValue: (v) => v.marca || "-" },
+  { key: "linea", label: "Linea", width: 110, getValue: (v) => v.linea || "-" },
+  { key: "ano_modelo", label: "Año", width: 64, getValue: (v) => v.ano_modelo || "-" },
+  { key: "tipo_combustible", label: "Combustible", width: 110, getValue: (v) => v.tipo_combustible || "-" },
+  { key: "vin", label: "VIN", width: 170, getValue: (v) => v.vin || "Sin VIN" },
+  { key: "cpl", label: "CPL", width: 80, getValue: (v) => v.cpl || "Sin CPL" },
+  { key: "db_connection", label: "DB", width: 96, getExportValue: (v) => v.database_connection_type || "-" },
+  { key: "engine_name", label: "Motor", width: 140, getValue: (v) => v.engine_name || "Sin catalogar" },
+  { key: "technical_number", label: "TEC#", width: 110, getValue: (v) => v.technical_number },
+  { key: "client_name", label: "Cliente", width: 140, getValue: (v) => v.client_name || "Sin cliente" },
+  { key: "category", label: "Categoria", width: 160, getExportValue: (v) => v.category || "Ninguna" },
+  { key: "database_name", label: "Database", width: 130, getValue: (v) => v.database_name || "Sin database" },
+  { key: "has_motor_rules", label: "Reglas", width: 70, getExportValue: (v) => (v.has_motor_rules ? "Si" : "No") },
+  { key: "attachments", label: "Adjuntos", width: 90, getExportValue: (v) => v.attachments?.length || 0 },
 ];
 
 function AttachmentIcon({ contentType }) {
@@ -130,11 +134,12 @@ function MultiSelectFilter({ label, options, selected, onChange }) {
   );
 
   const toggle = (value) => {
-    onChange(
-      selected.includes(value)
-        ? selected.filter((v) => v !== value)
-        : [...selected, value]
-    );
+    const next = selected.includes(value)
+      ? selected.filter((v) => v !== value)
+      : [...selected, value];
+    // El re-render de la tabla completa es costoso: marcarlo como transicion
+    // mantiene el checkbox respondiendo de inmediato.
+    startTransition(() => onChange(next));
   };
 
   return (
@@ -170,13 +175,15 @@ export default function VehiclesPage() {
   const [checkingConnections, setCheckingConnections] = useState(false);
   const [connectionResults, setConnectionResults] = useState({});
   const [filterClient, setFilterClient] = useState([]);
+  const [filterCategory, setFilterCategory] = useState([]);
   const [filterMotor, setFilterMotor] = useState([]);
   const [filterDatabase, setFilterDatabase] = useState([]);
   const [filterConnection, setFilterConnection] = useState([]);
+  const [savingCategoryPlates, setSavingCategoryPlates] = useState(() => new Set());
   const [reprocessPromptPlates, setReprocessPromptPlates] = useState(null);
   const [reprocessSkipGeotab, setReprocessSkipGeotab] = useState(false);
   const selectAllRef = useRef(null);
-  const { loading, vehicles, error, search, setSearch, loadVehicles } = useVehicleAssignments();
+  const { loading, vehicles, error, search, setSearch, loadVehicles, patchVehicle } = useVehicleAssignments();
   const { customers, loading: customersLoading } = useCustomersCatalog();
   const { motors, loading: motorsLoading } = useMotorsCatalog();
   const { toasts, pushToast } = useToasts();
@@ -262,6 +269,9 @@ export default function VehiclesPage() {
     if (filterClient.length) {
       result = result.filter((v) => filterClient.includes(v.client_name));
     }
+    if (filterCategory.length) {
+      result = result.filter((v) => filterCategory.includes(v.category || "Ninguna"));
+    }
     if (filterMotor.length) {
       result = result.filter((v) => filterMotor.includes(v.engine_name));
     }
@@ -280,7 +290,7 @@ export default function VehiclesPage() {
       });
     }
     return result;
-  }, [vehicles, filterClient, filterMotor, filterDatabase, filterConnection, connectionResults]);
+  }, [vehicles, filterClient, filterCategory, filterMotor, filterDatabase, filterConnection, connectionResults]);
 
   const activeColumns = useMemo(
     () => VEHICLE_COLUMNS.filter((col) => visibleColumns.has(col.key)),
@@ -451,6 +461,31 @@ export default function VehiclesPage() {
         "error",
         err instanceof Error ? err.message : "No fue posible revalidar Geotab del cliente"
       );
+    }
+  };
+
+  const handleChangeCategory = async (vehicle, rawValue) => {
+    // El valor "__inherit__" limpia el override y vuelve a heredar la del cliente.
+    const override = rawValue === "__inherit__" ? null : rawValue;
+    setSavingCategoryPlates((prev) => new Set(prev).add(vehicle.plate));
+    try {
+      const result = await setVehicleCategory(vehicle.plate, override);
+      patchVehicle(vehicle.plate, {
+        category: result.category,
+        category_is_inherited: result.category_is_inherited,
+        customer_category: result.customer_category
+      });
+    } catch (err) {
+      pushToast(
+        "error",
+        err instanceof Error ? err.message : "No fue posible actualizar la categoria"
+      );
+    } finally {
+      setSavingCategoryPlates((prev) => {
+        const next = new Set(prev);
+        next.delete(vehicle.plate);
+        return next;
+      });
     }
   };
 
@@ -689,7 +724,7 @@ export default function VehiclesPage() {
           <table className="vehicles-table">
             <thead>
               <tr>
-                <th>
+                <th style={{ width: 40 }}>
                   <input
                     ref={selectAllRef}
                     type="checkbox"
@@ -699,13 +734,21 @@ export default function VehiclesPage() {
                   />
                 </th>
                 {activeColumns.map((col) => (
-                  <th key={col.key}>
+                  <th key={col.key} style={col.width ? { width: col.width } : undefined}>
                     {col.key === "client_name" && (
                       <MultiSelectFilter
                         label={col.label}
                         options={clientOptions}
                         selected={filterClient}
                         onChange={setFilterClient}
+                      />
+                    )}
+                    {col.key === "category" && (
+                      <MultiSelectFilter
+                        label={col.label}
+                        options={CUSTOMER_CATEGORIES}
+                        selected={filterCategory}
+                        onChange={setFilterCategory}
                       />
                     )}
                     {col.key === "engine_name" && (
@@ -737,12 +780,12 @@ export default function VehiclesPage() {
                         onChange={setFilterConnection}
                       />
                     )}
-                    {![ "client_name", "engine_name", "database_name", "db_connection" ].includes(col.key) && (
+                    {![ "client_name", "category", "engine_name", "database_name", "db_connection" ].includes(col.key) && (
                       <span>{col.label}</span>
                     )}
                   </th>
                 ))}
-                <th>Acciones</th>
+                <th style={{ width: 120 }}>Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -792,178 +835,45 @@ export default function VehiclesPage() {
                           </td>
                         );
                       }
-                      if (col.key === "attachments") {
+                      if (col.key === "category") {
+                        const effective = vehicle.category || "Ninguna";
+                        const inherited = vehicle.category_is_inherited;
+                        const selectValue = inherited ? "__inherit__" : effective;
                         return (
                           <td key={col.key} data-label={col.label}>
-                            {vehicle.attachments?.length ? (
-                              <div className="attachment-list attachment-list-compact">
-                                {vehicle.attachments.map((attachment) => (
-                                  <a
-                                    key={attachment.id}
-                                    className="attachment-chip"
-                                    href={`${API_BASE}${attachment.download_url}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    title={`${attachment.original_filename} | CPL ${attachment.cpl || "Sin CPL"}`}
-                                    aria-label={`Abrir adjunto ${attachment.original_filename} del CPL ${attachment.cpl || "sin cpl"} en otra pestana`}
-                                  >
-                                    <AttachmentIcon contentType={attachment.content_type} />
-                                  </a>
-                                ))}
+                            {canEditVehicles ? (
+                              <div className="category-cell">
+                                <span
+                                  className={`${categoryBadgeClass(effective)} ${inherited ? "is-inherited" : ""}`}
+                                  title={inherited ? "Heredada del cliente" : "Categoria propia del vehiculo"}
+                                >
+                                  {effective}
+                                </span>
+                                <select
+                                  className="category-cell-select"
+                                  value={selectValue}
+                                  disabled={savingCategoryPlates.has(vehicle.plate)}
+                                  onChange={(event) => handleChangeCategory(vehicle, event.target.value)}
+                                  aria-label={`Categoria de ${vehicle.plate}`}
+                                >
+                                  <option value="__inherit__">
+                                    Heredar del cliente ({vehicle.customer_category || "Ninguna"})
+                                  </option>
+                                  {CUSTOMER_CATEGORIES.map((option) => (
+                                    <option key={option} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                </select>
                               </div>
                             ) : (
-                              "Sin adjuntos"
+                              <span
+                                className={`${categoryBadgeClass(effective)} ${inherited ? "is-inherited" : ""}`}
+                                title={inherited ? "Heredada del cliente" : "Categoria propia del vehiculo"}
+                              >
+                                {effective}
+                              </span>
                             )}
-                          </td>
-                        );
-                      }
-                      return (
-                        <td key={col.key} data-label={col.label}>
-                          {col.getValue(vehicle)}
-                        </td>
-                      );
-                    })}
-                    <td data-label="Acciones">
-                      <div className="actions-row vehicles-row-actions">
-                        <button
-                          type="button"
-                          className="button-secondary button-sm"
-                          onClick={() => setSelectedVehicle(vehicle)}
-                        >
-                          Detalles
-                        </button>
-                        <Can permission="vehicles.refresh">
-                          <button
-                            type="button"
-                            className="icon-button"
-                            title="Actualizar datos del vehiculo"
-                            onClick={() => handleRefreshVehicle(vehicle.plate)}
-                            disabled={refreshingPlates.has(vehicle.plate)}
-                          >
-                            <svg
-                              className={refreshingPlates.has(vehicle.plate) ? "spin" : ""}
-                              width="16"
-                              height="16"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M21 2v6h-6" />
-                              <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
-                              <path d="M21 12a9 9 0 0 1-9 9c-4.2 0-7.7-2.8-8.8-6.7" />
-                            </svg>
-                          </button>
-                        </Can>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {filteredVehicles.length > 0 ? (
-          <div className="vehicles-table-shell">
-            <table className="vehicles-table">
-              <thead>
-                <tr>
-                  <th>
-                    <input
-                      ref={selectAllRef}
-                      type="checkbox"
-                      checked={allVisibleSelected}
-                      onChange={handleToggleVisibleSelection}
-                      aria-label="Seleccionar vehiculos visibles"
-                    />
-                  </th>
-                  {activeColumns.map((col) => (
-                    <th key={col.key}>
-                      {col.key === "client_name" && (
-                        <MultiSelectFilter
-                          label={col.label}
-                          options={clientOptions}
-                          selected={filterClient}
-                          onChange={setFilterClient}
-                        />
-                      )}
-                      {col.key === "engine_name" && (
-                        <MultiSelectFilter
-                          label={col.label}
-                          options={motorOptions}
-                          selected={filterMotor}
-                          onChange={setFilterMotor}
-                        />
-                      )}
-                      {col.key === "database_name" && (
-                        <MultiSelectFilter
-                          label={col.label}
-                          options={databaseOptions}
-                          selected={filterDatabase}
-                          onChange={setFilterDatabase}
-                        />
-                      )}
-                      {col.key === "db_connection" && (
-                        <MultiSelectFilter
-                          label={col.label}
-                          options={[
-                            { value: "active", label: "Activos" },
-                            { value: "inactive", label: "Inactivos" },
-                            { value: "unchecked", label: "Sin revisar" },
-                            { value: "not_applicable", label: "No aplica" }
-                          ]}
-                          selected={filterConnection}
-                          onChange={setFilterConnection}
-                        />
-                      )}
-                      {![ "client_name", "engine_name", "database_name", "db_connection" ].includes(col.key) && (
-                        <span>{col.label}</span>
-                      )}
-                    </th>
-                  ))}
-                  <th>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredVehicles.map((vehicle) => (
-                  <tr key={vehicle.plate} className={selectedPlates.has(vehicle.plate) ? "is-selected" : ""}>
-                    <td data-label="Seleccion">
-                      <input
-                        type="checkbox"
-                        checked={selectedPlates.has(vehicle.plate)}
-                        onChange={() => handleToggleVehicleSelection(vehicle.plate)}
-                        aria-label={`Seleccionar ${vehicle.plate}`}
-                      />
-                    </td>
-                    {activeColumns.map((col) => {
-                      if (col.key === "plate") {
-                        return (
-                          <td key={col.key} data-label={col.label}>
-                            <strong>{vehicle.plate}</strong>
-                          </td>
-                        );
-                      }
-                      if (col.key === "db_connection") {
-                        return (
-                          <td key={col.key} data-label={col.label}>
-                            <DbConnectionBadge
-                              vehicle={vehicle}
-                              result={connectionResults[vehicle.plate]}
-                              checking={checkingConnections}
-                            />
-                          </td>
-                        );
-                      }
-                      if (col.key === "has_motor_rules") {
-                        return (
-                          <td key={col.key} data-label={col.label}>
-                            <span
-                              className={`rules-dot ${vehicle.has_motor_rules ? "rules-dot-active" : "rules-dot-inactive"}`}
-                              title={vehicle.has_motor_rules ? "Motor con reglas configuradas" : "Sin reglas"}
-                            />
                           </td>
                         );
                       }
@@ -1036,11 +946,12 @@ export default function VehiclesPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
       </section>
 
       <VehicleAssignmentModal

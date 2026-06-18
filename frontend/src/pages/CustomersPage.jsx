@@ -15,6 +15,7 @@ import {
   updateDatabaseCredential
 } from "../api/vehicleApi";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
+import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../features/categories";
 import {
   DATABASE_PROVIDERS,
   buildProviderConfigPayload,
@@ -32,10 +33,11 @@ function formatMatchModeLabel(value) {
 /* ── Create Customer Modal ─────────────────────────────────────────── */
 function CreateCustomerModal({ loading, onClose, onSubmit }) {
   const [name, setName] = useState("");
+  const [category, setCategory] = useState("Ninguna");
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    await onSubmit({ name: name.trim() });
+    await onSubmit({ name: name.trim(), category });
   };
 
   return (
@@ -64,6 +66,21 @@ function CreateCustomerModal({ loading, onClose, onSubmit }) {
             />
           </div>
 
+          <div className="form-field">
+            <label htmlFor="create-customer-category">Categoria</label>
+            <select
+              id="create-customer-category"
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+            >
+              {CUSTOMER_CATEGORIES.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="actions-row modal-actions">
             <button type="submit" disabled={loading || !name.trim()}>
               {loading ? "Guardando..." : "Crear cliente"}
@@ -81,10 +98,11 @@ function CreateCustomerModal({ loading, onClose, onSubmit }) {
 /* ── Edit Customer Modal ───────────────────────────────────────────── */
 function EditCustomerModal({ customer, loading, onClose, onSubmit }) {
   const [name, setName] = useState(customer.name);
+  const [category, setCategory] = useState(customer.category || "Ninguna");
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    await onSubmit({ name: name.trim() });
+    await onSubmit({ name: name.trim(), category });
   };
 
   return (
@@ -109,6 +127,21 @@ function EditCustomerModal({ customer, loading, onClose, onSubmit }) {
               onChange={(event) => setName(event.target.value)}
               required
             />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="edit-customer-category">Categoria</label>
+            <select
+              id="edit-customer-category"
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+            >
+              {CUSTOMER_CATEGORIES.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="actions-row modal-actions">
@@ -1808,6 +1841,9 @@ export default function CustomersPage() {
 
             <div className="motor-card-heading">
               <h3>{customer.name}</h3>
+              {customer.category && customer.category !== "Ninguna" ? (
+                <span className={categoryBadgeClass(customer.category)}>{customer.category}</span>
+              ) : null}
               <div className="motor-card-heading-row">
                 <div className="motor-card-heading-actions">
                   <Can permission="customers.edit">

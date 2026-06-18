@@ -881,6 +881,18 @@ input[readonly] {
   border-color: var(--border);
 }
 
+/*
+ * GOTCHA: input/select/textarea tienen width:100% global (arriba). Dentro de
+ * .form-field (columna) funciona, pero en una fila flex un control sin ancho
+ * explicito intenta ocupar todo el contenedor y descuadra a sus vecinos.
+ * Para controles compactos en filas flex usa .control-inline (o asigna un
+ * width/flex-basis explicito en el CSS del componente).
+ */
+.control-inline {
+  width: auto;
+  flex: 0 0 auto;
+}
+
 .actions-row {
   display: flex;
   flex-wrap: wrap;
@@ -1320,6 +1332,62 @@ input[readonly] {
   /* Inherits .status base */
 }
 
+/* ─────────────────────────────
+   CATEGORY BADGES (cliente / vehiculo)
+───────────────────────────── */
+
+.category-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  font-family: "Poppins", sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.category-badge.is-experiencia {
+  background: rgba(24, 89, 121, 0.12);
+  color: var(--blue);
+  border-color: rgba(24, 89, 121, 0.35);
+}
+
+.category-badge.is-flota {
+  background: rgba(255, 179, 1, 0.16);
+  color: #8a6100;
+  border-color: rgba(255, 179, 1, 0.5);
+}
+
+.category-badge.is-ninguna {
+  background: rgba(53, 69, 80, 0.08);
+  color: var(--gray);
+  border-color: rgba(53, 69, 80, 0.2);
+}
+
+/* Categoria heredada del cliente: se ve mas tenue para distinguirla de un override. */
+.category-badge.is-inherited {
+  opacity: 0.75;
+  border-style: dashed;
+}
+
+.category-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.category-cell-select {
+  width: 100%;
+  height: 28px;
+  font-size: 11px;
+  padding: 0 6px;
+}
+
 .geotab-found {
   background: var(--status-ok-bg);
   color: var(--status-ok-text);
@@ -1700,10 +1768,11 @@ input[readonly] {
 }
 
 .rule-add-form select {
-  flex-shrink: 0;
+  width: 150px;
+  flex: 0 0 150px;
   height: 34px;
   font-size: 12px;
-  padding: 0 8px;
+  padding: 0 28px 0 8px;
   border-radius: var(--radius-md);
 }
 
@@ -3668,6 +3737,9 @@ input[type="checkbox"] {
   width: 100%;
   border-collapse: collapse;
   min-width: 1180px;
+  /* Anchos pineados desde el thead (th[style]) para que las columnas no
+     salten cuando el contenido cambia al filtrar. */
+  table-layout: fixed;
 }
 
 .vehicles-table thead th {
@@ -3691,6 +3763,7 @@ input[type="checkbox"] {
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-secondary);
+  overflow-wrap: break-word;
 }
 
 .vehicles-table tbody tr:last-child td {
@@ -4724,6 +4797,7 @@ input[type="checkbox"] {
 
   .vehicles-table {
     min-width: 0;
+    table-layout: auto;
   }
 
   .vehicles-table thead {

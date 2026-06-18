@@ -443,6 +443,55 @@ async def test_snapshot_incremental_since(client, vehicle, monkeypatch):
     assert response.status_code == 422
 
 
+async def test_snapshot_exposes_motor_type(client, vehicle, monkeypatch):
+    """motor_type = engine_name de la familia de motor (ver REGLAS_POR_MOTOR).
+
+    - vehiculo: engine_name del motor cuyo technical_number coincide.
+    - regla 'operacion' agrupada: engine_name del motor del grupo.
+    - regla 'habito_seguro' (o sin grupo): motor_type NULL.
+    """
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
+    )
+
+    # El motor cuyo technical_number coincide con el del vehiculo 'ABC123' (TEC-1).
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motor_catalog (technical_number, engine_name) "
+                "VALUES ('TEC-1', 'ISD') RETURNING id;"
+            )
+            motor_id = int(cur.fetchone()["id"])
+        conn.commit()
+
+    op_rule = motor_catalog.create_geotab_rule(
+        vehicle["database_id"],
+        GeotabRuleCreateRequest(rule_id="aOp1", category="operacion"),
+    )
+    motor_catalog.create_geotab_rule(
+        vehicle["database_id"],
+        GeotabRuleCreateRequest(rule_id="aSafe1", category="habito_seguro"),
+    )
+    motor_catalog.create_geotab_rule_group(
+        vehicle["database_id"],
+        GeotabRuleGroupCreateRequest(motor_id=motor_id, rule_record_ids=[op_rule.id]),
+    )
+
+    response = await client.get("/api/v1/integration/snapshot", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+
+    vehicle_row = next(v for v in payload["vehicles"] if v["plate"] == "ABC123")
+    assert vehicle_row["motor_type"] == "ISD"
+
+    customer = next(c for c in payload["customers"] if c["name"] == "Cliente Portal")
+    rules = {r["rule_id"]: r for r in customer["databases"][0]["rules"]}
+    assert rules["aOp1"]["motor_type"] == "ISD"
+    assert rules["aSafe1"]["motor_type"] is None
+
+
 async def test_vehicles_pagination(client, vehicle, monkeypatch):
     monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
     headers = {"X-API-Key": "clave-portal"}

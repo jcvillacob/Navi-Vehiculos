@@ -15,6 +15,7 @@ from app.clients.geotab_client import build_rule_inspection
 from app.core.config import GeotabConfig
 from app.schemas.vehicle import (
     AssignedDatabaseSummary,
+    CUSTOMER_CATEGORIES,
     CustomerCreateRequest,
     CustomerDatabaseCreateRequest,
     CustomerDatabaseCredentialCreateRequest,
@@ -74,6 +75,18 @@ def _normalize_optional_text(value: str | None) -> str | None:
 
 def _normalize_cpl(value: str | None) -> str | None:
     return _normalize_optional_text(value)
+
+
+def _normalize_category(value: str | None, *, default: str = "Ninguna") -> str:
+    """Valida una categoria de cliente/vehiculo. Vacio -> default."""
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return default
+    if cleaned not in CUSTOMER_CATEGORIES:
+        raise ValueError(
+            "Categoria invalida. Usa: " + ", ".join(CUSTOMER_CATEGORIES) + "."
+        )
+    return cleaned
 
 
 def _normalize_match_mode(value: str | None) -> str:
@@ -376,6 +389,7 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             CREATE TABLE IF NOT EXISTS customers (
                 id BIGSERIAL PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
+                category TEXT NOT NULL DEFAULT 'Ninguna',
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
@@ -504,6 +518,18 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             """
             ALTER TABLE vehicle_motor_assignments
             ADD COLUMN IF NOT EXISTS geotab_device_synced_at TIMESTAMPTZ NULL;
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE customers
+            ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'Ninguna';
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS category TEXT NULL;
             """
         )
         cur.execute(
@@ -1314,6 +1340,9 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     a.nombre_vehiculo,
                     m.engine_name,
                     c.name AS client_name,
+                    COALESCE(a.category, c.category, 'Ninguna') AS category,
+                    (a.category IS NULL) AS category_is_inherited,
+                    COALESCE(c.category, 'Ninguna') AS customer_category,
                     cd.database_name,
                     cd.username AS database_username,
                     cd.connection_type AS database_connection_type,
@@ -1506,6 +1535,56 @@ def update_vehicle_metadata(
         conn.commit()
 
 
+def set_vehicle_category(plate: str, category: str | None) -> dict[str, Any]:
+    """Fija (o limpia) el override de categoria de un vehiculo.
+
+    category=None limpia el override y el vehiculo vuelve a heredar la categoria
+    del cliente. Un string valido fija un override propio.
+    Devuelve la categoria efectiva resultante.
+    """
+    normalized_plate = plate.strip().upper()
+    if not normalized_plate:
+        raise ValueError("La placa es obligatoria.")
+    override = None if category is None else _normalize_category(category)
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE vehicle_motor_assignments
+                SET category = %s, updated_at = NOW()
+                WHERE plate = %s
+                RETURNING plate, category;
+                """,
+                (override, normalized_plate),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("El vehiculo no existe.")
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(a.category, c.category, 'Ninguna') AS category,
+                    (a.category IS NULL) AS category_is_inherited,
+                    COALESCE(c.category, 'Ninguna') AS customer_category
+                FROM vehicle_motor_assignments a
+                LEFT JOIN customers c ON c.id = a.customer_id
+                WHERE a.plate = %s;
+                """,
+                (normalized_plate,),
+            )
+            effective = cur.fetchone()
+        conn.commit()
+
+    return {
+        "plate": normalized_plate,
+        "category": effective["category"],
+        "category_is_inherited": bool(effective["category_is_inherited"]),
+        "customer_category": effective["customer_category"],
+    }
+
+
 def get_vehicle_database_assignment(plate: str | None) -> AssignedDatabaseSummary:
     normalized_plate = (plate or "").strip().upper()
     if not normalized_plate:
@@ -1653,13 +1732,14 @@ def list_customers() -> list[CustomerRecord]:
                 SELECT
                     c.id,
                     c.name,
+                    COALESCE(c.category, 'Ninguna') AS category,
                     COUNT(cd.id)::INT AS database_count,
                     c.created_at,
                     c.updated_at
                 FROM customers c
                 LEFT JOIN customer_databases cd
                     ON cd.customer_id = c.id
-                GROUP BY c.id, c.name, c.created_at, c.updated_at
+                GROUP BY c.id, c.name, c.category, c.created_at, c.updated_at
                 ORDER BY c.name ASC;
                 """
             )
@@ -1812,17 +1892,18 @@ def list_customers() -> list[CustomerRecord]:
 
 def create_customer(payload: CustomerCreateRequest) -> CustomerRecord:
     normalized_name = payload.name.strip()
+    normalized_category = _normalize_category(payload.category)
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO customers (name)
-                    VALUES (%s)
-                    RETURNING id, name, 0::INT AS database_count, created_at, updated_at;
+                    INSERT INTO customers (name, category)
+                    VALUES (%s, %s)
+                    RETURNING id, name, category, 0::INT AS database_count, created_at, updated_at;
                     """,
-                    (normalized_name,),
+                    (normalized_name, normalized_category),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -1918,6 +1999,7 @@ def create_customer_database(
 
 def update_customer(customer_id: int, payload: CustomerUpdateRequest) -> CustomerRecord:
     normalized_name = payload.name.strip()
+    normalized_category = _normalize_category(payload.category)
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         with conn.cursor() as cur:
@@ -1930,11 +2012,11 @@ def update_customer(customer_id: int, payload: CustomerUpdateRequest) -> Custome
                 cur.execute(
                     """
                     UPDATE customers
-                    SET name = %s, updated_at = NOW()
+                    SET name = %s, category = %s, updated_at = NOW()
                     WHERE id = %s
-                    RETURNING id, name, created_at, updated_at;
+                    RETURNING id, name, category, created_at, updated_at;
                     """,
-                    (normalized_name, customer_id),
+                    (normalized_name, normalized_category, customer_id),
                 )
                 row = cur.fetchone()
             conn.commit()
