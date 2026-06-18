@@ -8,6 +8,7 @@ import {
   deleteGeotabRule,
   deleteGeotabRuleGroup,
   listCustomers,
+  setCustomerActive,
   updateCustomer,
   updateCustomerDatabase
 } from "../../../api/vehicleApi";
@@ -67,6 +68,20 @@ export function useCustomersCatalog() {
       throw err;
     } finally {
       setLoading(false);
+    }
+  };
+
+  const toggleCustomerActive = async (customerId, isActive) => {
+    setError("");
+    try {
+      const updated = await setCustomerActive(customerId, isActive);
+      setCustomers((prev) => prev.map((c) => (c.id === customerId ? updated : c)));
+      return updated;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "No fue posible cambiar el estado del cliente";
+      setError(message);
+      throw err;
     }
   };
 
@@ -265,6 +280,7 @@ export function useCustomersCatalog() {
     loadCustomers,
     registerCustomer,
     editCustomer,
+    toggleCustomerActive,
     registerCustomerDatabase,
     editCustomerDatabase,
     addGeotabRule,

@@ -531,6 +531,15 @@ export async function updateCustomer(customerId, payload) {
   return parseJsonOrThrow(response, "Error actualizando cliente");
 }
 
+export async function setCustomerActive(customerId, isActive) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/${customerId}/active`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_active: isActive }),
+  });
+  return parseJsonOrThrow(response, "Error actualizando el estado del cliente");
+}
+
 export async function createCustomerDatabase(customerId, payload) {
   const response = await fetchWithAuth(buildUrl(`/api/v1/customers/${customerId}/databases`), {
     method: "POST",

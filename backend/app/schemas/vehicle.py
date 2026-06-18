@@ -280,6 +280,12 @@ class CustomerUpdateRequest(BaseModel):
     )
 
 
+class CustomerActiveUpdateRequest(BaseModel):
+    is_active: bool = Field(
+        ..., description="True para reactivar el cliente, False para archivarlo (inactivo)."
+    )
+
+
 class CustomerDatabaseUpdateRequest(BaseModel):
     database_name: str = Field(..., min_length=1, description="Nombre de la database")
     username: str = Field(..., min_length=1, description="Usuario de la database")
@@ -444,6 +450,10 @@ class CustomerRecord(BaseModel):
     category: CustomerCategory = Field(
         default="Ninguna",
         description="Categoria del cliente: Ninguna | Experiencia Superior | Flota Administrada",
+    )
+    is_active: bool = Field(
+        default=True,
+        description="Estado del cliente. False = archivado (inactivo), conserva su histórico.",
     )
     database_count: int = Field(default=0, description="Cantidad de databases asociadas")
     databases: list[CustomerDatabaseRecord] = Field(

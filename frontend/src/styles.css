@@ -75,6 +75,12 @@
   --radius-md: 10px;
   --radius-sm: 7px;
   --radius-pill: 999px;
+
+  /* Controls — altura UNICA de los controles de una linea (inputs, selects,
+     botones y pickers tipo client-picker). Es la unica fuente de verdad: antes
+     convivian 36/38/40px regados por el CSS y los controles se veian
+     descuadrados/"grandes". Cambia este numero y se ajusta toda la app. */
+  --control-h: 38px;
 }
 
 /* ── Reset ── */
@@ -543,7 +549,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .lookup-bar-input {
   flex: 1;
-  height: 40px;
+  height: var(--control-h);
   padding: 0 14px;
   font-size: 14px;
   font-weight: 500;
@@ -673,12 +679,17 @@ h1, h2, h3, h4, h5, h6 {
 ───────────────────────────── */
 
 .button,
+/* OJO: esto estiliza el ELEMENTO `button` (no una clase), asi que TODO <button>
+   nace como control de una linea de 36px de alto y nowrap. Si usas un <button>
+   como CONTENEDOR multilinea (lista/tarjeta/opcion con varias lineas), añade la
+   clase `.button-block` o resetea height/white-space; si no, el contenido
+   desborda los 36px y se superpone con lo de abajo. */
 button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 36px;
+  height: var(--control-h);
   padding: 0 16px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -701,6 +712,30 @@ button {
 button:hover {
   background-color: var(--red-hover);
   box-shadow: 0 3px 10px rgba(238, 46, 47, 0.28);
+}
+
+/* Utilidad: convierte un <button> en un contenedor neutro (multilinea).
+   Usala siempre que un boton envuelva varias lineas o bloques, para anular el
+   look de control (height fijo, fondo rojo, nowrap, centrado) del selector global. */
+.button-block {
+  display: block;
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  gap: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+  box-shadow: none;
+}
+
+.button-block:hover {
+  background: none;
+  box-shadow: none;
 }
 
 /* Sizes */
@@ -840,7 +875,7 @@ textarea {
 
 input,
 select {
-  height: 40px;
+  height: var(--control-h);
 }
 
 textarea {
@@ -1374,11 +1409,19 @@ input[readonly] {
   border-style: dashed;
 }
 
-.category-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: flex-start;
+/* Badge clickable que dispara la edicion de categoria (reemplaza al select
+   permanente por fila; solo la fila activa monta el <select>). */
+.category-cell-trigger {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.category-cell-trigger:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .category-cell-select {
@@ -1386,6 +1429,16 @@ input[readonly] {
   height: 28px;
   font-size: 11px;
   padding: 0 6px;
+}
+
+/* Cliente archivado (inactivo): card atenuada para distinguirla de las activas. */
+.motor-card.is-inactive {
+  opacity: 0.62;
+  background: rgba(53, 69, 80, 0.04);
+}
+
+.motor-card.is-inactive:hover {
+  opacity: 0.85;
 }
 
 .geotab-found {
@@ -2434,7 +2487,7 @@ input[readonly] {
 
 .motors-search-input {
   flex: 1;
-  height: 36px;
+  height: var(--control-h);
   padding: 0 12px;
   font-size: 13px;
   border: 1px solid var(--border);
@@ -2804,7 +2857,8 @@ input[readonly] {
 }
 
 .roles-list-item:hover:not(.is-selected) {
-  background: var(--surface-2);
+  background: var(--bg-subtle);
+  border-color: var(--border);
 }
 
 .roles-list-button {
@@ -2819,6 +2873,15 @@ input[readonly] {
   display: grid;
   gap: 4px;
   min-width: 0;
+  /* Este <button> es un contenedor multilinea (nombre + meta + descripcion).
+     El selector global `button` impone height:36px y white-space:nowrap, pensados
+     para botones-control de una linea. Sin estos overrides el contenido desborda
+     la caja de 36px y se superpone con el siguiente item de la lista. */
+  height: auto;
+  min-height: 0;
+  white-space: normal;
+  align-items: start;
+  justify-content: stretch;
 }
 
 .roles-list-button strong {
@@ -3515,11 +3578,14 @@ input[readonly] {
   background: none;
   border: none;
   cursor: pointer;
-  transition: color 80ms ease;
+  transition: none;
 }
 
 .th-multifilter-trigger:hover {
-  color: #fff;
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  opacity: 1;
 }
 
 .th-multifilter-text {
@@ -3533,7 +3599,6 @@ input[readonly] {
   line-height: 1;
   color: var(--text-subtle);
   flex-shrink: 0;
-  transition: color 80ms ease;
 }
 
 .th-multifilter.is-active .th-multifilter-trigger {
@@ -3584,7 +3649,12 @@ input[readonly] {
   flex-shrink: 0;
 }
 
-input[type="checkbox"] {
+/* Reset de controles binarios: el selector global `input` les impone
+   width:100% + height var(--control-h) + borde/padding y el navegador los
+   ESCALA enormes (radios gigantes que se comen el espacio). Hay que neutralizar
+   checkbox Y radio aqui o cada uno nuevo nace roto. */
+input[type="checkbox"],
+input[type="radio"] {
   width: auto !important;
   max-height: 16px !important;
   flex-shrink: 0;
@@ -3597,6 +3667,15 @@ input[type="checkbox"] {
 
 .vehicles-table th:has(.th-multifilter.is-active) {
   background: var(--red-soft);
+}
+
+.vehicles-table th:has(.th-multifilter):hover {
+  background: var(--red-hover);
+}
+
+.vehicles-table th:has(.th-multifilter):hover .th-multifilter-trigger,
+.vehicles-table th:has(.th-multifilter):hover .th-multifilter-arrow {
+  color: #fff;
 }
 
 .vehicles-search-field {
@@ -3735,11 +3814,24 @@ input[type="checkbox"] {
 
 .vehicles-table {
   width: 100%;
-  border-collapse: collapse;
+  /* 'separate' evita el recalculo de bordes compartidos entre celdas adyacentes
+     que 'collapse' hace en cada paint; con border-spacing:0 se ve igual. */
+  border-collapse: separate;
+  border-spacing: 0;
   min-width: 1180px;
   /* Anchos pineados desde el thead (th[style]) para que las columnas no
      salten cuando el contenido cambia al filtrar. */
   table-layout: fixed;
+}
+
+/* Con cientos de vehiculos el <tbody> tiene miles de nodos y el navegador hace
+   hit-testing de todo el arbol en cada mousemove (hover lento). content-visibility
+   deja que el navegador se salte el render Y el hit-testing de las filas fuera del
+   viewport; con table-layout:fixed los anchos los fija el thead, asi que saltar
+   filas no descuadra columnas. contain-intrinsic-size estabiliza el scroll. */
+.vehicles-table tbody tr {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
 }
 
 .vehicles-table thead th {
@@ -4052,6 +4144,14 @@ input[type="checkbox"] {
   width: 100%;
   text-align: left;
   font-family: inherit;
+  /* Este control se usa como <summary> y como <button>. Cuando es <button>
+     hereda el look de control del selector global (height fijo, nowrap, color
+     blanco, centrado): hay que neutralizarlo o el contenido desborda/pisa.
+     Las variantes que quieran una caja de alto fijo usan var(--control-h). */
+  height: auto;
+  min-height: 0;
+  white-space: normal;
+  color: inherit;
 }
 
 .client-picker-label {
@@ -4064,7 +4164,7 @@ input[type="checkbox"] {
 .client-picker-value {
   display: flex;
   align-items: center;
-  height: 40px;
+  height: var(--control-h);
   padding: 0 13px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -4155,7 +4255,8 @@ input[type="checkbox"] {
   gap: 1px;
 }
 
-.client-picker-option input[type="checkbox"] {
+.client-picker-option input[type="checkbox"],
+.client-picker-option input[type="radio"] {
   width: 16px;
   height: 16px;
   margin: 0;
@@ -4898,7 +4999,7 @@ input[type="checkbox"] {
 }
 
 .login-input {
-  height: 38px;
+  height: var(--control-h);
   padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5167,7 +5268,7 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 40px;
+  height: var(--control-h);
   padding: 0 13px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);

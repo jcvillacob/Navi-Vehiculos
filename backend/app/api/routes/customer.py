@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
+    CustomerActiveUpdateRequest,
     CustomerCreateRequest,
     CustomerDatabaseCreateRequest,
     CustomerDatabaseCredentialCreateRequest,
@@ -30,6 +31,7 @@ from app.services.motor_catalog import (
     list_customers,
     list_database_credentials,
     resolve_geotab_rule,
+    set_customer_active,
     update_customer,
     update_customer_database,
     update_database_credential,
@@ -52,6 +54,18 @@ def create_customer_record(
         return create_customer(payload)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/{customer_id}/active", response_model=CustomerRecord)
+def set_customer_active_record(
+    payload: CustomerActiveUpdateRequest,
+    customer_id: int = Path(..., gt=0, description="ID del cliente"),
+    _user: dict = Depends(require_permission("customers.edit")),
+) -> CustomerRecord:
+    try:
+        return set_customer_active(customer_id, payload.is_active)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{customer_id}/databases", response_model=CustomerDatabaseRecord, status_code=status.HTTP_201_CREATED)

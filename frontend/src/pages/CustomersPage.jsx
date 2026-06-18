@@ -1633,12 +1633,15 @@ export default function CustomersPage() {
   const [motors, setMotors] = useState([]);
   const [motorsLoading, setMotorsLoading] = useState(false);
 
+  const [showInactive, setShowInactive] = useState(false);
+
   const {
     loading,
     customers,
     error,
     registerCustomer,
     editCustomer,
+    toggleCustomerActive,
     registerCustomerDatabase,
     editCustomerDatabase,
     addGeotabRule,
@@ -1676,9 +1679,19 @@ export default function CustomersPage() {
     };
   }, [pushToast]);
 
+  const inactiveCount = useMemo(
+    () => customers.filter((customer) => customer.is_active === false).length,
+    [customers]
+  );
+
+  const visibleCustomers = useMemo(
+    () => (showInactive ? customers : customers.filter((customer) => customer.is_active !== false)),
+    [customers, showInactive]
+  );
+
   const totals = useMemo(
     () => ({
-      customers: customers.length,
+      customers: customers.filter((customer) => customer.is_active !== false).length,
       databases: customers.reduce((acc, customer) => acc + (customer.database_count || 0), 0)
     }),
     [customers]
@@ -1721,6 +1734,19 @@ export default function CustomersPage() {
       pushToast("success", "Cliente actualizado.");
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message :"No fue posible actualizar el cliente");
+    }
+  };
+
+  const handleToggleActive = async (customer) => {
+    const nextActive = customer.is_active === false;
+    try {
+      await toggleCustomerActive(customer.id, nextActive);
+      pushToast("success", nextActive ? "Cliente reactivado." : "Cliente archivado.");
+    } catch (err) {
+      pushToast(
+        "error",
+        err instanceof Error ? err.message : "No fue posible cambiar el estado del cliente"
+      );
     }
   };
 
@@ -1794,6 +1820,16 @@ export default function CustomersPage() {
           </p>
         </div>
         <div className="page-header-actions">
+          {inactiveCount > 0 ? (
+            <button
+              type="button"
+              className={`button-secondary ${showInactive ? "is-active" : ""}`}
+              onClick={() => setShowInactive((prev) => !prev)}
+              title="Mostrar u ocultar clientes archivados"
+            >
+              {showInactive ? "Ocultar inactivos" : `Ver inactivos (${inactiveCount})`}
+            </button>
+          ) : null}
           <Can permission="customers.create">
             <button type="button" onClick={() => setShowCreateCustomer(true)}>
               + Cliente
@@ -1832,11 +1868,18 @@ export default function CustomersPage() {
         {customers.length === 0 && !loading ? (
           <p className="support-copy">No hay clientes registrados.</p>
         ) : null}
-        {customers.map((customer) => (
-          <article className="card motor-card" key={customer.id}>
+        {customers.length > 0 && visibleCustomers.length === 0 && !loading ? (
+          <p className="support-copy">Todos los clientes estan archivados. Usa "Ver inactivos" para mostrarlos.</p>
+        ) : null}
+        {visibleCustomers.map((customer) => {
+          const isInactive = customer.is_active === false;
+          return (
+          <article className={`card motor-card ${isInactive ? "is-inactive" : ""}`} key={customer.id}>
             <div className="motor-card-top">
               <span className="motor-count">{customer.database_count} databases</span>
-              <span className="status status-ok">activo</span>
+              <span className={`status ${isInactive ? "status-error" : "status-ok"}`}>
+                {isInactive ? "inactivo" : "activo"}
+              </span>
             </div>
 
             <div className="motor-card-heading">
@@ -1864,6 +1907,16 @@ export default function CustomersPage() {
                       title="Editar cliente"
                     >
                       &#9998;
+                    </button>
+                  </Can>
+                  <Can permission="customers.edit">
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => handleToggleActive(customer)}
+                      title={isInactive ? "Reactivar cliente" : "Archivar cliente (inactivo)"}
+                    >
+                      {isInactive ? "↺" : "⏻"}
                     </button>
                   </Can>
                 </div>
@@ -1913,7 +1966,8 @@ export default function CustomersPage() {
               )}
             </div>
           </article>
-        ))}
+          );
+        })}
       </section>
 
       {showCreateCustomer ? (

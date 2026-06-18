@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
 import Can from "../components/Can";
@@ -137,9 +137,7 @@ function MultiSelectFilter({ label, options, selected, onChange }) {
     const next = selected.includes(value)
       ? selected.filter((v) => v !== value)
       : [...selected, value];
-    // El re-render de la tabla completa es costoso: marcarlo como transicion
-    // mantiene el checkbox respondiendo de inmediato.
-    startTransition(() => onChange(next));
+    onChange(next);
   };
 
   return (
@@ -180,6 +178,9 @@ export default function VehiclesPage() {
   const [filterDatabase, setFilterDatabase] = useState([]);
   const [filterConnection, setFilterConnection] = useState([]);
   const [savingCategoryPlates, setSavingCategoryPlates] = useState(() => new Set());
+  // Solo la fila en edicion monta un <select> nativo; las demas muestran el badge.
+  // Asi evitamos cientos de selects nativos en el DOM (coste de paint + hit-testing).
+  const [editingCategoryPlate, setEditingCategoryPlate] = useState(null);
   const [reprocessPromptPlates, setReprocessPromptPlates] = useState(null);
   const [reprocessSkipGeotab, setReprocessSkipGeotab] = useState(false);
   const selectAllRef = useRef(null);
@@ -475,6 +476,7 @@ export default function VehiclesPage() {
         category_is_inherited: result.category_is_inherited,
         customer_category: result.customer_category
       });
+      setEditingCategoryPlate(null);
     } catch (err) {
       pushToast(
         "error",
@@ -839,40 +841,61 @@ export default function VehiclesPage() {
                         const effective = vehicle.category || "Ninguna";
                         const inherited = vehicle.category_is_inherited;
                         const selectValue = inherited ? "__inherit__" : effective;
+                        const badge = (
+                          <span
+                            className={`${categoryBadgeClass(effective)} ${inherited ? "is-inherited" : ""}`}
+                            title={inherited ? "Heredada del cliente" : "Categoria propia del vehiculo"}
+                          >
+                            {effective}
+                          </span>
+                        );
+                        if (!canEditVehicles) {
+                          return (
+                            <td key={col.key} data-label={col.label}>
+                              {badge}
+                            </td>
+                          );
+                        }
+                        const isEditingCategory = editingCategoryPlate === vehicle.plate;
                         return (
                           <td key={col.key} data-label={col.label}>
-                            {canEditVehicles ? (
-                              <div className="category-cell">
-                                <span
-                                  className={`${categoryBadgeClass(effective)} ${inherited ? "is-inherited" : ""}`}
-                                  title={inherited ? "Heredada del cliente" : "Categoria propia del vehiculo"}
-                                >
-                                  {effective}
-                                </span>
-                                <select
-                                  className="category-cell-select"
-                                  value={selectValue}
-                                  disabled={savingCategoryPlates.has(vehicle.plate)}
-                                  onChange={(event) => handleChangeCategory(vehicle, event.target.value)}
-                                  aria-label={`Categoria de ${vehicle.plate}`}
-                                >
-                                  <option value="__inherit__">
-                                    Heredar del cliente ({vehicle.customer_category || "Ninguna"})
-                                  </option>
-                                  {CUSTOMER_CATEGORIES.map((option) => (
-                                    <option key={option} value={option}>
-                                      {option}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                            ) : (
-                              <span
-                                className={`${categoryBadgeClass(effective)} ${inherited ? "is-inherited" : ""}`}
-                                title={inherited ? "Heredada del cliente" : "Categoria propia del vehiculo"}
+                            {isEditingCategory ? (
+                              <select
+                                className="category-cell-select"
+                                value={selectValue}
+                                autoFocus
+                                disabled={savingCategoryPlates.has(vehicle.plate)}
+                                onChange={(event) => handleChangeCategory(vehicle, event.target.value)}
+                                onFocus={(event) => {
+                                  // Abre el desplegable en el mismo clic (donde el navegador lo soporta).
+                                  try {
+                                    event.target.showPicker?.();
+                                  } catch {
+                                    /* sin activacion suficiente: el usuario lo abre con otro clic */
+                                  }
+                                }}
+                                onBlur={() => setEditingCategoryPlate(null)}
+                                aria-label={`Categoria de ${vehicle.plate}`}
                               >
-                                {effective}
-                              </span>
+                                <option value="__inherit__">
+                                  Heredar del cliente ({vehicle.customer_category || "Ninguna"})
+                                </option>
+                                {CUSTOMER_CATEGORIES.map((option) => (
+                                  <option key={option} value={option}>
+                                    {option}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <button
+                                type="button"
+                                className="category-cell-trigger"
+                                onClick={() => setEditingCategoryPlate(vehicle.plate)}
+                                disabled={savingCategoryPlates.has(vehicle.plate)}
+                                title="Cambiar categoria"
+                              >
+                                {badge}
+                              </button>
                             )}
                           </td>
                         );

@@ -390,6 +390,7 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 id BIGSERIAL PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
                 category TEXT NOT NULL DEFAULT 'Ninguna',
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
@@ -524,6 +525,12 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             """
             ALTER TABLE customers
             ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'Ninguna';
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE customers
+            ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
             """
         )
         cur.execute(
@@ -1733,13 +1740,14 @@ def list_customers() -> list[CustomerRecord]:
                     c.id,
                     c.name,
                     COALESCE(c.category, 'Ninguna') AS category,
+                    c.is_active,
                     COUNT(cd.id)::INT AS database_count,
                     c.created_at,
                     c.updated_at
                 FROM customers c
                 LEFT JOIN customer_databases cd
                     ON cd.customer_id = c.id
-                GROUP BY c.id, c.name, c.category, c.created_at, c.updated_at
+                GROUP BY c.id, c.name, c.category, c.is_active, c.created_at, c.updated_at
                 ORDER BY c.name ASC;
                 """
             )
@@ -1901,7 +1909,7 @@ def create_customer(payload: CustomerCreateRequest) -> CustomerRecord:
                     """
                     INSERT INTO customers (name, category)
                     VALUES (%s, %s)
-                    RETURNING id, name, category, 0::INT AS database_count, created_at, updated_at;
+                    RETURNING id, name, category, is_active, 0::INT AS database_count, created_at, updated_at;
                     """,
                     (normalized_name, normalized_category),
                 )
@@ -2026,6 +2034,28 @@ def update_customer(customer_id: int, payload: CustomerUpdateRequest) -> Custome
 
     if row is None:
         raise RuntimeError("No se pudo actualizar el cliente.")
+
+    customers = list_customers()
+    return next(c for c in customers if c.id == customer_id)
+
+
+def set_customer_active(customer_id: int, is_active: bool) -> CustomerRecord:
+    """Archiva (is_active=False) o reactiva (True) un cliente. Soft, conserva histórico."""
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE customers
+                SET is_active = %s, updated_at = NOW()
+                WHERE id = %s
+                RETURNING id;
+                """,
+                (is_active, customer_id),
+            )
+            if cur.fetchone() is None:
+                raise ValueError("El cliente no existe.")
+        conn.commit()
 
     customers = list_customers()
     return next(c for c in customers if c.id == customer_id)
