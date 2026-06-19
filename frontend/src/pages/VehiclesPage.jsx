@@ -12,7 +12,7 @@ import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicle
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
 import BulkVehicleAssignmentModal from "../features/vehicles/components/BulkVehicleAssignmentModal";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
-import { assignVehicleDatabase, checkVehicleConnections, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory } from "../api/vehicleApi";
+import { assignVehicleDatabase, checkVehicleConnections, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleVocacional } from "../api/vehicleApi";
 import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../features/categories";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
@@ -33,6 +33,7 @@ const VEHICLE_COLUMNS = [
   { key: "technical_number", label: "TEC#", width: 110, getValue: (v) => v.technical_number },
   { key: "client_name", label: "Cliente", width: 140, getValue: (v) => v.client_name || "Sin cliente" },
   { key: "category", label: "Categoria", width: 160, getExportValue: (v) => v.category || "Ninguna" },
+  { key: "vocacional", label: "Uso", width: 110, getExportValue: (v) => (v.vocacional ? "Vocacional" : "Transporte") },
   { key: "database_name", label: "Database", width: 130, getValue: (v) => v.database_name || "Sin database" },
   { key: "has_motor_rules", label: "Reglas", width: 70, getExportValue: (v) => (v.has_motor_rules ? "Si" : "No") },
   { key: "attachments", label: "Adjuntos", width: 90, getExportValue: (v) => v.attachments?.length || 0 },
@@ -178,6 +179,7 @@ export default function VehiclesPage() {
   const [filterDatabase, setFilterDatabase] = useState([]);
   const [filterConnection, setFilterConnection] = useState([]);
   const [savingCategoryPlates, setSavingCategoryPlates] = useState(() => new Set());
+  const [savingVocacionalPlates, setSavingVocacionalPlates] = useState(() => new Set());
   // Solo la fila en edicion monta un <select> nativo; las demas muestran el badge.
   // Asi evitamos cientos de selects nativos en el DOM (coste de paint + hit-testing).
   const [editingCategoryPlate, setEditingCategoryPlate] = useState(null);
@@ -476,6 +478,16 @@ export default function VehiclesPage() {
         category_is_inherited: result.category_is_inherited,
         customer_category: result.customer_category
       });
+      setSelectedVehicle((prev) =>
+        prev && prev.plate === vehicle.plate
+          ? {
+              ...prev,
+              category: result.category,
+              category_is_inherited: result.category_is_inherited,
+              customer_category: result.customer_category
+            }
+          : prev
+      );
       setEditingCategoryPlate(null);
     } catch (err) {
       pushToast(
@@ -484,6 +496,30 @@ export default function VehiclesPage() {
       );
     } finally {
       setSavingCategoryPlates((prev) => {
+        const next = new Set(prev);
+        next.delete(vehicle.plate);
+        return next;
+      });
+    }
+  };
+
+  const handleChangeVocacional = async (vehicle, nextValue) => {
+    setSavingVocacionalPlates((prev) => new Set(prev).add(vehicle.plate));
+    try {
+      const result = await setVehicleVocacional(vehicle.plate, nextValue);
+      patchVehicle(vehicle.plate, { vocacional: result.vocacional });
+      setSelectedVehicle((prev) =>
+        prev && prev.plate === vehicle.plate
+          ? { ...prev, vocacional: result.vocacional }
+          : prev
+      );
+    } catch (err) {
+      pushToast(
+        "error",
+        err instanceof Error ? err.message : "No fue posible actualizar el flag vocacional"
+      );
+    } finally {
+      setSavingVocacionalPlates((prev) => {
         const next = new Set(prev);
         next.delete(vehicle.plate);
         return next;
@@ -900,6 +936,19 @@ export default function VehiclesPage() {
                           </td>
                         );
                       }
+                      if (col.key === "vocacional") {
+                        const isVocacional = Boolean(vehicle.vocacional);
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            <span
+                              className={`status vocacional-badge ${isVocacional ? "is-true" : "is-false"}`}
+                              title={isVocacional ? "Vehiculo de uso vocacional" : "Vehiculo de transporte"}
+                            >
+                              {isVocacional ? "Vocacional" : "Transporte"}
+                            </span>
+                          </td>
+                        );
+                      }
                       if (col.key === "attachments") {
                         return (
                           <td key={col.key} data-label={col.label}>
@@ -991,6 +1040,10 @@ export default function VehiclesPage() {
         onRevalidateCustomerGeotab={handleRevalidateCustomerGeotab}
         canEditVehicle={canEditVehicles}
         canRevalidateCustomerGeotab={canRefreshVehicles}
+        onChangeCategory={handleChangeCategory}
+        savingCategory={selectedVehicle ? savingCategoryPlates.has(selectedVehicle.plate) : false}
+        onChangeVocacional={handleChangeVocacional}
+        savingVocacional={selectedVehicle ? savingVocacionalPlates.has(selectedVehicle.plate) : false}
       />
 
       <BulkVehicleAssignmentModal

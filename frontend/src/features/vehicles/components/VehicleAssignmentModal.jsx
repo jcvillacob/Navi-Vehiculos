@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import FileDropzone from "../../../components/FileDropzone";
 import { getDatabaseTypeLabel, providerSupportsManualVehicleId } from "../../customers/providerCatalog";
+import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../../categories";
 
 function DataItem({ label, value }) {
   return (
@@ -47,7 +48,11 @@ export default function VehicleAssignmentModal({
   onSubmit,
   onRevalidateCustomerGeotab = null,
   canEditVehicle = true,
-  canRevalidateCustomerGeotab = true
+  canRevalidateCustomerGeotab = true,
+  onChangeCategory = null,
+  savingCategory = false,
+  onChangeVocacional = null,
+  savingVocacional = false
 }) {
   const [technicalNumber, setTechnicalNumber] = useState(initialTechnicalNumber);
   const [engineName, setEngineName] = useState("");
@@ -221,19 +226,68 @@ export default function VehicleAssignmentModal({
           ) : null}
         </div>
 
-        {vehicle.access_url ? (
-          <div className="detail-access-url">
-            <span className="form-label-subtle">Enlace de acceso</span>
-            <a
-              href={vehicle.access_url}
-              target="_blank"
-              rel="noreferrer"
-              className="access-url-link"
-            >
-              {vehicle.access_url}
-            </a>
+        <section className="detail-editable-cards">
+          <h4 className="detail-section-title">Informacion general</h4>
+          <div className="editable-cards-row">
+            <div className="editable-card">
+              <div className="editable-card-header">
+                <span className="editable-card-label">Categoria</span>
+                <span
+                  className={`${categoryBadgeClass(vehicle.category)}${vehicle.category_is_inherited ? " is-inherited" : ""}`}
+                  title={vehicle.category_is_inherited ? "Heredada del cliente" : "Categoria propia del vehiculo"}
+                >
+                  {vehicle.category || "Ninguna"}
+                </span>
+              </div>
+              {onChangeCategory && canEditVehicle ? (
+                <select
+                  className="editable-card-select"
+                  value={vehicle.category_is_inherited ? "__inherit__" : (vehicle.category || "__inherit__")}
+                  onChange={(event) => onChangeCategory(vehicle, event.target.value)}
+                  disabled={savingCategory}
+                >
+                  <option value="__inherit__">
+                    Heredar del cliente ({vehicle.customer_category || "Ninguna"})
+                  </option>
+                  {CUSTOMER_CATEGORIES.map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              ) : (
+                <span className="editable-card-hint">
+                  {vehicle.category_is_inherited ? "Heredada del cliente" : "Categoria propia"}
+                </span>
+              )}
+            </div>
+
+            <div className="editable-card">
+              <div className="editable-card-header">
+                <span className="editable-card-label">Vocacional</span>
+                <span
+                  className={`status vocacional-badge ${vehicle.vocacional ? "is-true" : "is-false"}`}
+                  title={vehicle.vocacional ? "Vehiculo de uso vocacional" : "Vehiculo de uso comercial"}
+                >
+                  {vehicle.vocacional ? "Si" : "No"}
+                </span>
+              </div>
+              {onChangeVocacional && canEditVehicle ? (
+                <label className="vocacional-toggle">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(vehicle.vocacional)}
+                    disabled={savingVocacional}
+                    onChange={(event) => onChangeVocacional(vehicle, event.target.checked)}
+                  />
+                  <span>Marcar como vocacional</span>
+                </label>
+              ) : (
+                <span className="editable-card-hint">
+                  {vehicle.vocacional ? "Vocacional" : "Comercial"}
+                </span>
+              )}
+            </div>
           </div>
-        ) : null}
+        </section>
 
         <p className="support-copy modal-support-copy">
           {canEditVehicle

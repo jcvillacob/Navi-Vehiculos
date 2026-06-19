@@ -419,6 +419,21 @@ export async function setVehicleCategory(plate, category) {
   return parseJsonOrThrow(response, "Error actualizando la categoria del vehiculo");
 }
 
+/**
+ * Marca o desmarca un vehiculo como vocacional.
+ * @param {string} plate
+ * @param {boolean} vocacional
+ */
+export async function setVehicleVocacional(plate, vocacional) {
+  const normalizedPlate = plate.trim().toUpperCase();
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/vocacional`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vocacional: Boolean(vocacional) }),
+  });
+  return parseJsonOrThrow(response, "Error actualizando el flag vocacional del vehiculo");
+}
+
 export async function revalidateCustomerGeotab(plate) {
   const normalizedPlate = plate.trim().toUpperCase();
   const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/revalidate-customer-geotab`), {

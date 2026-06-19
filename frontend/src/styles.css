@@ -1419,6 +1419,119 @@ input[readonly] {
   cursor: pointer;
 }
 
+/* ─────────────────────────────
+   MODAL: Informacion general - cards editables (Categoria / Vocacional)
+───────────────────────────── */
+.detail-editable-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-muted, rgba(53, 69, 80, 0.04));
+  border: 1px solid var(--border-color, rgba(53, 69, 80, 0.12));
+  border-radius: var(--radius-md, 10px);
+}
+
+.detail-section-title {
+  margin: 0;
+  font-family: "Poppins", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gray, #354550);
+}
+
+.editable-cards-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+
+.editable-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--surface, #fff);
+  border: 1px solid var(--border-color, rgba(53, 69, 80, 0.16));
+  border-radius: var(--radius-sm, 7px);
+  min-width: 0;
+}
+
+.editable-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.editable-card-label {
+  font-family: "Poppins", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gray, #354550);
+  opacity: 0.8;
+}
+
+.editable-card-select {
+  width: 100%;
+  margin: 0;
+}
+
+.editable-card-hint {
+  font-family: "Poppins", sans-serif;
+  font-size: 11px;
+  color: var(--gray, #354550);
+  opacity: 0.7;
+}
+
+.vocacional-badge {
+  font-family: "Poppins", sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill, 999px);
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+}
+
+.vocacional-badge.is-true {
+  background: rgba(178, 225, 0, 0.18);
+  color: #4a6b00;
+  border-color: rgba(178, 225, 0, 0.5);
+}
+
+.vocacional-badge.is-false {
+  background: rgba(53, 69, 80, 0.08);
+  color: var(--gray, #354550);
+  border-color: rgba(53, 69, 80, 0.2);
+}
+
+.vocacional-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: "Poppins", sans-serif;
+  font-size: 11px;
+  color: var(--gray, #354550);
+  cursor: pointer;
+  user-select: none;
+}
+
+.vocacional-toggle input[type="checkbox"] {
+  accent-color: var(--red, #ee2e2f);
+  cursor: pointer;
+}
+
+.vocacional-toggle input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .category-cell-trigger:disabled {
   cursor: default;
   opacity: 0.6;
