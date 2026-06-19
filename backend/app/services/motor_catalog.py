@@ -541,6 +541,12 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
         )
         cur.execute(
             """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS vocacional BOOLEAN NOT NULL DEFAULT FALSE;
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS motor_attachments (
                 id BIGSERIAL PRIMARY KEY,
                 motor_id BIGINT NOT NULL REFERENCES motor_catalog(id) ON DELETE CASCADE,
@@ -1370,6 +1376,7 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     a.created_at,
                     a.updated_at,
                     a.last_seen_at,
+                    a.vocacional,
                     vpb.provider_vehicle_id,
                     vpb.is_manual AS provider_vehicle_id_is_manual
                 FROM vehicle_motor_assignments a
@@ -1589,6 +1596,35 @@ def set_vehicle_category(plate: str, category: str | None) -> dict[str, Any]:
         "category": effective["category"],
         "category_is_inherited": bool(effective["category_is_inherited"]),
         "customer_category": effective["customer_category"],
+    }
+
+
+def set_vehicle_vocacional(plate: str, vocacional: bool) -> dict[str, Any]:
+    """Marca o desmarca un vehiculo como vocacional."""
+    normalized_plate = plate.strip().upper()
+    if not normalized_plate:
+        raise ValueError("La placa es obligatoria.")
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE vehicle_motor_assignments
+                SET vocacional = %s, updated_at = NOW()
+                WHERE plate = %s
+                RETURNING plate, vocacional;
+                """,
+                (bool(vocacional), normalized_plate),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("El vehiculo no existe.")
+        conn.commit()
+
+    return {
+        "plate": normalized_plate,
+        "vocacional": bool(row["vocacional"]),
     }
 
 

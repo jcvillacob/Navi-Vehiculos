@@ -209,6 +209,10 @@ class VehicleAssignmentRecord(BaseModel):
         default=False,
         description="True si el provider_vehicle_id viene de un binding marcado como manual",
     )
+    vocacional: bool = Field(
+        default=False,
+        description="Indica si el vehiculo se usa para uso vocacional (no comercial).",
+    )
     created_at: datetime = Field(..., description="Fecha de primer registro")
     updated_at: datetime = Field(..., description="Fecha de ultima actualizacion")
     last_seen_at: datetime = Field(..., description="Fecha de ultima consulta exitosa")
@@ -231,6 +235,13 @@ class VehicleCategoryUpdateRequest(BaseModel):
             "Categoria override del vehiculo. None = heredar la del cliente; "
             "Ninguna | Experiencia Superior | Flota Administrada = fijar override propio."
         ),
+    )
+
+
+class VehicleVocacionalUpdateRequest(BaseModel):
+    vocacional: bool = Field(
+        ...,
+        description="True si el vehiculo es de uso vocacional, False en caso contrario.",
     )
 
 

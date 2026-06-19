@@ -410,6 +410,8 @@ async def test_snapshot_shape_and_credential_masking(client, vehicle, monkeypatc
     assert vehicle_row["vin"] == "3HSDJAPR1KN123456"
     assert vehicle_row["customer_id"] == vehicle["customer_id"]
     assert "geotab_device_id" in vehicle_row
+    # vocacional siempre presente y booleano (default false).
+    assert vehicle_row["vocacional"] is False
 
     response = await client.get(
         "/api/v1/integration/snapshot",

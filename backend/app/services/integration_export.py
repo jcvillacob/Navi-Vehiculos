@@ -260,6 +260,7 @@ def _export_vehicles(
                 a.ano_modelo,
                 a.tipo_combustible,
                 a.nombre_vehiculo,
+                a.vocacional,
                 a.updated_at
             FROM vehicle_motor_assignments a
             LEFT JOIN motor_catalog mc
@@ -291,6 +292,7 @@ def _export_vehicles(
             "ano_modelo": row.get("ano_modelo"),
             "tipo_combustible": row.get("tipo_combustible"),
             "nombre_vehiculo": row.get("nombre_vehiculo"),
+            "vocacional": bool(row.get("vocacional")),
             "updated_at": _iso(row["updated_at"]),
         }
         for row in rows

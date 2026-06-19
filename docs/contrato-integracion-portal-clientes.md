@@ -113,6 +113,7 @@ GET {NAVI_BASE_URL}/api/v1/integration/snapshot
       "ano_modelo": "2023",
       "tipo_combustible": "DIESEL",
       "nombre_vehiculo": "ABC123 - PROSTAR",
+      "vocacional": false,
       "updated_at": "2026-06-10T03:00:00Z"
     }
   ]
@@ -130,6 +131,7 @@ Notas sobre los campos clave:
 | `rules[].category` | `operacion` (reglas de motor) o `habito_seguro`. `rule_id` es el id nativo de Geotab para consultar `ExceptionEvent` (`ruleSearch: {id: ...}`). |
 | `rules[].motor_type` | **Familia de motor** a la que aplica la regla (`engine_name` del motor; ej. `ISD`, `X15`). Solo las reglas `operacion` agrupadas traen valor; las `habito_seguro` y las `operacion` aún sin grupo traen `null`. Ver §2.3. |
 | `vehicles[].motor_type` | **Familia de motor** del vehículo (`engine_name` del motor cuyo `technical_number` coincide). `null` si el `technical_number` no está en el catálogo. Mismo vocabulario que `rules[].motor_type`, así que cruzan directo. Ver §2.3. |
+| `vehicles[].vocacional` | **Booleano** del tipo de uso del vehículo: `true` = uso vocacional, `false` = transporte/comercial. Nunca `null` (default `false`). |
 | `credentials[]` | Pool de credenciales de esa db. Portal Clientes debe **rotar** entre las activas (round-robin o LRU) para no saturar una sola sesión Geotab. |
 
 ### 2.2 Endpoints de conveniencia
@@ -264,6 +266,7 @@ CREATE TABLE vehicles (
     ano_modelo TEXT NULL,
     tipo_combustible TEXT NULL,
     nombre_vehiculo TEXT NULL,
+    vocacional BOOLEAN NOT NULL DEFAULT FALSE, -- true = uso vocacional, false = transporte
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
