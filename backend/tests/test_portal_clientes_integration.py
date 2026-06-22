@@ -20,7 +20,7 @@ from app.schemas.vehicle import (
     GeotabRuleGroupCreateRequest,
     GeotabRuleInspection,
 )
-from app.services import motor_catalog
+from app.services import integration_export, motor_catalog, rendimientos
 
 
 def _connect():
@@ -148,6 +148,51 @@ def test_not_found_clears_device_id(vehicle, monkeypatch):
     assert row["geotab_customer_status"] == "not_found"
     assert row["geotab_device_id"] is None
     assert row["geotab_device_synced_at"] is None
+
+
+def _insert_geotab_binding(
+    plate: str, database_id: int, provider_vehicle_id: str, *, is_manual: bool = False
+) -> None:
+    with _connect() as conn:
+        rendimientos._ensure_performance_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vehicle_provider_bindings
+                    (plate, customer_database_id, provider, provider_vehicle_id,
+                     binding_status, is_manual)
+                VALUES (%s, %s, 'geotab', %s, 'resolved', %s);
+                """,
+                (plate, database_id, provider_vehicle_id, is_manual),
+            )
+        conn.commit()
+
+
+def _exported_vehicle(plate: str) -> dict:
+    payload = integration_export.export_vehicles()
+    return next(v for v in payload["vehicles"] if v["plate"] == plate)
+
+
+def test_snapshot_uses_geotab_binding_as_device_id(vehicle):
+    # Sin geotab_device_id en la columna, el snapshot toma el "ID externo" del
+    # binding geotab (provider_vehicle_id) como device id para Portal Clientes.
+    _insert_geotab_binding("ABC123", vehicle["database_id"], "GEO-DEV-1")
+    assert _exported_vehicle("ABC123")["geotab_device_id"] == "GEO-DEV-1"
+
+
+def test_snapshot_prefers_binding_over_validated_column(vehicle, monkeypatch):
+    # Columna validada y binding difieren -> gana el binding (ID externo manual).
+    monkeypatch.setattr(
+        "app.clients.geotab_client.get_cached_device_from_plate",
+        lambda plate, cfg, plate_prefix=None: {"id": "COL-DEV"},
+    )
+    motor_catalog._validate_and_store_customer_geotab(
+        "ABC123", "3HSDJAPR1KN123456", vehicle["database_id"]
+    )
+    assert _vehicle_row("ABC123")["geotab_device_id"] == "COL-DEV"
+
+    _insert_geotab_binding("ABC123", vehicle["database_id"], "BIND-DEV", is_manual=True)
+    assert _exported_vehicle("ABC123")["geotab_device_id"] == "BIND-DEV"
 
 
 # ── Categoria de reglas ───────────────────────────────────────────────

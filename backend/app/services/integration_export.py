@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 
 from app.services.motor_catalog import _database_dsn, _ensure_motor_tables
 from app.services.provider_registry import public_provider_config
+from app.services.rendimientos import _ensure_performance_tables
 
 _PASSWORD_MASK = "********"
 
@@ -228,6 +229,11 @@ def _export_vehicles(
     limit: int | None = None,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
+    # El snapshot resuelve el device geotab desde vehicle_provider_bindings;
+    # garantiza esa tabla (idempotente/cacheada) por si el bootstrap de
+    # rendimientos aun no corrio en este entorno.
+    _ensure_performance_tables(conn)
+
     where_clause = ""
     params: list[Any] = []
     if since is not None:
@@ -261,10 +267,27 @@ def _export_vehicles(
                 a.tipo_combustible,
                 a.nombre_vehiculo,
                 a.vocacional,
-                a.updated_at
+                a.updated_at,
+                -- "ID externo" del binding geotab: para una database geotab este
+                -- provider_vehicle_id ES el id del device (lo que ve la UI y usan
+                -- los calculos). a.geotab_device_id solo lo llena la validacion y
+                -- suele venir NULL, por eso Portal Clientes prefiere el binding.
+                -- Mismo criterio que la lista de vehiculos (manual primero, luego
+                -- el mas reciente).
+                geotab_binding.provider_vehicle_id AS geotab_binding_device_id
             FROM vehicle_motor_assignments a
             LEFT JOIN motor_catalog mc
                 ON mc.technical_number = a.technical_number
+            LEFT JOIN LATERAL (
+                SELECT vpb.provider_vehicle_id
+                FROM vehicle_provider_bindings vpb
+                WHERE vpb.plate = a.plate
+                  AND vpb.customer_database_id = a.customer_database_id
+                  AND vpb.provider = 'geotab'
+                  AND vpb.provider_vehicle_id IS NOT NULL
+                ORDER BY vpb.is_manual DESC, vpb.updated_at DESC
+                LIMIT 1
+            ) geotab_binding ON TRUE
             {where_clause}
             ORDER BY a.plate ASC
             {pagination_clause};
@@ -277,7 +300,9 @@ def _export_vehicles(
         {
             "plate": row["plate"],
             "vin": row.get("vin"),
-            "geotab_device_id": row.get("geotab_device_id"),
+            # Binding geotab primero (ID externo), fallback a la columna validada.
+            "geotab_device_id": row.get("geotab_binding_device_id")
+            or row.get("geotab_device_id"),
             "geotab_device_synced_at": _iso(row.get("geotab_device_synced_at")),
             "customer_id": row.get("customer_id"),
             "customer_database_id": row.get("customer_database_id"),
