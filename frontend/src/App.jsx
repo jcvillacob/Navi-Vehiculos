@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 import Can from "./components/Can";
-import { changeOwnPassword, fetchSessions, revokeOtherSessions, revokeSession } from "./api/vehicleApi";
+import { changeOwnPassword } from "./api/vehicleApi";
 import { useAuth } from "./context/AuthContext";
 import { BulkRefreshProvider } from "./context/BulkRefreshContext";
 import PasswordInput from "./components/PasswordInput";
@@ -80,108 +80,6 @@ function ChangePasswordModal({ user, onClose }) {
   );
 }
 
-function SessionsModal({ user, onClose }) {
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  const loadSessions = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await fetchSessions();
-      setSessions(data);
-    } catch (err) {
-      setError(err.message || "No fue posible cargar sesiones");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadSessions();
-  }, []);
-
-  const handleCloseSession = async (sessionId) => {
-    try {
-      await revokeSession(sessionId);
-      await loadSessions();
-    } catch (err) {
-      setError(err.message || "No fue posible cerrar la sesion");
-    }
-  };
-
-  const handleCloseOthers = async () => {
-    try {
-      await revokeOtherSessions();
-      await loadSessions();
-    } catch (err) {
-      setError(err.message || "No fue posible cerrar las otras sesiones");
-    }
-  };
-
-  return (
-    <div className="modal-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Sesiones activas">
-        <header className="modal-header">
-          <div className="modal-heading">
-            <span className="eyebrow">Perfil</span>
-            <h3>Sesiones activas</h3>
-          </div>
-          <button type="button" className="icon-button modal-close-button" onClick={onClose}>Cerrar</button>
-        </header>
-        <p className="support-copy">Sesiones activas para {user?.username}.</p>
-        {error ? <div className="notice-banner notice-error">{error}</div> : null}
-        <div className="actions-row modal-actions">
-          <button type="button" onClick={handleCloseOthers} disabled={loading || sessions.length === 0}>
-            Cerrar otras sesiones
-          </button>
-        </div>
-        {loading ? (
-          <p>Cargando...</p>
-        ) : (
-          <div className="vehicles-table-shell">
-            <table className="vehicles-table">
-              <thead>
-                <tr>
-                  <th>Creada</th>
-                  <th>Expira</th>
-                  <th>IP</th>
-                  <th>Dispositivo</th>
-                  <th>Estado</th>
-                  <th>Accion</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sessions.map((session) => (
-                  <tr key={session.id}>
-                    <td>{new Date(session.created_at).toLocaleString("es-CO")}</td>
-                    <td>{new Date(session.expires_at).toLocaleString("es-CO")}</td>
-                    <td>{session.ip_address || "—"}</td>
-                    <td>
-                      <span className="session-useragent" title={session.user_agent || ""}>
-                        {session.user_agent ? session.user_agent.slice(0, 60) : "—"}
-                      </span>
-                    </td>
-                    <td>{session.is_current ? "Actual" : "Activa"}</td>
-                    <td>
-                      {session.is_current ? "—" : (
-                        <button type="button" className="button-secondary button-sm" onClick={() => handleCloseSession(session.id)}>
-                          Cerrar
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
 export default function App() {
   return (
     <Routes>
@@ -201,15 +99,29 @@ export default function App() {
 function AppShell() {
   const { user, logout } = useAuth();
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [showSessionsModal, setShowSessionsModal] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef(null);
+
+  useEffect(() => {
+    function closeOnClickOutside(event) {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target)) {
+        setUserMenuOpen(false);
+      }
+    }
+    if (userMenuOpen) {
+      document.addEventListener("mousedown", closeOnClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", closeOnClickOutside);
+  }, [userMenuOpen]);
 
   return (
     <BulkRefreshProvider>
     <div className="app-shell">
       <div className="app-orb app-orb-one" aria-hidden="true" />
       <div className="app-orb app-orb-two" aria-hidden="true" />
-      <div className="app-grid">
-        <aside className="sidebar">
+      <div className={`app-grid${sidebarOpen ? "" : " is-collapsed"}`}>
+        <aside className="sidebar" aria-hidden={!sidebarOpen}>
           <div className="sidebar-panel">
             <div className="brand-block">
               <div className="sidebar-logo-wrap">
@@ -219,6 +131,15 @@ function AppShell() {
                   alt="Navitrans"
                 />
               </div>
+              <button
+                type="button"
+                className="sidebar-toggle sidebar-toggle-close"
+                onClick={() => setSidebarOpen(false)}
+                aria-label="Ocultar menu"
+                title="Ocultar menu"
+              >
+                &larr;
+              </button>
             </div>
 
             <nav className="sidebar-nav">
@@ -281,34 +202,56 @@ function AppShell() {
                 </div>
               </div>
             </nav>
-            <div className="sidebar-user">
-              <div className="sidebar-user-info">
-                <span className="sidebar-user-name">{user?.username}</span>
-                <span className="sidebar-user-role">{user?.role}</span>
-              </div>
+            <div className="sidebar-user" ref={userMenuRef}>
               <button
-                className="button-secondary button-sm sidebar-logout"
-                onClick={() => setShowPasswordModal(true)}
+                type="button"
+                className="sidebar-user-trigger"
+                onClick={() => setUserMenuOpen(!userMenuOpen)}
+                aria-expanded={userMenuOpen}
+                aria-haspopup="menu"
               >
-                Cambiar contrasena
+                <div className="sidebar-user-info">
+                  <span className="sidebar-user-name">{user?.username}</span>
+                  <span className="sidebar-user-role">{user?.role}</span>
+                </div>
+                <span className="sidebar-user-arrow">{userMenuOpen ? "▲" : "▼"}</span>
               </button>
-              <button
-                className="button-secondary button-sm sidebar-logout"
-                onClick={() => setShowSessionsModal(true)}
-              >
-                Sesiones activas
-              </button>
-              <button
-                className="button-secondary button-sm sidebar-logout"
-                onClick={logout}
-              >
-                Cerrar sesion
-              </button>
+              {userMenuOpen ? (
+                <div className="sidebar-user-menu" role="menu">
+                  <button
+                    type="button"
+                    className="sidebar-user-menu-item"
+                    role="menuitem"
+                    onClick={() => { setShowPasswordModal(true); setUserMenuOpen(false); }}
+                  >
+                    Cambiar contraseña
+                  </button>
+                  <button
+                    type="button"
+                    className="sidebar-user-menu-item"
+                    role="menuitem"
+                    onClick={() => { logout(); setUserMenuOpen(false); }}
+                  >
+                    Cerrar sesión
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
         </aside>
 
         <main className="content-area">
+          {!sidebarOpen ? (
+            <button
+              type="button"
+              className="sidebar-toggle sidebar-toggle-open"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Mostrar menu"
+              title="Mostrar menu"
+            >
+              &rarr;
+            </button>
+          ) : null}
           <div className="content-shell">
             <Routes>
               <Route path="/" element={<HomePage />} />
@@ -352,9 +295,6 @@ function AppShell() {
     </div>
     {showPasswordModal ? (
       <ChangePasswordModal user={user} onClose={() => setShowPasswordModal(false)} />
-    ) : null}
-    {showSessionsModal ? (
-      <SessionsModal user={user} onClose={() => setShowSessionsModal(false)} />
     ) : null}
     </BulkRefreshProvider>
   );

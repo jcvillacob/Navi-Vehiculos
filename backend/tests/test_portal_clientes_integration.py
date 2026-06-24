@@ -195,6 +195,34 @@ def test_snapshot_prefers_binding_over_validated_column(vehicle, monkeypatch):
     assert _exported_vehicle("ABC123")["geotab_device_id"] == "BIND-DEV"
 
 
+def _set_customer_category(customer_id: int, category: str) -> None:
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE customers SET category = %s WHERE id = %s;",
+                (category, customer_id),
+            )
+        conn.commit()
+
+
+def test_snapshot_exports_customer_category_as_effective(vehicle):
+    # Sin override propio, la categoría del cliente es la efectiva del vehículo.
+    _set_customer_category(vehicle["customer_id"], "Flota Administrada")
+    assert _exported_vehicle("ABC123")["category"] == "Flota Administrada"
+
+
+def test_snapshot_vehicle_category_override_wins(vehicle):
+    # El override del vehículo ('Ninguna') gana sobre la categoría del cliente.
+    _set_customer_category(vehicle["customer_id"], "Flota Administrada")
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE vehicle_motor_assignments SET category = 'Ninguna' WHERE plate = 'ABC123';"
+            )
+        conn.commit()
+    assert _exported_vehicle("ABC123")["category"] == "Ninguna"
+
+
 # ── Categoria de reglas ───────────────────────────────────────────────
 
 
@@ -217,12 +245,14 @@ def test_create_rule_with_category(geotab_db, monkeypatch):
         GeotabRuleCreateRequest(rule_id="aRule1", category="habito_seguro"),
     )
     assert record.category == "habito_seguro"
+    assert record.applications[0].category == "habito_seguro"
 
     default_record = motor_catalog.create_geotab_rule(
         geotab_db["database_id"],
         GeotabRuleCreateRequest(rule_id="aRule2"),
     )
     assert default_record.category == "operacion"
+    assert default_record.applications[0].category == "operacion"
 
 
 def test_create_rule_invalid_category_rejected(geotab_db, monkeypatch):
@@ -233,6 +263,21 @@ def test_create_rule_invalid_category_rejected(geotab_db, monkeypatch):
         motor_catalog.create_geotab_rule(
             geotab_db["database_id"],
             GeotabRuleCreateRequest(rule_id="aRule3", category="otra"),
+        )
+
+
+def test_exceso_rpm_requires_motor(geotab_db, monkeypatch):
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
+    )
+    with pytest.raises(ValueError, match="RPM"):
+        motor_catalog.create_geotab_rule(
+            geotab_db["database_id"],
+            GeotabRuleCreateRequest(
+                rule_id="aRpm1",
+                category="habito_seguro",
+                event_type="exceso_rpm",
+            ),
         )
 
 
@@ -257,6 +302,45 @@ def test_rule_group_rejects_safe_habit_rules(geotab_db, monkeypatch):
             geotab_db["database_id"],
             GeotabRuleGroupCreateRequest(motor_id=motor_id, rule_record_ids=[safe_rule.id]),
         )
+
+
+def test_exceso_rpm_application_converts_existing_operation_group(geotab_db, monkeypatch):
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
+    )
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motor_catalog (technical_number, engine_name) VALUES ('TEC-X11', 'X11') RETURNING id;"
+            )
+            motor_id = int(cur.fetchone()["id"])
+        conn.commit()
+
+    rpm_rule = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(rule_id="aRpmX11", category="operacion"),
+    )
+    motor_catalog.create_geotab_rule_group(
+        geotab_db["database_id"],
+        GeotabRuleGroupCreateRequest(motor_id=motor_id, rule_record_ids=[rpm_rule.id]),
+    )
+    assert motor_catalog._list_rule_groups_for_database(geotab_db["database_id"])[0].rules
+
+    converted = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aRpmX11",
+            category="habito_seguro",
+            motor_id=motor_id,
+            event_type="exceso_rpm",
+        ),
+    )
+
+    assert motor_catalog._list_rule_groups_for_database(geotab_db["database_id"]) == []
+    assert [
+        (application.category, application.motor_id, application.event_type)
+        for application in converted.applications
+    ] == [("habito_seguro", motor_id, "exceso_rpm")]
 
 
 # ── Pool de credenciales ──────────────────────────────────────────────
@@ -386,12 +470,14 @@ def test_rules_shared_across_customers_with_same_database(
     sibling_rules = motor_catalog._list_rules_for_database(sibling_geotab_db["database_id"])
     assert [rule.rule_id for rule in sibling_rules] == ["aShared1"]
 
-    # Y no se puede volver a registrar desde la fila hermana.
-    with pytest.raises(ValueError, match="comparten"):
-        motor_catalog.create_geotab_rule(
-            sibling_geotab_db["database_id"],
-            GeotabRuleCreateRequest(rule_id="aShared1", category="operacion"),
-        )
+    # Registrar de nuevo la misma regla desde la fila hermana no duplica la regla
+    # fisica; devuelve el mismo registro y conserva la aplicacion.
+    existing = motor_catalog.create_geotab_rule(
+        sibling_geotab_db["database_id"],
+        GeotabRuleCreateRequest(rule_id="aShared1", category="operacion"),
+    )
+    assert existing.rule_id == "aShared1"
+    assert len(existing.applications) == 1
 
 
 def test_credential_rotation_spans_sibling_databases(geotab_db, sibling_geotab_db):
@@ -521,6 +607,15 @@ async def test_snapshot_exposes_motor_type(client, vehicle, monkeypatch):
         vehicle["database_id"],
         GeotabRuleCreateRequest(rule_id="aSafe1", category="habito_seguro"),
     )
+    motor_catalog.create_geotab_rule(
+        vehicle["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aRpm1",
+            category="habito_seguro",
+            motor_id=motor_id,
+            event_type="exceso_rpm",
+        ),
+    )
     motor_catalog.create_geotab_rule_group(
         vehicle["database_id"],
         GeotabRuleGroupCreateRequest(motor_id=motor_id, rule_record_ids=[op_rule.id]),
@@ -537,6 +632,8 @@ async def test_snapshot_exposes_motor_type(client, vehicle, monkeypatch):
     rules = {r["rule_id"]: r for r in customer["databases"][0]["rules"]}
     assert rules["aOp1"]["motor_type"] == "ISD"
     assert rules["aSafe1"]["motor_type"] is None
+    assert rules["aRpm1"]["motor_type"] == "ISD"
+    assert rules["aRpm1"]["event_type"] == "exceso_rpm"
 
 
 async def test_vehicles_pagination(client, vehicle, monkeypatch):

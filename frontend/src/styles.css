@@ -134,6 +134,58 @@ h1, h2, h3, h4, h5, h6 {
   grid-template-columns: 256px minmax(0, 1fr);
 }
 
+/* Sidebar colapsado: una sola columna, sidebar oculto del todo. */
+.app-grid.is-collapsed {
+  grid-template-columns: 1fr;
+}
+
+.app-grid.is-collapsed .sidebar {
+  display: none;
+}
+
+/* ─────────────────────────────
+   SIDEBAR TOGGLE
+───────────────────────────── */
+
+.sidebar-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.sidebar-toggle:hover {
+  background: var(--red);
+  color: #fff;
+  border-color: var(--red-hover);
+}
+
+/* Toggle para cerrar, dentro del brand-block del sidebar */
+.sidebar-toggle-close {
+  position: absolute;
+  top: 18px;
+  right: 14px;
+}
+
+/* Toggle para abrir, flotante arriba a la izquierda del content-area */
+.sidebar-toggle-open {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 20;
+}
+
 /* ─────────────────────────────
    SIDEBAR
 ───────────────────────────── */
@@ -154,6 +206,7 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Brand block */
 .brand-block {
+  position: relative;
   padding: 24px 20px 20px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
 }
@@ -338,6 +391,11 @@ h1, h2, h3, h4, h5, h6 {
   padding: 28px 32px;
 }
 
+/* Cuando el sidebar esta oculto, deja hueco para el toggle flotante (top-left). */
+.app-grid.is-collapsed .content-shell {
+  padding-left: 56px;
+}
+
 /* ─────────────────────────────
    PAGE STRUCTURE
 ───────────────────────────── */
@@ -469,6 +527,7 @@ h1, h2, h3, h4, h5, h6 {
 .dash-recent-table td strong {
   color: var(--text);
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .dash-recent-table tbody tr:last-child td {
@@ -1917,6 +1976,7 @@ input[readonly] {
 .rule-add-form {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -1934,8 +1994,8 @@ input[readonly] {
 }
 
 .rule-add-form select {
-  width: 150px;
-  flex: 0 0 150px;
+  width: 160px;
+  flex: 0 0 160px;
   height: 34px;
   font-size: 12px;
   padding: 0 28px 0 8px;
@@ -2215,15 +2275,13 @@ input[readonly] {
 }
 
 .motor-group-rule-chip {
-  all: unset;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 5px 8px;
   border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.04);
   border: 1px solid transparent;
-  cursor: pointer;
   transition: all 140ms ease;
 }
 
@@ -2237,6 +2295,15 @@ input[readonly] {
   border-color: var(--red);
 }
 
+.motor-group-rule-chip-main {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  cursor: pointer;
+}
+
 .motor-group-rule-chip-name {
   font-size: 12px;
   font-weight: 600;
@@ -2247,6 +2314,19 @@ input[readonly] {
   font-family: var(--font-mono, "SF Mono", "Fira Code", monospace);
   font-size: 10px;
   color: var(--text-muted);
+}
+
+.rule-app-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(31, 143, 95, 0.1);
+  color: var(--green, #1f8f5f);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 /* ── Unassigned rules ── */
@@ -3968,7 +4048,6 @@ input[type="radio"] {
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-secondary);
-  overflow-wrap: break-word;
 }
 
 .vehicles-table tbody tr:last-child td {
@@ -3989,6 +4068,7 @@ input[type="radio"] {
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text);
+  white-space: nowrap;
 }
 
 .table-empty-row td {
@@ -4560,6 +4640,7 @@ input[type="radio"] {
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text);
+  white-space: nowrap;
 }
 
 .rendimientos-history-card {
@@ -5137,17 +5218,46 @@ input[type="radio"] {
 
 .sidebar-user {
   margin-top: auto;
-  padding: 14px 16px;
+  padding: 10px 16px;
   border-top: 1px solid rgba(195, 202, 200, 0.12);
+  position: relative;
+}
+
+.sidebar-user-trigger {
+  width: 100%;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: inherit;
+  white-space: normal;
+  height: auto;
+  min-height: 0;
+  transition: none;
+}
+
+.sidebar-user-trigger:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-user-arrow {
+  font-size: 8px;
+  color: var(--clear-gray);
+  flex-shrink: 0;
 }
 
 .sidebar-user-info {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  text-align: left;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .sidebar-user-name {
@@ -5155,6 +5265,9 @@ input[type="radio"] {
   font-size: 13px;
   font-weight: 600;
   color: var(--surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-user-role {
@@ -5166,8 +5279,43 @@ input[type="radio"] {
   letter-spacing: 0.08em;
 }
 
-.sidebar-logout {
+.sidebar-user-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 8px;
+  right: 8px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  margin-bottom: 6px;
+}
+
+.sidebar-user-menu-item {
+  display: flex;
+  align-items: center;
   width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  height: auto;
+  min-height: 0;
+  white-space: normal;
+  transition: none;
+}
+
+.sidebar-user-menu-item:hover {
+  background: var(--bg-subtle);
 }
 
 /* ── Audit page ────────────────────────────────────────────────────────────── */
@@ -5603,12 +5751,22 @@ input[type="radio"] {
    MAPA — Geocercas (Leaflet via CDN)
 ───────────────────────────── */
 
+/* El panel del mapa llena el viewport: header + KPIs son altura fija,
+   .mapa-layout hace flex:1 para ocupar todo el resto. Solo la tabla de
+   placas (izquierda) hace scroll; el mapa llena su contenedor. */
+.mapa-panel {
+  display: flex;
+  flex-direction: column;
+  height: calc(100svh - 56px);
+  gap: 16px;
+}
+
 .mapa-layout {
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
   gap: 16px;
-  height: calc(100vh - 280px);
-  min-height: 440px;
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 .mapa-sidebar {
@@ -5632,6 +5790,41 @@ input[type="radio"] {
   width: 100%;
   height: 100%;
   z-index: 0;
+}
+
+.mapa-view-wrapper {
+  position: absolute;
+  inset: 0;
+}
+
+.mapa-reset-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--border-soft, rgba(15, 23, 42, 0.12));
+  border-radius: 999px;
+  background: var(--surface, #ffffff);
+  color: var(--text-strong, #0f172a);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.mapa-reset-btn:hover {
+  background: var(--surface-hover, #f1f5f9);
+  transform: translateY(-1px);
+}
+
+.mapa-reset-btn:active {
+  transform: translateY(0);
 }
 
 .mapa-status {
@@ -5713,6 +5906,7 @@ input[type="radio"] {
   font-size: 13px;
   font-weight: 700;
   color: var(--text);
+  white-space: nowrap;
 }
 
 .mapa-row-sub {
@@ -5808,5 +6002,13 @@ input[type="radio"] {
   }
   .mapa-main {
     height: 360px;
+  }
+}
+
+/* Override: el colapso del sidebar debe ganar sobre las media queries
+   (que redefinen .app-grid). Va al final para ganar por orden de aparicion. */
+@media (max-width: 960px) {
+  .app-grid.is-collapsed {
+    grid-template-columns: 1fr;
   }
 }

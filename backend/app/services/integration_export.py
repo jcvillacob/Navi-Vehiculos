@@ -105,29 +105,41 @@ def _export_customers(
         )
         credential_rows = cur.fetchall()
 
-        # motor_type de una regla = engine_name del motor del grupo al que
-        # pertenece (geotab_rule_groups.motor_id -> motor_catalog). Una regla
-        # esta en <=1 grupo (uq_rule_one_group) y los grupos solo aceptan
-        # reglas 'operacion'; por eso las 'habito_seguro' y las 'operacion' aun
-        # no agrupadas (huerfanas) quedan con motor_type NULL.
+        # Una regla fisica puede tener varias aplicaciones: operacion por motor,
+        # habito seguro global o habito seguro por motor (ej. exceso_rpm X11).
+        # Portal Clientes conserva la regla fisica por rule_id y crea las
+        # aplicaciones por category/motor_type/event_type.
         cur.execute(
             """
-            SELECT
+            SELECT DISTINCT ON (
+                gr.database_id,
+                gr.rule_id,
+                COALESCE(gra.category, gr.category),
+                COALESCE(mc.engine_name, ''),
+                COALESCE(gra.event_type, '')
+            )
                 gr.id,
+                gr.id AS rule_source_id,
+                gra.id AS application_id,
                 gr.database_id,
                 gr.name,
                 gr.rule_id,
-                gr.category,
+                COALESCE(gra.category, gr.category) AS category,
+                gra.event_type,
                 gr.created_at,
                 mc.engine_name AS motor_type
             FROM geotab_rules gr
-            LEFT JOIN geotab_rule_group_rules grgr
-                ON grgr.geotab_rule_id = gr.id
-            LEFT JOIN geotab_rule_groups grg
-                ON grg.id = grgr.group_id
+            LEFT JOIN geotab_rule_applications gra
+                ON gra.geotab_rule_id = gr.id
             LEFT JOIN motor_catalog mc
-                ON mc.id = grg.motor_id
-            ORDER BY gr.database_id ASC, gr.name ASC;
+                ON mc.id = gra.motor_id
+            ORDER BY
+                gr.database_id ASC,
+                gr.rule_id ASC,
+                COALESCE(gra.category, gr.category) ASC,
+                COALESCE(mc.engine_name, '') ASC,
+                COALESCE(gra.event_type, '') ASC,
+                gr.id ASC;
             """
         )
         rule_rows = cur.fetchall()
@@ -150,10 +162,17 @@ def _export_customers(
         rules_by_db.setdefault(int(row["database_id"]), []).append(
             {
                 "id": int(row["id"]),
+                "rule_source_id": int(row["rule_source_id"]),
+                "application_id": (
+                    int(row["application_id"])
+                    if row.get("application_id") is not None
+                    else None
+                ),
                 "rule_id": row["rule_id"],
                 "name": row["name"],
                 "category": row["category"],
                 "motor_type": _normalize_motor_type(row.get("motor_type")),
+                "event_type": row.get("event_type"),
                 "created_at": _iso(row["created_at"]),
             }
         )
@@ -268,6 +287,11 @@ def _export_vehicles(
                 a.nombre_vehiculo,
                 a.vocacional,
                 a.updated_at,
+                -- Categoria EFECTIVA del vehiculo (override propio > cliente >
+                -- 'Ninguna'), mismo criterio que la lista de vehiculos. Portal
+                -- Clientes la usa para is_active: 'Ninguna' = inactivo, las
+                -- gestionadas (Flota Administrada / Experiencia Superior) = activo.
+                COALESCE(a.category, c.category, 'Ninguna') AS category,
                 -- "ID externo" del binding geotab: para una database geotab este
                 -- provider_vehicle_id ES el id del device (lo que ve la UI y usan
                 -- los calculos). a.geotab_device_id solo lo llena la validacion y
@@ -278,6 +302,8 @@ def _export_vehicles(
             FROM vehicle_motor_assignments a
             LEFT JOIN motor_catalog mc
                 ON mc.technical_number = a.technical_number
+            LEFT JOIN customers c
+                ON c.id = a.customer_id
             LEFT JOIN LATERAL (
                 SELECT vpb.provider_vehicle_id
                 FROM vehicle_provider_bindings vpb
@@ -318,6 +344,7 @@ def _export_vehicles(
             "tipo_combustible": row.get("tipo_combustible"),
             "nombre_vehiculo": row.get("nombre_vehiculo"),
             "vocacional": bool(row.get("vocacional")),
+            "category": row.get("category") or "Ninguna",
             "updated_at": _iso(row["updated_at"]),
         }
         for row in rows

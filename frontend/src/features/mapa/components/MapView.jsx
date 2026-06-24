@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 
 import { useLeaflet } from "../hooks/useLeaflet";
@@ -12,6 +12,7 @@ export default function MapView({ geofences, vehicles, selectedPlate, onSelectPl
   const groupsRef = useRef({ geofences: null, vehicles: null });
   const hasFitRef = useRef(false);
   const { L, ready, loading, error } = useLeaflet();
+  const [isZoomed, setIsZoomed] = useState(false);
 
   // Init: crea el mapa una sola vez cuando Leaflet esta listo.
   useEffect(() => {
@@ -86,9 +87,25 @@ export default function MapView({ geofences, vehicles, selectedPlate, onSelectPl
 
     if (selectedPlate) {
       const sel = vehicles.find((v) => v.plate === selectedPlate);
-      if (sel) map.panTo([sel.lat, sel.lng], { animate: true });
+      if (sel) {
+        map.flyTo([sel.lat, sel.lng], 13, { animate: true });
+        setIsZoomed(true);
+      }
     }
   }, [ready, L, geofences, vehicles, selectedPlate, onSelectPlate]);
+
+  const handleResetView = () => {
+    const map = mapRef.current;
+    if (!map || !L) return;
+    if (geofences.length) {
+      const bounds = L.latLngBounds(geofences.map((g) => [g.lat, g.lng]));
+      map.flyToBounds(bounds, { padding: [50, 50] });
+    } else {
+      map.flyTo([4.5, -75], 6);
+    }
+    onSelectPlate?.(null);
+    setIsZoomed(false);
+  };
 
   if (error) {
     return (
@@ -104,7 +121,22 @@ export default function MapView({ geofences, vehicles, selectedPlate, onSelectPl
       </div>
     );
   }
-  return <div className="mapa-view" ref={containerRef} />;
+  return (
+    <div className="mapa-view-wrapper">
+      <div className="mapa-view" ref={containerRef} />
+      {(isZoomed || selectedPlate) && (
+        <button
+          type="button"
+          className="mapa-reset-btn"
+          onClick={handleResetView}
+          aria-label="Ver Colombia completa"
+          title="Ver Colombia completa"
+        >
+          Ver Colombia
+        </button>
+      )}
+    </div>
+  );
 }
 
 function formatHours(h) {

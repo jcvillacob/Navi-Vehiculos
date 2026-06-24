@@ -37,7 +37,7 @@ export default function MapaPage() {
   }, [vehicles]);
 
   return (
-    <section className="panel">
+    <section className="panel mapa-panel">
       <header className="page-header">
         <span className="eyebrow">Geocercas</span>
         <h2>Mapa</h2>

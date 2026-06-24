@@ -30,6 +30,41 @@ function formatMatchModeLabel(value) {
   return value === "any" ? "Cualquiera" : "Todas";
 }
 
+const RULE_EVENT_TYPES = [
+  { value: "", label: "Evento general" },
+  { value: "exceso_rpm", label: "Exceso RPM" }
+];
+
+function getRuleApplications(rule) {
+  if (Array.isArray(rule.applications) && rule.applications.length > 0) {
+    return rule.applications;
+  }
+  return [
+    {
+      id: `legacy-${rule.id}`,
+      category: rule.category || "operacion",
+      motor_id: null,
+      motor_name: null,
+      technical_number: null,
+      event_type: null
+    }
+  ];
+}
+
+function formatRuleApplicationLabel(application) {
+  if (application.event_type === "exceso_rpm") return "Exceso RPM";
+  return application.category === "habito_seguro" ? "Hábito seguro" : "Operación";
+}
+
+function sameMotorIdentity(application, group) {
+  return (
+    String(application.motor_name || "").trim().toLowerCase() ===
+      String(group.motor_name || "").trim().toLowerCase() &&
+    String(application.technical_number || "").trim() ===
+      String(group.technical_number || "").trim()
+  );
+}
+
 /* ── Create Customer Modal ─────────────────────────────────────────── */
 function CreateCustomerModal({ loading, onClose, onSubmit }) {
   const [name, setName] = useState("");
@@ -1029,6 +1064,8 @@ function DatabaseDetailModal({
 }) {
   const [ruleId, setRuleId] = useState("");
   const [ruleCategory, setRuleCategory] = useState("operacion");
+  const [ruleMotorId, setRuleMotorId] = useState("");
+  const [ruleEventType, setRuleEventType] = useState("");
   const [resolveStatus, setResolveStatus] = useState("idle");
   const [resolveError, setResolveError] = useState("");
   const [rulePreview, setRulePreview] = useState(null);
@@ -1051,23 +1088,120 @@ function DatabaseDetailModal({
   const selectedRule = rules.find((rule) => rule.id === selectedRuleId) || null;
 
   const operationRules = useMemo(
-    () => rules.filter((rule) => (rule.category || "operacion") === "operacion"),
+    () => rules.filter((rule) =>
+      getRuleApplications(rule).some((application) => application.category === "operacion")
+    ),
     [rules]
   );
   const safeHabitRules = useMemo(
-    () => rules.filter((rule) => rule.category === "habito_seguro"),
+    () => rules.flatMap((rule) =>
+      getRuleApplications(rule)
+        .filter((application) => application.category === "habito_seguro" && !application.motor_id)
+        .map((application) => ({ rule, application }))
+    ),
     [rules]
   );
 
+  const motorGroupCards = useMemo(() => {
+    const groupsByMotor = new Map();
+
+    const ensureGroup = ({ key, baseGroup, application }) => {
+      if (!groupsByMotor.has(key)) {
+        groupsByMotor.set(key, {
+          id: baseGroup?.id ?? `motor-app-${application.motor_id}`,
+          database_id: baseGroup?.database_id ?? database.id,
+          motor_id: baseGroup?.motor_id ?? application.motor_id,
+          motor_name: baseGroup?.motor_name ?? application.motor_name,
+          technical_number: baseGroup?.technical_number ?? application.technical_number,
+          name: baseGroup?.name ?? application.motor_name,
+          match_mode: baseGroup?.match_mode ?? "all",
+          rules: [],
+          isVirtual: !baseGroup
+        });
+      }
+      return groupsByMotor.get(key);
+    };
+
+    for (const group of ruleGroups) {
+      const key = `${String(group.motor_name).trim().toLowerCase()}|${String(group.technical_number).trim()}`;
+      const merged = ensureGroup({ key, baseGroup: group, application: {} });
+      const existingRuleKeys = new Set(merged.rules.map((rule) => rule.application_key));
+      for (const rule of group.rules) {
+        const fullRule = rules.find((candidate) => candidate.id === rule.rule_record_id);
+        const hasMotorRpmApplication = fullRule
+          ? getRuleApplications(fullRule).some(
+              (application) =>
+                application.category === "habito_seguro" &&
+                application.event_type === "exceso_rpm" &&
+                sameMotorIdentity(application, group)
+            )
+          : false;
+        if (hasMotorRpmApplication) continue;
+        const applicationKey = `${rule.rule_record_id}:operacion:`;
+        if (existingRuleKeys.has(applicationKey)) continue;
+        existingRuleKeys.add(applicationKey);
+        merged.rules.push({
+          ...rule,
+          application_key: applicationKey,
+          application_category: "operacion",
+          event_type: null
+        });
+      }
+      merged.rules.sort((a, b) => a.name.localeCompare(b.name));
+      merged.isVirtual = false;
+    }
+
+    for (const rule of rules) {
+      for (const application of getRuleApplications(rule)) {
+        if (!application.motor_id) continue;
+        const motorName = application.motor_name || "Motor";
+        const technicalNumber = application.technical_number || "";
+        const key = `${String(motorName).trim().toLowerCase()}|${String(technicalNumber).trim()}`;
+        const merged = ensureGroup({ key, application });
+        const applicationKey = `${rule.id}:${application.category}:${application.event_type || ""}`;
+        if (merged.rules.some((currentRule) => currentRule.application_key === applicationKey)) {
+          continue;
+        }
+        if (
+          application.category === "operacion" &&
+          merged.rules.some(
+            (currentRule) =>
+              currentRule.rule_record_id === rule.id &&
+              currentRule.application_category === "operacion"
+          )
+        ) {
+          continue;
+        }
+        merged.rules.push({
+          rule_record_id: rule.id,
+          name: rule.name,
+          rule_id: rule.rule_id,
+          application_key: applicationKey,
+          application_category: application.category,
+          event_type: application.event_type
+        });
+      }
+    }
+
+    return Array.from(groupsByMotor.values())
+      .map((group) => ({
+        ...group,
+        rules: [...group.rules].sort((a, b) => a.name.localeCompare(b.name))
+      }))
+      .sort((a, b) => a.motor_name.localeCompare(b.motor_name) || a.name.localeCompare(b.name));
+  }, [database.id, ruleGroups, rules]);
+
   const assignedRuleIds = useMemo(() => {
     const ids = new Set();
-    for (const group of ruleGroups) {
+    for (const group of motorGroupCards) {
       for (const rule of group.rules) {
-        ids.add(rule.rule_record_id);
+        if (rule.application_category === "operacion") {
+          ids.add(rule.rule_record_id);
+        }
       }
     }
     return ids;
-  }, [ruleGroups]);
+  }, [motorGroupCards]);
 
   const unassignedRules = useMemo(
     () => operationRules.filter((rule) => !assignedRuleIds.has(rule.id)),
@@ -1165,15 +1299,32 @@ function DatabaseDetailModal({
     setSelectedGroupRuleIds((prev) => prev.filter((id) => validUnassigned.has(id)));
   }, [unassignedRules]);
 
+  useEffect(() => {
+    if (ruleCategory === "operacion") {
+      setRuleMotorId("");
+      setRuleEventType("");
+    }
+  }, [ruleCategory]);
+
   const handleAddRule = async (event) => {
     event.preventDefault();
     const normalizedRuleId = ruleId.trim();
     if (!normalizedRuleId || resolveStatus !== "resolved" || rulePreview?.rule_id !== normalizedRuleId) {
       return;
     }
-    const created = await onAddRule({ rule_id: normalizedRuleId, category: ruleCategory });
+    if (ruleEventType === "exceso_rpm" && !ruleMotorId) {
+      return;
+    }
+    const created = await onAddRule({
+      rule_id: normalizedRuleId,
+      category: ruleCategory,
+      motor_id: ruleMotorId ? Number(ruleMotorId) : null,
+      event_type: ruleEventType || null
+    });
     setRuleId("");
     setRuleCategory("operacion");
+    setRuleMotorId("");
+    setRuleEventType("");
     setResolveStatus("idle");
     setResolveError("");
     setRulePreview(null);
@@ -1285,12 +1436,45 @@ function DatabaseDetailModal({
                   <option value="operacion">Operación</option>
                   <option value="habito_seguro">Hábito seguro</option>
                 </select>
+                {ruleCategory === "habito_seguro" ? (
+                  <>
+                    <select
+                      value={ruleEventType}
+                      onChange={(event) => setRuleEventType(event.target.value)}
+                      disabled={loading}
+                      aria-label="Tipo de evento"
+                    >
+                      {RULE_EVENT_TYPES.map((option) => (
+                        <option key={option.value || "general"} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={ruleMotorId}
+                      onChange={(event) => setRuleMotorId(event.target.value)}
+                      disabled={loading || motorsLoading}
+                      required={ruleEventType === "exceso_rpm"}
+                      aria-label="Motor de la regla"
+                    >
+                      <option value="">
+                        {motorsLoading ? "Cargando..." : "Global"}
+                      </option>
+                      {motors.map((motor) => (
+                        <option key={`rule-motor-${motor.id}`} value={motor.id}>
+                          {motor.engine_name} | {motor.technical_number}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                ) : null}
                 {canEdit ? (
                   <button
                     type="submit"
                     className="button button-sm"
                     disabled={
                       loading ||
+                      (ruleEventType === "exceso_rpm" && !ruleMotorId) ||
                       resolveStatus !== "resolved" ||
                       !rulePreview?.exists ||
                       rulePreview?.rule_id !== ruleId.trim()
@@ -1317,7 +1501,7 @@ function DatabaseDetailModal({
               <div className="rules-motor-section-header">
                 <div>
                   <span className="rules-label">Reglas por motor</span>
-                  <span className="rules-count-subtle">{ruleGroups.length} {ruleGroups.length === 1 ? "motor" : "motores"} · {operationRules.length} {operationRules.length === 1 ? "regla" : "reglas"}</span>
+                  <span className="rules-count-subtle">{motorGroupCards.length} {motorGroupCards.length === 1 ? "motor" : "motores"} · {operationRules.length} {operationRules.length === 1 ? "regla" : "reglas"}</span>
                 </div>
                 {canEdit && unassignedRules.length > 0 ? (
                   <button
@@ -1396,9 +1580,9 @@ function DatabaseDetailModal({
               ) : null}
 
               {/* ── Motor group cards ── */}
-              {ruleGroups.length > 0 ? (
+              {motorGroupCards.length > 0 ? (
                 <div className="motor-group-list">
-                  {ruleGroups.map((group) => (
+                  {motorGroupCards.map((group) => (
                     <details className="motor-group-card" key={group.id}>
                       <summary className="motor-group-card-header">
                         <div className="motor-group-card-identity">
@@ -1409,7 +1593,7 @@ function DatabaseDetailModal({
                         <div className="motor-group-card-meta">
                           <span className="rule-badge is-match-mode">{formatMatchModeLabel(group.match_mode)}</span>
                           <span className="rule-badge is-muted">{group.rules.length} {group.rules.length === 1 ? "regla" : "reglas"}</span>
-                          {canEdit && confirmDeleteGroupId === group.id ? (
+                          {canEdit && !group.isVirtual && confirmDeleteGroupId === group.id ? (
                             <div className="motor-group-card-confirm" onClick={(e) => e.stopPropagation()}>
                               <button
                                 type="button"
@@ -1431,7 +1615,7 @@ function DatabaseDetailModal({
                                 &#8592;
                               </button>
                             </div>
-                          ) : canEdit ? (
+                          ) : canEdit && !group.isVirtual ? (
                             <button
                               type="button"
                               className="icon-button rule-delete-button"
@@ -1446,15 +1630,59 @@ function DatabaseDetailModal({
                       </summary>
                       <div className="motor-group-card-rules">
                         {group.rules.map((rule) => (
-                          <button
-                            type="button"
+                          <div
                             className={`motor-group-rule-chip ${selectedRuleId === rule.rule_record_id ? "is-active" : ""}`}
-                            key={`mg-${group.id}-r-${rule.rule_record_id}`}
-                            onClick={() => setSelectedRuleId(rule.rule_record_id)}
+                            key={`mg-${group.id}-r-${rule.application_key || rule.rule_record_id}`}
                           >
-                            <span className="motor-group-rule-chip-name">{rule.name}</span>
-                            <code className="motor-group-rule-chip-id">{rule.rule_id}</code>
-                          </button>
+                            <button
+                              type="button"
+                              className="motor-group-rule-chip-main"
+                              onClick={() => setSelectedRuleId(rule.rule_record_id)}
+                            >
+                              <span className="motor-group-rule-chip-name">{rule.name}</span>
+                              {rule.application_category === "habito_seguro" ? (
+                                <span className="rule-app-tag">{formatRuleApplicationLabel(rule)}</span>
+                              ) : null}
+                              <code className="motor-group-rule-chip-id">{rule.rule_id}</code>
+                            </button>
+                            {canEdit && confirmDeleteRuleId === rule.rule_record_id ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="button-secondary button-sm rule-confirm-delete"
+                                  onClick={() => {
+                                    setConfirmDeleteRuleId(null);
+                                    onDeleteRule({
+                                      id: rule.rule_record_id,
+                                      name: rule.name,
+                                      rule_id: rule.rule_id
+                                    });
+                                  }}
+                                  disabled={loading}
+                                >
+                                  Confirmar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="icon-button rule-delete-button"
+                                  onClick={() => setConfirmDeleteRuleId(null)}
+                                  title="Cancelar"
+                                >
+                                  &#8592;
+                                </button>
+                              </>
+                            ) : canEdit ? (
+                              <button
+                                type="button"
+                                className="icon-button rule-delete-button"
+                                onClick={() => setConfirmDeleteRuleId(rule.rule_record_id)}
+                                disabled={loading}
+                                title="Eliminar regla"
+                              >
+                                &#10005;
+                              </button>
+                            ) : null}
+                          </div>
                         ))}
                       </div>
                     </details>
@@ -1525,7 +1753,7 @@ function DatabaseDetailModal({
                 </div>
               ) : null}
 
-              {operationRules.length > 0 && unassignedRules.length === 0 && ruleGroups.length === 0 ? (
+              {operationRules.length > 0 && unassignedRules.length === 0 && motorGroupCards.length === 0 ? (
                 <div className="rules-empty-state">
                   <p>Todas las reglas necesitan ser asignadas a un motor.</p>
                 </div>
@@ -1542,10 +1770,10 @@ function DatabaseDetailModal({
               </div>
               {safeHabitRules.length > 0 ? (
                 <div className="unassigned-rules-list">
-                  {safeHabitRules.map((rule) => (
+                  {safeHabitRules.map(({ rule, application }) => (
                     <div
                       className={`rule-list-item ${selectedRuleId === rule.id ? "is-selected" : ""}`}
-                      key={`safe-habit-${rule.id}`}
+                      key={`safe-habit-${rule.id}-${application.id}`}
                     >
                       <button
                         type="button"
@@ -1553,6 +1781,9 @@ function DatabaseDetailModal({
                         onClick={() => setSelectedRuleId(rule.id)}
                       >
                         <span className="rule-list-name">{rule.name}</span>
+                        {application.event_type ? (
+                          <span className="rule-app-tag">{formatRuleApplicationLabel(application)}</span>
+                        ) : null}
                         <span className="rule-id-cell">{rule.rule_id}</span>
                       </button>
                       {canEdit && confirmDeleteRuleId === rule.id ? (

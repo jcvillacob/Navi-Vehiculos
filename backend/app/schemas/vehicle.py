@@ -351,6 +351,28 @@ class GeotabRuleCreateRequest(BaseModel):
         default="operacion",
         description="Categoria de la regla: 'operacion' (motor) o 'habito_seguro'",
     )
+    motor_id: int | None = Field(
+        default=None,
+        gt=0,
+        description="Motor al que aplica esta regla; null significa global",
+    )
+    event_type: str | None = Field(
+        default=None,
+        description="Tipo semantico del evento, por ejemplo 'exceso_rpm'",
+    )
+
+
+class GeotabRuleApplicationRecord(BaseModel):
+    id: int = Field(..., description="ID de la aplicacion de la regla")
+    category: str = Field(
+        default="operacion",
+        description="Categoria de aplicacion: 'operacion' o 'habito_seguro'",
+    )
+    motor_id: int | None = Field(default=None, description="ID del motor si la regla aplica a uno")
+    motor_name: str | None = Field(default=None, description="Nombre del motor si aplica")
+    technical_number: str | None = Field(default=None, description="Numero tecnico del motor si aplica")
+    event_type: str | None = Field(default=None, description="Tipo semantico del evento")
+    created_at: datetime = Field(..., description="Fecha de creacion")
 
 
 class GeotabRuleRecord(BaseModel):
@@ -361,6 +383,10 @@ class GeotabRuleRecord(BaseModel):
     category: str = Field(
         default="operacion",
         description="Categoria de la regla: 'operacion' (motor) o 'habito_seguro'",
+    )
+    applications: list[GeotabRuleApplicationRecord] = Field(
+        default_factory=list,
+        description="Aplicaciones de la regla por categoria, motor y tipo de evento",
     )
     created_at: datetime = Field(..., description="Fecha de creacion")
 
@@ -725,5 +751,4 @@ class BatchLookupRequest(BaseModel):
         default=False,
         description="Omitir consultas a Geotab (mas rapido)",
     )
-
 

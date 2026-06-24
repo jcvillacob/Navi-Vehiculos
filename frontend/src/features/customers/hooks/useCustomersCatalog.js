@@ -154,7 +154,13 @@ export function useCustomersCatalog() {
                 ...customer,
                 databases: customer.databases.map((db) =>
                   db.id === databaseId
-                    ? { ...db, rules: [...db.rules, created].sort((a, b) => a.name.localeCompare(b.name)) }
+                    ? {
+                        ...db,
+                        rules: [
+                          ...db.rules.filter((rule) => rule.id !== created.id),
+                          created
+                        ].sort((a, b) => a.name.localeCompare(b.name))
+                      }
                     : db
                 )
               }
@@ -185,7 +191,10 @@ export function useCustomersCatalog() {
                   db.id === databaseId
                     ? {
                         ...db,
-                        rule_groups: [...(db.rule_groups || []), created].sort((a, b) =>
+                        rule_groups: [
+                          ...(db.rule_groups || []).filter((group) => group.id !== created.id),
+                          created
+                        ].sort((a, b) =>
                           a.motor_name.localeCompare(b.motor_name) || a.name.localeCompare(b.name)
                         )
                       }
