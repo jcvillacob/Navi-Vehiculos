@@ -52,17 +52,17 @@ def verify_password(plain: str, hashed: str) -> bool:
 def validate_password_strength(password: str, username: str | None = None) -> list[str]:
     errors: list[str] = []
     if len(password) < 10:
-        errors.append("La contrasena debe tener al menos 10 caracteres.")
+        errors.append("La contraseña debe tener al menos 10 caracteres.")
     if not re.search(r"[A-Z]", password):
-        errors.append("La contrasena debe incluir al menos una mayuscula.")
+        errors.append("La contraseña debe incluir al menos una mayuscula.")
     if not re.search(r"[a-z]", password):
-        errors.append("La contrasena debe incluir al menos una minuscula.")
+        errors.append("La contraseña debe incluir al menos una minuscula.")
     if not re.search(r"\d", password):
-        errors.append("La contrasena debe incluir al menos un numero.")
+        errors.append("La contraseña debe incluir al menos un numero.")
     if not re.search(r"[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]", password):
-        errors.append("La contrasena debe incluir al menos un caracter especial.")
+        errors.append("La contraseña debe incluir al menos un caracter especial.")
     if username and password.strip().lower() == username.strip().lower():
-        errors.append("La contrasena no puede ser igual al nombre de usuario.")
+        errors.append("La contraseña no puede ser igual al nombre de usuario.")
     return errors
 
 

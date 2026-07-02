@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { batchLookupVehiclesStream } from "../../../api/vehicleApi";
+import { assignVehicleDatabase, batchLookupVehiclesStream } from "../../../api/vehicleApi";
 
 const BATCH_SIZE = 500;
 const DEFAULT_DELAY_MS = 1500;
@@ -62,6 +62,12 @@ export function useBulkLookup() {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [responseDurations, setResponseDurations] = useState([]);
   const [restoreCandidate, setRestoreCandidate] = useState(loadStoredBatch);
+  const [customerDatabaseId, setCustomerDatabaseIdState] = useState(null);
+  const [assignmentSummary, setAssignmentSummary] = useState({
+    attempted: 0,
+    success: 0,
+    failed: 0,
+  });
 
   const pauseRef = useRef(false);
   const cancelRef = useRef(false);
@@ -70,6 +76,7 @@ export function useBulkLookup() {
   const processedRef = useRef(0);
   const delayMsRef = useRef(DEFAULT_DELAY_MS);
   const resultsRef = useRef([]);
+  const customerDatabaseIdRef = useRef(null);
 
   useEffect(() => {
     statusRef.current = status;
@@ -90,6 +97,10 @@ export function useBulkLookup() {
   useEffect(() => {
     resultsRef.current = results;
   }, [results]);
+
+  useEffect(() => {
+    customerDatabaseIdRef.current = customerDatabaseId;
+  }, [customerDatabaseId]);
 
   useEffect(() => {
     if (!startedAt || (status !== "running" && status !== "paused")) {
@@ -117,6 +128,7 @@ export function useBulkLookup() {
     setStartedAt(null);
     setElapsedMs(0);
     setResponseDurations([]);
+    setAssignmentSummary({ attempted: 0, success: 0, failed: 0 });
   }, []);
 
   const appendResult = useCallback((entry, durationMs) => {
@@ -202,6 +214,25 @@ export function useBulkLookup() {
                 );
               } catch {
                 /* never break on appendResult failure */
+              }
+
+              // Asignar cliente/database si el usuario lo eligio y la consulta
+              // devolvio una placa valida. No bloquea el stream.
+              const dbId = customerDatabaseIdRef.current;
+              if (dbId && response?.plate && response.status !== "not_found" && response.status !== "error") {
+                setAssignmentSummary((prev) => ({ ...prev, attempted: prev.attempted + 1 }));
+                assignVehicleDatabase(response.plate, { customer_database_id: dbId })
+                  .then(() => {
+                    setAssignmentSummary((prev) => ({ ...prev, success: prev.success + 1 }));
+                  })
+                  .catch((assignErr) => {
+                    setAssignmentSummary((prev) => ({ ...prev, failed: prev.failed + 1 }));
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                      `No se pudo asignar database a ${response.plate}:`,
+                      assignErr?.message || assignErr
+                    );
+                  });
               }
 
               itemIndex += 1;
@@ -308,12 +339,17 @@ export function useBulkLookup() {
     setStartedAt(null);
     setElapsedMs(0);
     setResponseDurations([]);
+    setAssignmentSummary({ attempted: 0, success: 0, failed: 0 });
     clearStoredBatch();
     setRestoreCandidate(null);
   }, []);
 
   const setDelayMs = useCallback((value) => {
     setDelayMsState(clampDelay(value));
+  }, []);
+
+  const setCustomerDatabaseId = useCallback((value) => {
+    setCustomerDatabaseIdState(value || null);
   }, []);
 
   const total = items.length;
@@ -342,6 +378,7 @@ export function useBulkLookup() {
     setCurrentIdentifier(null);
     setStartedAt(restoredStartedAt);
     setElapsedMs(Date.now() - restoredStartedAt);
+    setAssignmentSummary({ attempted: 0, success: 0, failed: 0 });
   }, [restoreCandidate]);
 
   return {
@@ -364,5 +401,8 @@ export function useBulkLookup() {
     averageResponseMs,
     restoreCandidate,
     restoreLastBatch,
+    customerDatabaseId,
+    setCustomerDatabaseId,
+    assignmentSummary,
   };
 }

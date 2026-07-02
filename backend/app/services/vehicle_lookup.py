@@ -117,29 +117,42 @@ def _error_response(
 
 
 def _resolve_vin_from_plate(
-    plate: str, warnings: list[str]
+    plate: str, warnings: list[str], on_step=None
 ) -> tuple[str | None, str, dict[str, str | None]]:
     geotab_status = "unknown"
 
     try:
+        if on_step:
+            on_step({"step": "geotab_lookup", "status": "running", "source": "geotab", "message": f"Buscando {plate} en Geotab..."})
         geotab_cfg = load_geotab_config()
         device = get_device_from_plate(plate, geotab_cfg)
         if device:
             geotab_status = "found"
             vin = extract_geotab_vin(device)
             if vin:
+                if on_step:
+                    on_step({"step": "geotab_lookup", "status": "ok", "source": "geotab", "message": f"Encontrado en Geotab (VIN {vin.strip().upper()})"})
                 return vin.strip().upper(), "found", {}
-            # Device exists in Geotab but has no VIN stored — fall through to SQL
+            if on_step:
+                on_step({"step": "geotab_lookup", "status": "warning", "source": "geotab", "message": "Encontrado en Geotab sin VIN; consultando Fenix..."})
             warnings.append("Vehiculo encontrado en Geotab pero sin VIN registrado. Se intentara obtener el VIN desde SQL.")
         else:
             geotab_status = "not_found"
+            if on_step:
+                on_step({"step": "geotab_lookup", "status": "warning", "source": "geotab", "message": "No encontrado en Geotab; consultando Fenix..."})
             warnings.append("Vehiculo no encontrado en Geotab. Se intentara completar la consulta con SQL.")
     except Exception:
         _logger.exception("Geotab error durante _resolve_vin_from_plate para plate=%s", plate)
+        if on_step:
+            on_step({"step": "geotab_lookup", "status": "error", "source": "geotab", "message": "Error consultando Geotab"})
         warnings.append("No se pudo validar el vehiculo en Geotab.")
 
+    if on_step:
+        on_step({"step": "fenix_lookup", "status": "running", "source": "fenix", "message": f"Buscando {plate} en Fenix..."})
     fallback_row = get_vehicle_by_plate(plate, load_sql_config())
     if fallback_row and fallback_row.get("VIN"):
+        if on_step:
+            on_step({"step": "fenix_lookup", "status": "ok", "source": "fenix", "message": "Encontrado en Fenix"})
         warnings.append("VIN resuelto desde SQL por placa.")
         return (
             str(fallback_row["VIN"]).strip().upper(),
@@ -147,20 +160,32 @@ def _resolve_vin_from_plate(
             _normalize_fenix_details(fallback_row),
         )
 
+    if on_step:
+        on_step({"step": "fenix_lookup", "status": "warning", "source": "fenix", "message": "No encontrado en Fenix"})
     return None, geotab_status, {}
 
 
-def _resolve_geotab_status(plate: str | None, vin: str | None, warnings: list[str]) -> str:
+def _resolve_geotab_status(plate: str | None, vin: str | None, warnings: list[str], on_step=None) -> str:
     try:
+        if on_step:
+            on_step({"step": "geotab_lookup", "status": "running", "source": "geotab", "message": "Validando en Geotab..."})
         geotab_cfg = load_geotab_config()
         if plate and get_device_from_plate(plate, geotab_cfg):
+            if on_step:
+                on_step({"step": "geotab_lookup", "status": "ok", "source": "geotab", "message": "Encontrado en Geotab"})
             return "found"
         if vin and get_device_from_vin(vin, geotab_cfg):
+            if on_step:
+                on_step({"step": "geotab_lookup", "status": "ok", "source": "geotab", "message": "Encontrado en Geotab"})
             return "found"
+        if on_step:
+            on_step({"step": "geotab_lookup", "status": "warning", "source": "geotab", "message": "No encontrado en Geotab"})
         warnings.append("El vehiculo no existe en Geotab.")
         return "not_found"
     except Exception:
         _logger.exception("Geotab error durante _resolve_geotab_status para plate=%s vin=%s", plate, vin)
+        if on_step:
+            on_step({"step": "geotab_lookup", "status": "error", "source": "geotab", "message": "Error consultando Geotab"})
         warnings.append("No se pudo validar la existencia del vehiculo en Geotab.")
         return "unknown"
 
@@ -289,6 +314,7 @@ def lookup_vehicle(
     _prefetched_fenix_row: dict | None | object = _SENTINEL,
     scope: str = "all",
     skip_geotab: bool = False,
+    on_step=None,
 ) -> VehicleLookupResponse:
     normalized_identifier = identifier.strip().upper()
     lookup_type = "vin" if _is_vin(normalized_identifier) else "plate"
@@ -296,6 +322,8 @@ def lookup_vehicle(
     if not force and lookup_type == "plate":
         cached = get_cached_vehicle_lookup(normalized_identifier)
         if cached is not None:
+            if on_step:
+                on_step({"step": "cache_hit", "status": "ok", "source": "cache", "message": "Resultado cargado desde cache local"})
             return cached
     warnings: list[str] = []
     geotab_status = "unknown"
@@ -309,7 +337,12 @@ def lookup_vehicle(
 
     # ── scope="cummins": skip Fenix/Geotab, re-query only Cummins ──
     if scope == "cummins" and lookup_type == "plate":
-        return _lookup_cummins_only(normalized_identifier)
+        if on_step:
+            on_step({"step": "cummins_lookup", "status": "running", "source": "cummins", "message": "Re-consultando QuickServe/Cummins..."})
+        result = _lookup_cummins_only(normalized_identifier)
+        if on_step:
+            on_step({"step": "cummins_lookup", "status": result.status, "source": "cummins", "message": result.message})
+        return result
 
     try:
         sql_cfg = load_sql_config()
@@ -321,24 +354,30 @@ def lookup_vehicle(
                 fenix_details = _normalize_fenix_details(_prefetched_fenix_row)
                 vin = fenix_details.get("vin")
                 if not skip_geotab:
-                    geotab_status = _resolve_geotab_status(plate, vin, warnings)
+                    geotab_status = _resolve_geotab_status(plate, vin, warnings, on_step=on_step)
             elif has_prefetch and not _prefetched_fenix_row:
                 # Batch pre-fetch ran but plate was not found in Fenix
                 if not skip_geotab:
-                    geotab_status = _resolve_geotab_status(plate, None, warnings)
+                    geotab_status = _resolve_geotab_status(plate, None, warnings, on_step=on_step)
             else:
                 if skip_geotab:
                     # Skip Geotab — resolve VIN from SQL only
+                    if on_step:
+                        on_step({"step": "fenix_lookup", "status": "running", "source": "fenix", "message": f"Buscando {normalized_identifier} en Fenix..."})
                     fallback_row = get_vehicle_by_plate(normalized_identifier, sql_cfg)
                     if fallback_row and fallback_row.get("VIN"):
                         vin = str(fallback_row["VIN"]).strip().upper()
                         fenix_details.update(_normalize_fenix_details(fallback_row))
+                        if on_step:
+                            on_step({"step": "fenix_lookup", "status": "ok", "source": "fenix", "message": "Encontrado en Fenix"})
                 else:
                     vin, geotab_status, fallback_fenix_details = _resolve_vin_from_plate(
-                        normalized_identifier, warnings
+                        normalized_identifier, warnings, on_step=on_step
                     )
                     fenix_details.update(fallback_fenix_details)
             if not vin:
+                if on_step:
+                    on_step({"step": "fenix_lookup", "status": "warning", "source": "fenix", "message": "No se resolvio VIN; vehiculo no encontrado"})
                 return _not_found_response(
                     normalized_identifier,
                     lookup_type,
@@ -352,7 +391,14 @@ def lookup_vehicle(
             # Use pre-fetched data (may be the plate row or a separate VIN lookup)
             vehicle_row = _prefetched_fenix_row if _prefetched_fenix_row else None
         else:
+            if on_step and lookup_type == "vin":
+                on_step({"step": "fenix_lookup", "status": "running", "source": "fenix", "message": f"Buscando VIN {vin} en Fenix..."})
             vehicle_row = get_vehicle_by_vin(vin, sql_cfg) if vin else None
+            if on_step and lookup_type == "vin":
+                if vehicle_row:
+                    on_step({"step": "fenix_lookup", "status": "ok", "source": "fenix", "message": "Encontrado en Fenix"})
+                else:
+                    on_step({"step": "fenix_lookup", "status": "warning", "source": "fenix", "message": "No encontrado en Fenix"})
         if not vehicle_row:
             return _not_found_response(
                 normalized_identifier,
@@ -369,7 +415,7 @@ def lookup_vehicle(
             plate = fenix_details["plate"]
 
         if lookup_type == "vin" and not skip_geotab:
-            geotab_status = _resolve_geotab_status(plate, vin, warnings)
+            geotab_status = _resolve_geotab_status(plate, vin, warnings, on_step=on_step)
 
         engine_number = fenix_details.get("engine_number")
         if not engine_number:
@@ -423,6 +469,17 @@ def lookup_vehicle(
             )
 
         cummins_details = get_engine_dataplate(engine_number, quickserve_cfg)
+        if on_step:
+            cummins_ok = bool(
+                cummins_details
+                and (cummins_details.get("Engine Configuration Number") or cummins_details.get("CPL Number"))
+            )
+            on_step({
+                "step": "cummins_lookup",
+                "status": "ok" if cummins_ok else "warning",
+                "source": "cummins",
+                "message": "Encontrado en Cummins/QuickServe" if cummins_ok else "Motor no encontrado en Cummins/QuickServe",
+            })
         cummins_vin = str(cummins_details.get("VIN") or "").strip().upper() or None
         if vin and cummins_vin and cummins_vin != vin:
             warnings.append(
@@ -541,6 +598,25 @@ def lookup_vehicle(
             message = "Consulta completada con advertencias."
 
         geotab_customer_info = get_vehicle_geotab_customer_status(plate)
+
+        if on_step:
+            motor = find_registered_motor(technical_config)
+            on_step({
+                "step": "motor_registered",
+                "status": "ok" if motor else "info",
+                "source": "local",
+                "message": (
+                    f"Motor registrado: {motor.engine_name} (TEC# {motor.technical_number})"
+                    if motor
+                    else "Motor no registrado en catalogo local"
+                ),
+            })
+            on_step({
+                "step": "done",
+                "status": "ok",
+                "source": "local",
+                "message": "Consulta completada",
+            })
 
         return VehicleLookupResponse(
             plate=plate,

@@ -185,7 +185,7 @@ class LogitracsTritonClient:
         )
         if r2.status_code in (401, 403):
             raise LogitracsTritonAuthError(
-                "Credenciales LogiTracs Triton invalidas. Revisa usuario, contrasena y codigoEmpresa."
+                "Credenciales LogiTracs Triton invalidas. Revisa usuario, contraseña y codigoEmpresa."
             )
         r2.raise_for_status()
         self.jwt = r2.json()["token"]

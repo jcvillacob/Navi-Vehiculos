@@ -2,7 +2,7 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "";
 const REFRESH_URL = `${API_BASE}/api/v1/auth/refresh`;
 let refreshPromise = null;
 
-function buildUrl(path) {
+export function buildUrl(path) {
   return `${API_BASE}${path}`;
 }
 
@@ -38,7 +38,7 @@ async function attemptRefresh() {
   return refreshPromise;
 }
 
-async function fetchWithAuth(input, init = {}, retry = true) {
+export async function fetchWithAuth(input, init = {}, retry = true) {
   const response = await fetch(input, {
     credentials: "include",
     ...init,
@@ -105,7 +105,7 @@ export async function changeOwnPassword(payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  return parseJsonOrThrow(response, "Error cambiando contrasena");
+  return parseJsonOrThrow(response, "Error cambiando contraseña");
 }
 
 export async function fetchSessions(userId = null) {
@@ -159,7 +159,7 @@ export async function resetUserPassword(userId, payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  return parseJsonOrThrow(response, "Error reseteando contrasena");
+  return parseJsonOrThrow(response, "Error reseteando contraseña");
 }
 
 // ── Audit logs (admin) ────────────────────────────────────────────────────────
@@ -174,6 +174,11 @@ export async function fetchAuditLogs(limit = 100, offset = 0) {
 
 export async function fetchDashboardSummary() {
   const response = await fetchWithAuth(buildUrl("/api/v1/dashboard/summary"));
+  return parseJsonOrThrow(response, "Error obteniendo resumen del dashboard");
+}
+
+export async function fetchDashboardSummaryV2() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/dashboard/summary/v2"));
   return parseJsonOrThrow(response, "Error obteniendo resumen del dashboard");
 }
 
@@ -292,6 +297,60 @@ export async function lookupVehicle(identifier, { force = false } = {}) {
   if (force) query.set("force", "true");
   const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/lookup?${query.toString()}`));
   return parseJsonOrThrow(response, "Error consultando la API");
+}
+
+export async function lookupVehicleStream(identifier, { force = false, onStep, signal } = {}) {
+  const query = new URLSearchParams({ identifier: identifier.trim().toUpperCase() });
+  if (force) query.set("force", "true");
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/lookup/stream?${query.toString()}`), { signal });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "Error consultando la API");
+    throw new Error(text);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed.type === "step" && onStep) {
+          onStep(parsed);
+        } else if (parsed.type === "result") {
+          result = parsed.result;
+        } else if (parsed.type === "error") {
+          throw new Error(parsed.message || "Error en la consulta");
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message && err.message !== trimmed) throw err;
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    try {
+      const parsed = JSON.parse(buffer.trim());
+      if (parsed.type === "step" && onStep) onStep(parsed);
+      else if (parsed.type === "result") result = parsed.result;
+      else if (parsed.type === "error") throw new Error(parsed.message || "Error en la consulta");
+    } catch (err) {
+      if (err instanceof Error && err.message && err.message !== buffer.trim()) throw err;
+    }
+  }
+
+  if (!result) throw new Error("La consulta finalizo sin resultado");
+  return result;
 }
 
 export async function batchLookupVehiclesStream(identifiers, { force = false, scope = "all", skipGeotab = false, onResult, signal } = {}) {

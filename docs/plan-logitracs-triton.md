@@ -92,7 +92,7 @@ logivim_base_url: str = "https://triton.logitracs.com/LogiVIMwebTriton/public"
 2. **Paso 1** — `GET {triton_base_url}/Login` para obtener cookies (`XSRF-TOKEN`, etc.). `raise_for_status`.
 3. Helper `_inject_xsrf()`: si hay cookie `XSRF-TOKEN`, setear `session.headers["X-XSRF-TOKEN"] = urllib.parse.unquote(cookie_value)`.
 4. **Paso 2** — `POST {triton_base_url}/api/Usuarios/Login` con body JSON `{"username","password","codigoEmpresa"}`. Headers `Content-Type: application/json;charset=UTF-8`, `Accept: application/json, text/plain, */*`, `Origin: https://triton.logitracs.com`, `Referer: {triton_base_url}/Login`.
-   - Si status ∈ {401,403}: `raise LogitracsTritonAuthError("Credenciales LogiTracs Triton invalidas. Revisa usuario, contrasena y codigoEmpresa.")`.
+   - Si status ∈ {401,403}: `raise LogitracsTritonAuthError("Credenciales LogiTracs Triton invalidas. Revisa usuario, contraseña y codigoEmpresa.")`.
    - Guardar `self.jwt = resp.json()["token"]`.
    - Decodificar el segundo segmento del JWT (base64url + padding `=*(-len%4)`) y extraer `EmailUsuario` → `self.email_usuario`.
 5. **Paso 3 — SSO**:

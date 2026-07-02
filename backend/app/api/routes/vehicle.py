@@ -1,7 +1,14 @@
+import json
+import logging
+import queue
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import require_permission
+
+_logger = logging.getLogger(__name__)
 from app.schemas.vehicle import (
     AssignedDatabaseSummary,
     BatchLookupRequest,
@@ -38,6 +45,67 @@ def lookup_vehicle(
     _user: dict = Depends(require_permission("engine_lookup.use")),
 ) -> VehicleLookupResponse:
     return lookup_vehicle_service(identifier, force=force)
+
+
+@router.get("/lookup/stream")
+def lookup_vehicle_stream(
+    identifier: str = Query(..., min_length=3, max_length=32, description="Placa o VIN del vehiculo"),
+    force: bool = Query(default=False, description="Forzar consulta externa ignorando cache local"),
+    _user: dict = Depends(require_permission("engine_lookup.use")),
+):
+    """Lookup individual con eventos de progreso en formato NDJSON.
+
+    Cada linea es un objeto JSON con uno de dos shapes:
+      - {"type": "step", "step": "...", "status": "...", "source": "...", "message": "..."}
+      - {"type": "result", "result": {...VehicleLookupResponse...}}
+      - {"type": "error", "message": "..."}
+    """
+    def generate():
+        q: queue.Queue[str | None] = queue.Queue()
+        done = threading.Event()
+
+        def on_step(payload: dict) -> None:
+            try:
+                q.put(json.dumps({"type": "step", **payload}, ensure_ascii=False) + "\n", timeout=2)
+            except Exception:
+                _logger.exception("Error serializando step de lookup")
+
+        def run_lookup():
+            try:
+                response = lookup_vehicle_service(identifier, force=force, on_step=on_step)
+                q.put(
+                    json.dumps(
+                        {"type": "result", "result": response.model_dump()}, default=str
+                    )
+                    + "\n",
+                    timeout=2,
+                )
+            except Exception as exc:
+                q.put(
+                    json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False) + "\n",
+                    timeout=2,
+                )
+            finally:
+                done.set()
+                q.put(None, timeout=2)
+
+        threading.Thread(target=run_lookup, daemon=True).start()
+
+        while True:
+            try:
+                line = q.get(timeout=30)
+            except queue.Empty:
+                yield json.dumps(
+                    {"type": "error", "message": "Timeout esperando respuesta"}, ensure_ascii=False
+                ) + "\n"
+                return
+            if line is None:
+                return
+            yield line
+            if done.is_set() and q.empty():
+                return
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 @router.get("", response_model=list[VehicleAssignmentRecord])

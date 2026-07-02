@@ -4,61 +4,91 @@ import "leaflet/dist/leaflet.css";
 import { useLeaflet } from "../hooks/useLeaflet";
 
 const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
-const TILE_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+const TILE_ATTR =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
-export default function MapView({ geofences, vehicles, selectedPlate, onSelectPlate }) {
+// Radio por defecto (m) para las geocercas de taller. Las geocercas reales
+// vienen de Geotab; hasta entonces dibujamos un circulo pequeno que
+// representa el edificio del taller.
+const DEFAULT_ZONE_RADIUS_M = 200;
+
+// Paleta ciclica para distinguir zonas en el mapa.
+const ZONE_COLORS = ["#ee2e2f", "#185979", "#d4a017", "#1f8f5f", "#7a5af8", "#354550"];
+
+function formatDuration(minutes) {
+  if (minutes == null) return "—";
+  const m = Math.max(0, Math.floor(minutes));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const rem = m - h * 60;
+  return rem ? `${h}h ${rem}m` : `${h}h`;
+}
+
+function formatLocalTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString("es-CO", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+export default function MapView({ zones, vehicles, selectedPlate, onSelectPlate }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
-  const groupsRef = useRef({ geofences: null, vehicles: null });
+  const groupsRef = useRef({ zones: null, vehicles: null });
   const hasFitRef = useRef(false);
   const { L, ready, loading, error } = useLeaflet();
   const [isZoomed, setIsZoomed] = useState(false);
 
-  // Init: crea el mapa una sola vez cuando Leaflet esta listo.
   useEffect(() => {
     if (!ready || !L || !containerRef.current || mapRef.current) return;
-    const map = L.map(containerRef.current, { zoomControl: true, attributionControl: true }).setView(
-      [4.5, -75],
-      6
-    );
+    const map = L.map(containerRef.current, {
+      zoomControl: true,
+      attributionControl: true,
+    }).setView([4.5, -75], 6);
     L.tileLayer(TILE_URL, { attribution: TILE_ATTR, maxZoom: 19 }).addTo(map);
-    groupsRef.current.geofences = L.layerGroup().addTo(map);
+    groupsRef.current.zones = L.layerGroup().addTo(map);
     groupsRef.current.vehicles = L.layerGroup().addTo(map);
     mapRef.current = map;
     return () => {
       map.remove();
       mapRef.current = null;
-      groupsRef.current = { geofences: null, vehicles: null };
+      groupsRef.current = { zones: null, vehicles: null };
       hasFitRef.current = false;
     };
   }, [ready, L]);
 
-  // Render de capas: geocercas + markers de vehiculos. Se reejecuta cuando
-  // cambian los datos o la seleccion (para resaltar el marker activo).
   useEffect(() => {
     if (!ready || !L || !mapRef.current) return;
     const map = mapRef.current;
-    const gfGroup = groupsRef.current.geofences;
+    const zGroup = groupsRef.current.zones;
     const vGroup = groupsRef.current.vehicles;
-    gfGroup.clearLayers();
+    zGroup.clearLayers();
     vGroup.clearLayers();
 
-    geofences.forEach((g) => {
-      L.circle([g.lat, g.lng], {
-        radius: g.radiusM,
-        color: g.color,
+    const zoneById = new Map();
+
+    zones.forEach((z, index) => {
+      const color = ZONE_COLORS[index % ZONE_COLORS.length];
+      zoneById.set(z.id, { ...z, color });
+
+      L.circle([z.lat, z.lng], {
+        radius: DEFAULT_ZONE_RADIUS_M,
+        color,
         weight: 2,
-        fillColor: g.color,
+        fillColor: color,
         fillOpacity: 0.12,
-      }).addTo(gfGroup);
+      }).addTo(zGroup);
 
       const labelIcon = L.divIcon({
         className: "mapa-geofence-label",
-        html: `<span style="color:${g.color}">${g.name}</span>`,
-        iconSize: [80, 18],
-        iconAnchor: [40, 9],
+        html: `<span style="color:${color}">${z.name}</span>`,
+        iconSize: [120, 18],
+        iconAnchor: [60, 9],
       });
-      L.marker([g.lat, g.lng], { icon: labelIcon, interactive: false }).addTo(gfGroup);
+      L.marker([z.lat, z.lng], { icon: labelIcon, interactive: false }).addTo(zGroup);
     });
 
     vehicles.forEach((v) => {
@@ -70,17 +100,23 @@ export default function MapView({ geofences, vehicles, selectedPlate, onSelectPl
         iconAnchor: [30, 11],
       });
       const marker = L.marker([v.lat, v.lng], { icon }).addTo(vGroup);
-      marker.bindPopup(
-        `<strong>${v.plate}</strong><br/>${v.geofenceName}<br/>${formatHours(v.hoursInside)} dentro` +
-          (v.motor ? `<br/>Motor: ${v.motor}` : "") +
-          (v.cliente ? `<br/>Cliente: ${v.cliente}` : "")
-      );
+      const zone = zoneById.get(v.zone_id);
+      const zoneName = v.zone_name || zone?.name || "—";
+      const popupHtml =
+        `<strong>${v.plate}</strong>` +
+        `<br/>${zoneName}` +
+        `<br/>${formatDuration(v.minutes_inside)} dentro` +
+        (v.motor ? `<br/>Motor: ${v.motor}` : "") +
+        (v.client_name ? `<br/>Cliente: ${v.client_name}` : "") +
+        (v.category ? `<br/>Categoria: ${v.category}` : "") +
+        (v.enter_ts_local ? `<br/>Ingreso: ${formatLocalTime(v.enter_ts_local)}` : "");
+      marker.bindPopup(popupHtml);
       marker.on("click", () => onSelectPlate?.(v.plate));
       if (isSel) marker.openPopup();
     });
 
-    if (!hasFitRef.current && geofences.length) {
-      const bounds = L.latLngBounds(geofences.map((g) => [g.lat, g.lng]));
+    if (!hasFitRef.current && zones.length) {
+      const bounds = L.latLngBounds(zones.map((z) => [z.lat, z.lng]));
       map.fitBounds(bounds, { padding: [50, 50] });
       hasFitRef.current = true;
     }
@@ -88,17 +124,17 @@ export default function MapView({ geofences, vehicles, selectedPlate, onSelectPl
     if (selectedPlate) {
       const sel = vehicles.find((v) => v.plate === selectedPlate);
       if (sel) {
-        map.flyTo([sel.lat, sel.lng], 13, { animate: true });
+        map.flyTo([sel.lat, sel.lng], 16, { animate: true });
         setIsZoomed(true);
       }
     }
-  }, [ready, L, geofences, vehicles, selectedPlate, onSelectPlate]);
+  }, [ready, L, zones, vehicles, selectedPlate, onSelectPlate]);
 
   const handleResetView = () => {
     const map = mapRef.current;
     if (!map || !L) return;
-    if (geofences.length) {
-      const bounds = L.latLngBounds(geofences.map((g) => [g.lat, g.lng]));
+    if (zones.length) {
+      const bounds = L.latLngBounds(zones.map((z) => [z.lat, z.lng]));
       map.flyToBounds(bounds, { padding: [50, 50] });
     } else {
       map.flyTo([4.5, -75], 6);
@@ -137,11 +173,4 @@ export default function MapView({ geofences, vehicles, selectedPlate, onSelectPl
       )}
     </div>
   );
-}
-
-function formatHours(h) {
-  if (h == null) return "—";
-  const hours = Math.floor(h);
-  const mins = Math.round((h - hours) * 60);
-  return mins ? `${hours}h ${mins}m` : `${hours}h`;
 }

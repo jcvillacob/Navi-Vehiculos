@@ -112,7 +112,7 @@ class TestFrotcomAdapterAuthHandling:
         with patch(
             "app.services.performance_providers.list_frotcom_vehicles",
             side_effect=FrotcomAuthError(
-                "Credenciales Frotcom invalidas. Revisa usuario y contrasena de la database."
+                "Credenciales Frotcom invalidas. Revisa usuario y contraseña de la database."
             ),
         ) as mock_list:
             result = provider.calculate_database_rows(
@@ -150,7 +150,7 @@ class TestFrotcomAdapterAuthHandling:
         def fake_calculate(*, target, config, **_kwargs):
             calls.append(target.plate)
             raise FrotcomAuthError(
-                "Credenciales Frotcom invalidas. Revisa usuario y contrasena de la database."
+                "Credenciales Frotcom invalidas. Revisa usuario y contraseña de la database."
             )
 
         with patch(
@@ -198,7 +198,7 @@ class TestArtimoAuthHandling:
         mock_artimo = MagicMock()
         mock_artimo.get_month_range.return_value = ("2026-01-01", "2026-01-31")
         mock_artimo.get_report.side_effect = ArtimoAuthError(
-            "Credenciales Artimo invalidas. Revisa usuario y contrasena de la database."
+            "Credenciales Artimo invalidas. Revisa usuario y contraseña de la database."
         )
 
         with patch(

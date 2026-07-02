@@ -222,7 +222,7 @@ def change_password(
     user: dict = Depends(get_current_user),
 ) -> dict:
     if not verify_password(payload.current_password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="La contrasena actual es incorrecta")
+        raise HTTPException(status_code=401, detail="La contraseña actual es incorrecta")
 
     errors = validate_password_strength(payload.new_password, user["username"])
     if errors:

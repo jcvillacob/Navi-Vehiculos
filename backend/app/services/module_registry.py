@@ -71,6 +71,12 @@ MODULES: list[dict] = [
         "description": "Consulta de logs y eventos del sistema.",
         "levels": ["lectura"],
     },
+    {
+        "key": "mapa",
+        "label": "Mapa de taller",
+        "description": "Mapa de vehículos en taller. Gestión manual de estado.",
+        "levels": ["escritura"],
+    },
 ]
 
 
@@ -115,6 +121,7 @@ MODULE_CODENAMES: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("roles", "escritura"): ("roles.manage",),
     ("auditoria", "lectura"): ("audit.view",),
+    ("mapa", "escritura"): ("mapa.taller.manage",),
 }
 
 
@@ -142,6 +149,7 @@ PERMISSION_DESCRIPTIONS: dict[str, str] = {
     "audit.view": "Ver auditoria",
     "engine_lookup.use": "Consultar motor por placa",
     "engine_lookup.batch": "Consultar motores en lote",
+    "mapa.taller.manage": "Gestionar estado manual del mapa de taller",
 }
 
 

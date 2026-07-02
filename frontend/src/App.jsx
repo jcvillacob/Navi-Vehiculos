@@ -39,7 +39,7 @@ function ChangePasswordModal({ user, onClose }) {
       });
       onClose();
     } catch (err) {
-      setError(err.message || "No fue posible cambiar la contrasena");
+      setError(err.message || "No fue posible cambiar la contraseña");
     } finally {
       setSaving(false);
     }
@@ -47,22 +47,22 @@ function ChangePasswordModal({ user, onClose }) {
 
   return (
     <div className="modal-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Cambiar contrasena">
+      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Cambiar contraseña">
         <header className="modal-header">
           <div className="modal-heading">
             <span className="eyebrow">Seguridad</span>
-            <h3>Cambiar contrasena</h3>
+            <h3>Cambiar contraseña</h3>
           </div>
           <button type="button" className="icon-button modal-close-button" onClick={onClose}>Cerrar</button>
         </header>
         {error ? <div className="notice-banner notice-error">{error}</div> : null}
         <form className="register-form" onSubmit={handleSubmit}>
           <div className="form-field">
-            <label htmlFor="current-password">Contrasena actual</label>
+            <label htmlFor="current-password">Contraseña actual</label>
             <PasswordInput id="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
           </div>
           <div className="form-field">
-            <label htmlFor="new-password">Nueva contrasena</label>
+            <label htmlFor="new-password">Nueva contraseña</label>
             <PasswordInput id="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
           </div>
           {newPassword && errors.length ? (
@@ -70,7 +70,7 @@ function ChangePasswordModal({ user, onClose }) {
           ) : null}
           <div className="actions-row modal-actions">
             <button type="submit" disabled={saving || !currentPassword || !newPassword || errors.length > 0}>
-              {saving ? "Guardando..." : "Actualizar contrasena"}
+              {saving ? "Guardando..." : "Actualizar contraseña"}
             </button>
             <button type="button" className="button-secondary" onClick={onClose}>Cancelar</button>
           </div>

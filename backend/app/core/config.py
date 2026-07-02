@@ -29,6 +29,23 @@ class Settings:
     environment: str = os.getenv("ENVIRONMENT", "development").strip().lower()
     max_concurrent_sessions: int = int(os.getenv("MAX_CONCURRENT_SESSIONS", "0"))
 
+    # Webhook Geotab "taller" (consultar docs/plan-mapa-taller-geotab.md).
+    geotab_webhook_api_keys: tuple[str, ...] = tuple(
+        key.strip()
+        for key in os.getenv("GEOTAB_WEBHOOK_API_KEYS", "").split(",")
+        if key.strip()
+    )
+    geotab_taller_rule_enter: str = os.getenv(
+        "GEOTAB_TALLER_RULE_ENTER", "En taller - Proyecto"
+    ).strip()
+    geotab_taller_rule_exit: str = os.getenv(
+        "GEOTAB_TALLER_RULE_EXIT", "Salida taller - Proyecto"
+    ).strip()
+    taller_min_minutes: int = int(os.getenv("TALLER_MIN_MINUTES", "30"))
+    taller_grace_hours: int = int(os.getenv("TALLER_GRACE_HOURS", "1"))
+    taller_in_ttl_days: int = int(os.getenv("TALLER_IN_TTL_DAYS", "30"))
+    mapa_snapshot_ttl_seconds: int = int(os.getenv("MAPA_SNAPSHOT_TTL_SECONDS", "60"))
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"

@@ -1,17 +1,22 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import {
   assignVehicleDatabase,
   createMotor,
-  lookupVehicle,
+  lookupVehicleStream,
   manualAssignVehicle,
   uploadMotorAttachment
 } from "../../../api/vehicleApi";
+
+const MIN_STEP_MS = 220;
 
 export function useEngineLookup() {
   const [loading, setLoading] = useState(false);
   const [lookupResult, setLookupResult] = useState(null);
   const [error, setError] = useState("");
+  const [steps, setSteps] = useState([]);
+  const abortRef = useRef(null);
+  const lastStepAtRef = useRef(0);
 
   const isManualAssignment = useMemo(
     () =>
@@ -46,22 +51,59 @@ export function useEngineLookup() {
   );
 
   const resetLookup = () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    lastStepAtRef.current = 0;
     setLookupResult(null);
     setError("");
     setLoading(false);
+    setSteps([]);
   };
 
   const searchVehicle = async (identifier, { force = false } = {}) => {
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setError("");
     setLookupResult(null);
+    setSteps([]);
+    lastStepAtRef.current = 0;
 
     try {
-      const response = await lookupVehicle(identifier, { force });
+      const response = await lookupVehicleStream(identifier, {
+        force,
+        signal: controller.signal,
+        onStep: async (step) => {
+          const now = Date.now();
+          const last = lastStepAtRef.current;
+          if (last > 0) {
+            const elapsed = now - last;
+            if (elapsed < MIN_STEP_MS) {
+              await new Promise((r) => setTimeout(r, MIN_STEP_MS - elapsed));
+            }
+          }
+          lastStepAtRef.current = Date.now();
+          setSteps((prev) => [...prev, step]);
+        },
+      });
       setLookupResult(response);
     } catch (err) {
+      if (err?.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Error inesperado consultando motor");
     } finally {
+      // Mantener el timeline visible un instante para que el usuario lea el
+      // ultimo step antes de que se oculte al mostrarse el resultado.
+      const last = lastStepAtRef.current;
+      const elapsed = last > 0 ? Date.now() - last : 0;
+      const remain = Math.max(0, MIN_STEP_MS - elapsed);
+      if (remain > 0) {
+        await new Promise((r) => setTimeout(r, remain));
+      }
+      setSteps([]);
+      if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
   };
@@ -178,6 +220,7 @@ export function useEngineLookup() {
     loading,
     lookupResult,
     error,
+    steps,
     isManualAssignment,
     canRegisterCurrentMotor,
     canConfigureCurrentVehicle,

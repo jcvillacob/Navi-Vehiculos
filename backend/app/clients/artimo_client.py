@@ -169,7 +169,7 @@ class ArtimoClient:
         )
         if response.status_code in (401, 403):
             raise ArtimoAuthError(
-                "Credenciales Artimo invalidas. Revisa usuario y contrasena de la database."
+                "Credenciales Artimo invalidas. Revisa usuario y contraseña de la database."
             )
         response.raise_for_status()
         payload = response.json()

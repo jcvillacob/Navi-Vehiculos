@@ -20,6 +20,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.jobs.rendimientos_cron import _run as run_rendimientos_cron
 from app.services.auth_service import cleanup_expired_refresh_tokens
+from app.services.geotab_taller import sweep_expired_grace as _sweep_taller_grace
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ _CRON_TZ = "America/Bogota"
 _CRON_HOUR = 5
 _CRON_MINUTE = 0
 _CLEANUP_INTERVAL_MINUTES = 60
+_TALLER_SWEEP_MINUTES = 5
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -71,6 +73,15 @@ def start() -> None:
         coalesce=True,
         max_instances=1,
     )
+    scheduler.add_job(
+        _safe_sweep_taller_grace,
+        trigger=IntervalTrigger(minutes=_TALLER_SWEEP_MINUTES),
+        id="taller_grace_sweep",
+        name="Sweep taller grace states older than TALLER_GRACE_HOURS",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
     scheduler.start()
     _scheduler = scheduler
 
@@ -102,4 +113,16 @@ def _safe_cleanup_refresh_tokens() -> int:
         return deleted
     except Exception:
         logger.exception("Fallo en cleanup de refresh_tokens")
+        return 0
+
+
+def _safe_sweep_taller_grace() -> int:
+    """Wrapper que loggea excepciones del job periodico."""
+    try:
+        purged = _sweep_taller_grace()
+        if purged:
+            logger.info("Sweep taller grace: %d placas purgadas.", purged)
+        return purged
+    except Exception:
+        logger.exception("Fallo en sweep de taller grace")
         return 0

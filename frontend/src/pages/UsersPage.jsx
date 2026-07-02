@@ -166,17 +166,17 @@ function ResetPasswordModal({ user, loading, onClose, onSubmit }) {
 
   return (
     <div className="modal-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Resetear contrasena">
+      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Resetear contraseña">
         <header className="modal-header">
           <div className="modal-heading">
             <span className="eyebrow">Seguridad</span>
-            <h3>Resetear contrasena: {user.username}</h3>
+            <h3>Resetear contraseña: {user.username}</h3>
           </div>
           <button type="button" className="icon-button modal-close-button" onClick={onClose}>Cerrar</button>
         </header>
         <form className="register-form" onSubmit={handleSubmit}>
           <div className="form-field">
-            <label htmlFor="reset-password">Nueva contrasena</label>
+            <label htmlFor="reset-password">Nueva contraseña</label>
             <PasswordInput id="reset-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
           </div>
           {password && errors.length ? (
@@ -184,7 +184,7 @@ function ResetPasswordModal({ user, loading, onClose, onSubmit }) {
           ) : null}
           <div className="actions-row modal-actions">
             <button type="submit" disabled={loading || !password || errors.length > 0}>
-              {loading ? "Guardando..." : "Resetear contrasena"}
+              {loading ? "Guardando..." : "Resetear contraseña"}
             </button>
             <button type="button" className="button-secondary" onClick={onClose}>Cancelar</button>
           </div>

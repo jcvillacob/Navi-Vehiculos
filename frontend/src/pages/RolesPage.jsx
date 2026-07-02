@@ -182,31 +182,32 @@ function PermissionMatrix({ modules, current, disabled, onChange }) {
                     <strong>{module.label}</strong>
                     <span className="roles-matrix-module-desc">{module.description}</span>
                   </td>
-                  {module.levels.includes("lectura") || module.levels.includes("escritura") ? (
-                    LEVEL_OPTIONS.filter((opt) => {
-                      if (opt.value === "ninguno") return true;
-                      return module.levels.includes(opt.value);
-                    }).map((opt) => (
+                  {LEVEL_OPTIONS.map((opt) => {
+                    const supported = opt.value === "ninguno" || module.levels.includes(opt.value);
+                    const isDisabled = disabled || !supported;
+                    const reason = !supported
+                      ? `El modulo "${module.label}" no admite nivel "${opt.label}".`
+                      : undefined;
+                    return (
                       <td key={opt.value} data-label={opt.label}>
-                        <label className={`roles-matrix-radio ${disabled ? "is-disabled" : ""}`}>
+                        <label
+                          className={`roles-matrix-radio ${isDisabled ? "is-disabled" : ""}`}
+                          title={reason}
+                        >
                           <input
                             type="radio"
                             name={`module-${module.key}`}
                             value={opt.value}
                             checked={value === opt.value}
                             onChange={() => setLevel(module.key, opt.value)}
-                            disabled={disabled}
+                            disabled={isDisabled}
                           />
                           <span className={`roles-matrix-radio-dot level-${opt.value}`} aria-hidden />
                           <span className="roles-matrix-radio-label">{opt.label}</span>
                         </label>
                       </td>
-                    ))
-                  ) : (
-                    <td colSpan={3} data-label="Niveles">
-                      <span className="status status-soft">Sin niveles editables</span>
-                    </td>
-                  )}
+                    );
+                  })}
                 </tr>
               );
             })}

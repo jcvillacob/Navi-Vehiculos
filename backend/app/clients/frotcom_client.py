@@ -46,7 +46,7 @@ def _authorize_token(config: FrotcomConfig) -> str:
     )
     if response.status_code in (401, 403):
         raise FrotcomAuthError(
-            "Credenciales Frotcom invalidas. Revisa usuario y contrasena de la database."
+            "Credenciales Frotcom invalidas. Revisa usuario y contraseña de la database."
         )
     if response.status_code != 201:
         raise RuntimeError(

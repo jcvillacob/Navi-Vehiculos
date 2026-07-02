@@ -101,7 +101,7 @@ class TestLogitracsProvider:
         with patch(
             "app.services.performance_providers.LogitracsTritonClient.get_fleet_operational_report",
             side_effect=LogitracsTritonAuthError(
-                "Credenciales LogiTracs Triton invalidas. Revisa usuario, contrasena y codigoEmpresa."
+                "Credenciales LogiTracs Triton invalidas. Revisa usuario, contraseña y codigoEmpresa."
             ),
         ) as mock_get_report:
             result = provider.calculate_database_rows(

@@ -6,6 +6,7 @@ import { useToasts } from "../components/useToasts";
 import { usePermission } from "../context/AuthContext";
 import BulkLookupPage from "./BulkLookupPage";
 import LookupDetails from "../features/engineLookup/components/LookupDetails";
+import LookupTimeline from "../features/engineLookup/components/LookupTimeline";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import { useEngineLookup } from "../features/engineLookup/hooks/useEngineLookup";
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
@@ -51,6 +52,7 @@ export default function EngineLookupPage() {
     loading,
     lookupResult,
     error,
+    steps,
     isManualAssignment,
     canRegisterCurrentMotor,
     canConfigureCurrentVehicle,
@@ -191,6 +193,9 @@ export default function EngineLookupPage() {
           ) : null}
 
           <ToastStack toasts={toasts} />
+          {loading ? (
+            <LookupTimeline steps={steps} loading={loading} />
+          ) : null}
           {!customersLoading && customers.length === 0 && lookupResult ? (
             <p className="notice-banner notice-soft">
               Crea clientes y databases en Gestion para poder asignarlos a un vehiculo.

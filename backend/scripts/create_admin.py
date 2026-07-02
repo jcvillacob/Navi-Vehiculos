@@ -47,7 +47,7 @@ def main() -> None:
         print("Error: ingresa un email valido.")
         sys.exit(1)
     if len(password) < 8:
-        print("Error: la contrasena debe tener al menos 8 caracteres.")
+        print("Error: la contraseña debe tener al menos 8 caracteres.")
         sys.exit(1)
 
     existing = get_user_by_username(username)

@@ -2483,7 +2483,7 @@ def create_database_credential(
     normalized_username = payload.username.strip()
     normalized_password = payload.password.strip()
     if not normalized_username or not normalized_password:
-        raise ValueError("Usuario y contrasena son obligatorios.")
+        raise ValueError("Usuario y contraseña son obligatorios.")
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
@@ -2535,7 +2535,7 @@ def update_database_credential(
     if payload.password is not None:
         normalized_password = payload.password.strip()
         if not normalized_password:
-            raise ValueError("La contrasena no puede quedar vacia.")
+            raise ValueError("La contraseña no puede quedar vacia.")
         set_clauses.append("password = %s")
         params.append(normalized_password)
     if payload.label is not None:

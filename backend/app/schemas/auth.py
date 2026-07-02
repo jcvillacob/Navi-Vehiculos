@@ -41,12 +41,12 @@ class UserUpdateRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str = Field(..., min_length=1, description="Contrasena actual")
-    new_password: str = Field(..., min_length=10, description="Nueva contrasena")
+    current_password: str = Field(..., min_length=1, description="Contraseña actual")
+    new_password: str = Field(..., min_length=10, description="Nueva contraseña")
 
 
 class ResetPasswordRequest(BaseModel):
-    new_password: str = Field(..., min_length=10, description="Nueva contrasena")
+    new_password: str = Field(..., min_length=10, description="Nueva contraseña")
 
 
 class SessionRecord(BaseModel):

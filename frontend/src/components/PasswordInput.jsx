@@ -17,7 +17,7 @@ export default function PasswordInput({ id, value, onChange, className, ...rest 
         type="button"
         className="password-toggle"
         onClick={() => setVisible((v) => !v)}
-        aria-label={visible ? "Ocultar contrasena" : "Mostrar contrasena"}
+        aria-label={visible ? "Ocultar contraseña" : "Mostrar contraseña"}
         tabIndex={-1}
       >
         {visible ? (

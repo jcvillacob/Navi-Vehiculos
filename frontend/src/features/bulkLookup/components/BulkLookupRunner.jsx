@@ -1,3 +1,7 @@
+import { useMemo, useState } from "react";
+
+import { useCustomersCatalog } from "../../customers/hooks/useCustomersCatalog";
+
 function formatDuration(ms) {
   const totalSeconds = Math.max(0, Math.round(ms / 1000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -33,7 +37,18 @@ export default function BulkLookupRunner({
   reset,
   elapsedMs,
   estimatedRemainingMs,
+  customerDatabaseId,
+  setCustomerDatabaseId,
+  assignmentSummary,
 }) {
+  const { customers, loading: customersLoading } = useCustomersCatalog();
+  const [selectedCustomerId, setSelectedCustomerId] = useState("");
+
+  const databases = useMemo(() => {
+    const customer = customers.find((c) => String(c.id) === String(selectedCustomerId));
+    return customer?.databases || [];
+  }, [customers, selectedCustomerId]);
+
   const percent = total ? Math.round((processed / total) * 100) : 0;
   const counts = results.reduce(
     (acc, item) => {
@@ -77,6 +92,27 @@ export default function BulkLookupRunner({
     if (confirmed) cancel();
   };
 
+  const handleCustomerChange = (event) => {
+    const id = event.target.value;
+    setSelectedCustomerId(id);
+    setCustomerDatabaseId(null);
+  };
+
+  const handleDatabaseChange = (event) => {
+    const raw = event.target.value;
+    setCustomerDatabaseId(raw ? Number(raw) : null);
+  };
+
+  const isAssignmentRunning = status === "running" || status === "paused";
+  const assignmentLabel = (() => {
+    if (!customerDatabaseId) return null;
+    if (assignmentSummary.attempted === 0) {
+      return "Asignacion pendiente: aplicara a medida que se resuelvan las placas";
+    }
+    return `Asignadas ${assignmentSummary.success} de ${assignmentSummary.attempted}`
+      + (assignmentSummary.failed > 0 ? ` · fallaron ${assignmentSummary.failed}` : "");
+  })();
+
   return (
     <article className="card bulk-upload-card">
       <div className="dash-search-heading">
@@ -86,6 +122,52 @@ export default function BulkLookupRunner({
           El lote corre en secuencia. Si una respuesta llega desde cache, el siguiente delay se omite.
         </p>
       </div>
+
+      <div className="bulk-assignment-row">
+        <div className="form-field bulk-assignment-field">
+          <label htmlFor="bulk-assign-customer">Cliente (opcional)</label>
+          <select
+            id="bulk-assign-customer"
+            className="login-input"
+            value={selectedCustomerId}
+            onChange={handleCustomerChange}
+            disabled={isAssignmentRunning || customersLoading}
+          >
+            <option value="">{customersLoading ? "Cargando clientes..." : "Sin asignar"}</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="form-field bulk-assignment-field">
+          <label htmlFor="bulk-assign-database">Database</label>
+          <select
+            id="bulk-assign-database"
+            className="login-input"
+            value={customerDatabaseId ? String(customerDatabaseId) : ""}
+            onChange={handleDatabaseChange}
+            disabled={isAssignmentRunning || !selectedCustomerId || databases.length === 0}
+          >
+            <option value="">
+              {!selectedCustomerId
+                ? "Selecciona cliente primero"
+                : databases.length === 0
+                  ? "Cliente sin databases"
+                  : "Selecciona database"}
+            </option>
+            {databases.map((db) => (
+              <option key={db.id} value={db.id}>
+                {db.database_name} ({db.connection_type})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {assignmentLabel ? (
+        <p className="support-copy bulk-assignment-status">{assignmentLabel}</p>
+      ) : null}
 
       <div className="bulk-runner-toolbar">
         <div className="form-field bulk-delay-field">

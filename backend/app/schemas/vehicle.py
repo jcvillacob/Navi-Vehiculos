@@ -38,6 +38,64 @@ class DashboardSummary(BaseModel):
     recent_vehicles: list[RecentVehicleRecord] = Field(default_factory=list)
 
 
+class DashboardAvailabilityBlock(BaseModel):
+    month: str = Field(..., description="Mes YYYY-MM del overview")
+    availability_pct: float | None = Field(
+        default=None,
+        description="Disponibilidad global del mes (0-100). None si no hay datos.",
+    )
+    fleet_count: int = Field(default=0, description="Numero de flotas con datos en el mes")
+    critical_fleets: int = Field(default=0, description="Flotas por debajo del umbral critico")
+    vehicle_count: int = Field(default=0, description="Vehiculos considerados en el calculo")
+    has_data: bool = Field(default=False, description="True si hay al menos un vehiculo calculado")
+
+
+class DashboardTallerBlock(BaseModel):
+    vehicles_in_taller: int = Field(default=0, description="Vehiculos dentro de geocerca >= 30 min")
+    oldest_minutes: int | None = Field(
+        default=None, description="Minutos del vehiculo mas antiguo dentro de la geocerca"
+    )
+    top_plates: list[str] = Field(
+        default_factory=list,
+        description="Hasta 3 placas mas antiguas en taller (ordenadas desc por minutos)",
+    )
+    generated_at: datetime | None = Field(
+        default=None, description="Timestamp del snapshot (Bogota)"
+    )
+
+
+class DashboardLastJobBlock(BaseModel):
+    job_id: int | None = Field(default=None, description="ID del ultimo job; None si no hay")
+    month: str | None = Field(default=None, description="Mes del job, formato YYYY-MM")
+    status: str | None = Field(
+        default=None, description="Estado del job: queued | running | done | error"
+    )
+    created_at: datetime | None = Field(default=None, description="Creacion del job")
+    finished_at: datetime | None = Field(default=None, description="Finalizacion del job (done/error)")
+
+
+class DashboardAvailabilityTrendBlock(BaseModel):
+    month_from: str = Field(..., description="Primer mes de la serie, YYYY-MM")
+    month_to: str = Field(..., description="Ultimo mes de la serie, YYYY-MM")
+    labels: list[str] = Field(default_factory=list, description="Etiquetas de meses, YYYY-MM")
+    availability_pct: list[float | None] = Field(
+        default_factory=list,
+        description="Disponibilidad global por mes (0-100); None si no hay datos",
+    )
+
+
+class DashboardSummaryV2(DashboardSummary):
+    current_month: str = Field(..., description="Mes YYYY-MM de referencia (hoy)")
+    availability: DashboardAvailabilityBlock = Field(default_factory=DashboardAvailabilityBlock)
+    taller: DashboardTallerBlock = Field(default_factory=DashboardTallerBlock)
+    last_rendimientos_job: DashboardLastJobBlock = Field(default_factory=DashboardLastJobBlock)
+    availability_trend: DashboardAvailabilityTrendBlock = Field(
+        default_factory=lambda: DashboardAvailabilityTrendBlock(
+            month_from="", month_to="", labels=[], availability_pct=[]
+        )
+    )
+
+
 class RegisteredMotorSummary(BaseModel):
     id: int = Field(..., description="ID del motor registrado")
     technical_number: str = Field(..., description="Technical Engine Configuration #")
@@ -52,7 +110,7 @@ class AssignedDatabaseSummary(BaseModel):
     )
     has_database_password: bool = Field(
         default=False,
-        description="Indica si la database asociada tiene una contrasena almacenada",
+        description="Indica si la database asociada tiene una contraseña almacenada",
     )
 
 
@@ -191,7 +249,7 @@ class VehicleAssignmentRecord(BaseModel):
         default=None, description="Tipo de conexion de la database asignada"
     )
     has_database_password: bool = Field(
-        default=False, description="Indica si existe contrasena almacenada"
+        default=False, description="Indica si existe contraseña almacenada"
     )
     access_url: str | None = Field(default=None, description="Enlace de acceso externo")
     has_motor_rules: bool = Field(
@@ -302,7 +360,7 @@ class CustomerDatabaseUpdateRequest(BaseModel):
     username: str = Field(..., min_length=1, description="Usuario de la database")
     password: str | None = Field(
         default=None,
-        description="Nueva contrasena (None = no cambiar)",
+        description="Nueva contraseña (None = no cambiar)",
     )
     connection_type: str = Field(
         default="database",
@@ -326,7 +384,7 @@ class CustomerDatabaseCredentialCreateRequest(BaseModel):
 
 class CustomerDatabaseCredentialUpdateRequest(BaseModel):
     username: str | None = Field(default=None, min_length=1, description="Nuevo usuario (None = no cambiar)")
-    password: str | None = Field(default=None, min_length=1, description="Nueva contrasena (None = no cambiar)")
+    password: str | None = Field(default=None, min_length=1, description="Nueva contraseña (None = no cambiar)")
     label: str | None = Field(default=None, description="Nueva etiqueta (None = no cambiar)")
     is_active: bool | None = Field(default=None, description="Activar/desactivar (None = no cambiar)")
 
@@ -458,7 +516,7 @@ class CustomerDatabaseRecord(BaseModel):
     customer_id: int = Field(..., description="ID del cliente")
     database_name: str = Field(..., description="Nombre de la database")
     username: str = Field(..., description="Usuario configurado")
-    has_password: bool = Field(..., description="Indica si tiene contrasena almacenada")
+    has_password: bool = Field(..., description="Indica si tiene contraseña almacenada")
     connection_type: str = Field(
         default="database",
         description="Tipo de conexion: 'database', 'geotab' o 'artimo'",
