@@ -20,6 +20,7 @@ import CustomersPage from "./pages/CustomersPage";
 import EngineLookupPage from "./pages/EngineLookupPage";
 import MotorsPage from "./pages/MotorsPage";
 import VehiclesPage from "./pages/VehiclesPage";
+import StyleLabPage from "./pages/StyleLabPage";
 
 function ChangePasswordModal({ user, onClose }) {
   const [currentPassword, setCurrentPassword] = useState("");
@@ -167,6 +168,12 @@ function AppShell() {
                 <span>Vehiculos</span>
                 <small>Placas asociadas</small>
               </NavLink>
+              {import.meta.env.DEV ? (
+                <NavLink to="/style-lab">
+                  <span>Style Lab</span>
+                  <small>Prueba de estilos (dev)</small>
+                </NavLink>
+              ) : null}
               <div className="sidebar-group">
                 <div className="sidebar-group-label">
                   <span>Gestion</span>
@@ -263,6 +270,9 @@ function AppShell() {
               <Route path="/rendimientos" element={<RendimientosPage />} />
               <Route path="/disponibilidad" element={<DisponibilidadPage />} />
               <Route path="/mapa" element={<MapaPage />} />
+              {import.meta.env.DEV ? (
+                <Route path="/style-lab" element={<StyleLabPage />} />
+              ) : null}
               <Route
                 path="/usuarios"
                 element={

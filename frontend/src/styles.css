@@ -877,12 +877,11 @@ h1, h2, h3, h4, h5, h6 {
 ───────────────────────────── */
 
 .button,
-/* OJO: esto estiliza el ELEMENTO `button` (no una clase), asi que TODO <button>
-   nace como control de una linea de 36px de alto y nowrap. Si usas un <button>
-   como CONTENEDOR multilinea (lista/tarjeta/opcion con varias lineas), añade la
-   clase `.button-block` o resetea height/white-space; si no, el contenido
-   desborda los 36px y se superpone con lo de abajo. */
-button {
+/* OJO: esto estiliza el ELEMENTO `button` via :where() => especificidad CERO.
+   Todo <button> nace como control rojo de una linea (--control-h, nowrap), pero
+   CUALQUIER clase (p.ej. .mi-boton) lo sobreescribe por completo, incluido el
+   hover. Para un <button> contenedor multilinea usa `.button-block`. */
+:where(button) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -907,7 +906,7 @@ button {
 }
 
 .button:hover,
-button:hover {
+:where(button:hover) {
   background-color: var(--red-hover);
   box-shadow: 0 3px 10px rgba(238, 46, 47, 0.28);
 }
@@ -1021,7 +1020,7 @@ button:hover {
 }
 
 /* Disabled */
-button:disabled,
+:where(button:disabled),
 .button:disabled {
   opacity: 0.42;
   cursor: not-allowed;
@@ -1056,10 +1055,18 @@ button:disabled,
   font-size: 11px;
 }
 
-input,
+/* Controles de TEXTO (input de texto, select, textarea).
+   - :where() => especificidad CERO: cualquier clase de componente los
+     sobreescribe por completo sin pelear con el global.
+   - checkbox/radio/range/color/file quedan EXCLUIDOS: tienen su propio
+     default mas abajo (antes el global los inflaba a 38px/width:100% y cada
+     componente necesitaba resets con !important).
+   - SIN width:100%: en .form-field (grid) y columnas flex igual se estiran
+     solos (align stretch); en filas flex/toolbars ahora nacen compactos en
+     vez de comerse la fila. Para forzar ancho completo usa .control-block. */
+:where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"]),
 select,
-textarea {
-  width: 100%;
+textarea) {
   min-width: 0;
   padding: 0 13px;
   border-radius: var(--radius-sm);
@@ -1071,12 +1078,23 @@ textarea {
   transition: border-color 130ms ease, box-shadow 130ms ease;
 }
 
-input,
-select {
+:where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"]),
+select) {
   height: var(--control-h);
 }
 
-textarea {
+/* Dentro de un form (columna) los controles ocupan todo el ancho disponible,
+   como antes con el width:100% global — pero ya sin romper filas flex. */
+:where(.form-field, .register-form, .form-grid, .modal-form) :where(input:not([type="checkbox"], [type="radio"]), select, textarea) {
+  width: 100%;
+}
+
+/* Utilidad: fuerza un control a ancho completo fuera de un form. */
+.control-block {
+  width: 100%;
+}
+
+:where(textarea) {
   min-height: 72px;
   padding: 10px 13px;
   resize: vertical;
@@ -1084,7 +1102,7 @@ textarea {
   font-family: "Poppins", sans-serif;
 }
 
-select {
+:where(select) {
   appearance: none;
   padding-right: 36px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23354550' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
@@ -1093,21 +1111,58 @@ select {
   cursor: pointer;
 }
 
-input::placeholder,
-select::placeholder,
-textarea::placeholder {
+/* Variante compacta para toolbars/paginacion: hereda borde+chevron global. */
+select.control-sm,
+input.control-sm {
+  height: 28px;
+  font-size: 12px;
+  padding: 0 10px;
+}
+
+select.control-sm {
+  padding-right: 28px;
+  background-position: right 9px center;
+}
+
+/* Controles BINARIOS: default sano y consistente (antes el global de texto
+   los deformaba). Con width/height explicitos el stretch de grid/flex no
+   los infla. Los componentes con radio/checkbox custom (p.ej.
+   .roles-matrix-radio) los sobreescriben sin problema. */
+:where(input[type="checkbox"], input[type="radio"]) {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  accent-color: var(--red);
+  cursor: pointer;
+}
+
+:where(input[type="checkbox"], input[type="radio"]):disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+:where(input, select, textarea)::placeholder {
   color: var(--text-subtle);
 }
 
-input:focus,
-select:focus,
-textarea:focus {
+:where(input, select, textarea):focus {
   outline: none;
   border-color: var(--border-focus);
   box-shadow: 0 0 0 3px var(--red-soft);
 }
 
-input[readonly] {
+:where(input[type="checkbox"], input[type="radio"]):focus {
+  box-shadow: none;
+}
+
+:where(input[type="checkbox"], input[type="radio"]):focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 2px;
+}
+
+:where(input[readonly]) {
   background: var(--bg);
   color: var(--text-muted);
   cursor: default;
@@ -1115,11 +1170,11 @@ input[readonly] {
 }
 
 /*
- * GOTCHA: input/select/textarea tienen width:100% global (arriba). Dentro de
- * .form-field (columna) funciona, pero en una fila flex un control sin ancho
- * explicito intenta ocupar todo el contenedor y descuadra a sus vecinos.
- * Para controles compactos en filas flex usa .control-inline (o asigna un
- * width/flex-basis explicito en el CSS del componente).
+ * NOTA: el width:100% global de input/select/textarea se ELIMINO (jul 2026).
+ * Ahora los controles nacen compactos; dentro de .form-field/.register-form/
+ * .form-grid/.modal-form se estiran al 100% (regla scoped arriba). Para ancho
+ * completo fuera de un form usa .control-block. .control-inline queda por
+ * compatibilidad con componentes existentes.
  */
 .control-inline {
   width: auto;
@@ -1755,7 +1810,8 @@ input[readonly] {
   width: 100%;
   height: 28px;
   font-size: 11px;
-  padding: 0 6px;
+  padding: 0 24px 0 6px;
+  background-position: right 6px center;
 }
 
 /* Cliente archivado (inactivo): card atenuada para distinguirla de las activas. */
@@ -3991,22 +4047,8 @@ input[readonly] {
   background: var(--surface-2);
 }
 
-.th-multifilter-option input[type="checkbox"] {
-  width: auto !important;
-  height: 15px !important;
-  flex-shrink: 0;
-}
-
-/* Reset de controles binarios: el selector global `input` les impone
-   width:100% + height var(--control-h) + borde/padding y el navegador los
-   ESCALA enormes (radios gigantes que se comen el espacio). Hay que neutralizar
-   checkbox Y radio aqui o cada uno nuevo nace roto. */
-input[type="checkbox"],
-input[type="radio"] {
-  width: auto !important;
-  max-height: 16px !important;
-  flex-shrink: 0;
-}
+/* (Los resets con !important para checkbox/radio se eliminaron: el global de
+   texto ya no los toca y tienen default propio en la seccion FORMS.) */
 
 .vehicles-table th:has(.th-multifilter) {
   vertical-align: middle;
@@ -4425,6 +4467,7 @@ input[type="radio"] {
 }
 
 .password-input-wrapper input {
+  flex: 1;
   padding-right: 40px;
 }
 
@@ -5491,6 +5534,82 @@ input[type="radio"] {
   border-top: 1px solid var(--border);
 }
 
+.rendimientos-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.rendimientos-pagination-info {
+  font-family: "Poppins", sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.rendimientos-pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rendimientos-pagination-label {
+  font-family: "Poppins", sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* Hereda borde/chevron/focus del select global; solo compacta y colorea. */
+.rendimientos-pagination-select {
+  height: 28px;
+  padding: 0 26px 0 10px;
+  background-position: right 8px center;
+  border-color: var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.rendimientos-pagination-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.rendimientos-pagination-btn:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.rendimientos-pagination-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.rendimientos-pagination-current {
+  font-family: "Poppins", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 .bulk-upload-card {
   display: grid;
   gap: 16px;
@@ -6029,11 +6148,7 @@ input[type="radio"] {
 .mapa-city-filter {
   height: var(--control-h);
   font-size: 12px;
-  padding: 0 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text);
+  padding: 0 30px 0 8px;
 }
 
 .mapa-table-shell {
@@ -6200,4 +6315,54 @@ input[type="radio"] {
   .app-grid.is-collapsed {
     grid-template-columns: 1fr;
   }
+}
+
+/* ─────────────────────────────
+   STYLE LAB (solo DEV, /style-lab)
+───────────────────────────── */
+
+.style-lab-card {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+}
+
+.style-lab-card h3 {
+  margin: 0;
+}
+
+.style-lab-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.style-lab-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Boton con clase propia: NO debe heredar el rojo del global ni su hover. */
+.style-lab-custom-btn {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px dashed var(--border-strong);
+}
+
+.style-lab-custom-btn:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+  box-shadow: none;
+}
+
+.style-lab-filterbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(140px, 180px)) auto;
+  gap: 10px;
+  align-items: center;
 }

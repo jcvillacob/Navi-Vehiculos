@@ -293,6 +293,10 @@ export default function RendimientosPage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(() => new Set(RENDIMIENTOS_COLUMNS.map((c) => c.key)));
   const [columnSelectorOpen, setColumnSelectorOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(10);
 
   const handleApplyColumns = useCallback((nextKeys) => {
     setVisibleColumns(new Set(nextKeys));
@@ -302,6 +306,17 @@ export default function RendimientosPage() {
     () => RENDIMIENTOS_COLUMNS.filter((col) => visibleColumns.has(col.key)),
     [visibleColumns]
   );
+
+  const totalHistoryPages = useMemo(() => Math.max(1, Math.ceil(recentJobs.length / historyPageSize)), [recentJobs.length, historyPageSize]);
+  const paginatedJobs = useMemo(() => {
+    const start = (historyPage - 1) * historyPageSize;
+    return recentJobs.slice(start, start + historyPageSize);
+  }, [recentJobs, historyPage, historyPageSize]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(recentJobs.length / historyPageSize));
+    if (historyPage > maxPage) setHistoryPage(1);
+  }, [recentJobs.length, historyPageSize, historyPage]);
 
   const isRange = monthFrom !== monthTo;
   const pickerRef = useRef(null);
@@ -601,6 +616,17 @@ export default function RendimientosPage() {
       return compareValues(left.plate || "", right.plate || "", "asc");
     });
   }, [filteredRows, sortConfig, connStats, availabilityByPlate]);
+
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(sortedRows.length / pageSize)), [sortedRows.length, pageSize]);
+  const paginatedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedRows.slice(start, start + pageSize);
+  }, [sortedRows, page, pageSize]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(sortedRows.length / pageSize));
+    if (page > maxPage) setPage(1);
+  }, [sortedRows.length, pageSize, page]);
 
   const visibleSummary = useMemo(() => {
     const totals = filteredRows.reduce(
@@ -1146,7 +1172,7 @@ export default function RendimientosPage() {
                   </td>
                 </tr>
               ) : (
-                sortedRows.map((row) => {
+                paginatedRows.map((row) => {
                   const ctx = { connStats, availabilityByPlate };
 
                   return (
@@ -1246,6 +1272,40 @@ export default function RendimientosPage() {
             </tbody>
           </table>
         </div>
+        <div className="rendimientos-pagination">
+          <div className="rendimientos-pagination-info">
+            {filteredRows.length} fila(s) en total
+          </div>
+          <div className="rendimientos-pagination-controls">
+            <span className="rendimientos-pagination-label">Filas por pág.:</span>
+            <select
+              className="rendimientos-pagination-select"
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+            >
+              {[10, 25, 50, 100].map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+            </select>
+            <button
+              type="button"
+              className="rendimientos-pagination-btn"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => p - 1)}
+            >
+              ‹
+            </button>
+            <span className="rendimientos-pagination-current">
+              Pág. {page} de {totalPages}
+            </span>
+            <button
+              type="button"
+              className="rendimientos-pagination-btn"
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              ›
+            </button>
+          </div>
+        </div>
       </section>
 
       <section className="card rendimientos-history-card">
@@ -1292,7 +1352,7 @@ export default function RendimientosPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {recentJobs.map((job) => {
+                  {paginatedJobs.map((job) => {
                     const status = job.status;
                     const statusClass = status === "done"
                       ? "status-ok"
@@ -1365,6 +1425,42 @@ export default function RendimientosPage() {
               </table>
             </div>
           )
+        )}
+        {historyOpen && recentJobs.length > 0 && (
+          <div className="rendimientos-pagination">
+            <div className="rendimientos-pagination-info">
+              {recentJobs.length} job(s) en total
+            </div>
+            <div className="rendimientos-pagination-controls">
+              <span className="rendimientos-pagination-label">Filas por pág.:</span>
+              <select
+                className="rendimientos-pagination-select"
+                value={historyPageSize}
+                onChange={(e) => { setHistoryPageSize(Number(e.target.value)); setHistoryPage(1); }}
+              >
+                {[5, 10, 25, 50].map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+              <button
+                type="button"
+                className="rendimientos-pagination-btn"
+                disabled={historyPage <= 1}
+                onClick={() => setHistoryPage((p) => p - 1)}
+              >
+                ‹
+              </button>
+              <span className="rendimientos-pagination-current">
+                Pág. {historyPage} de {totalHistoryPages}
+              </span>
+              <button
+                type="button"
+                className="rendimientos-pagination-btn"
+                disabled={historyPage >= totalHistoryPages}
+                onClick={() => setHistoryPage((p) => p + 1)}
+              >
+                ›
+              </button>
+            </div>
+          </div>
         )}
       </section>
 

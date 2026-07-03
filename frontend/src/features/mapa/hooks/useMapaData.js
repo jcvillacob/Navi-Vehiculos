@@ -9,14 +9,17 @@ const POLL_MS = Number.isFinite(envPollMs) && envPollMs > 0 ? envPollMs : DEFAUL
 /**
  * Hook que reemplaza el mock de mapa por datos reales del backend.
  *
- * - Carga inicial: spinner (loading=true).
+ * - Carga inicial: spinner (loading=true) solo cuando NO hay datos previos.
  * - Refrescos silenciosos cada POLL_MS: NO spinner; actualiza markers en sitio.
+ * - refresh() manual: NO spinner; marca `refreshing=true` para deshabilitar
+ *   acciones sin perder los datos visibles (sin flash).
  * - ETag/304: si el backend dice "sin cambios", no re-renderiza.
  * - Manejo de errores: expone `error` y permite reintentar (`refresh()`).
  * - Al desmontar, cancela el fetch en vuelo y limpia el interval.
  */
 export function useMapaData({ pollMs = POLL_MS } = {}) {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [vehicles, setVehicles] = useState([]);
   const [zones, setZones] = useState([]);
@@ -47,7 +50,10 @@ export function useMapaData({ pollMs = POLL_MS } = {}) {
       if (cancelledRef.current) return;
       setError(err?.message || "No fue posible cargar el mapa");
     } finally {
-      if (!cancelledRef.current) setLoading(false);
+      if (!cancelledRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [applySnapshot]);
 
@@ -63,7 +69,7 @@ export function useMapaData({ pollMs = POLL_MS } = {}) {
 
   const refresh = useCallback(() => {
     if (!cancelledRef.current) {
-      setLoading(true);
+      setRefreshing(true);
       load();
     }
   }, [load]);
@@ -78,6 +84,7 @@ export function useMapaData({ pollMs = POLL_MS } = {}) {
 
   return {
     loading,
+    refreshing,
     error,
     zones,
     vehicles,

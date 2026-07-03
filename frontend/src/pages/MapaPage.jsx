@@ -24,7 +24,7 @@ function formatLocalTime(iso) {
 }
 
 export default function MapaPage() {
-  const { loading, error, zones, vehicles, vehiclesByZoneId, refresh } =
+  const { loading, refreshing, error, zones, vehicles, vehiclesByZoneId, refresh } =
     useMapaData();
   const canManage = usePermission("mapa.taller.manage");
   const [selectedPlate, setSelectedPlate] = useState(null);
