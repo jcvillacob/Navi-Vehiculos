@@ -163,6 +163,8 @@ def manual_assign_vehicle(
             plate=plate,
             technical_number=payload.technical_number,
             cpl=payload.cpl,
+            marketing_model_name=payload.marketing_model_name,
+            service_model_name=payload.service_model_name,
             geotab_status=payload.geotab_status,
             vin=payload.vin,
             engine_number=payload.engine_number,

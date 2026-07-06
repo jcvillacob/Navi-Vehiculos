@@ -494,6 +494,8 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 engine_number TEXT NULL,
                 technical_number TEXT NOT NULL,
                 cpl TEXT NULL,
+                marketing_model_name TEXT NULL,
+                service_model_name TEXT NULL,
                 customer_id BIGINT NULL REFERENCES customers(id),
                 customer_database_id BIGINT NULL REFERENCES customer_databases(id),
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -518,6 +520,18 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             """
             ALTER TABLE vehicle_motor_assignments
             ADD COLUMN IF NOT EXISTS cpl TEXT NULL;
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS marketing_model_name TEXT NULL;
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS service_model_name TEXT NULL;
             """
         )
         cur.execute(
@@ -1497,6 +1511,8 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                OR UPPER(COALESCE(a.vin, '')) LIKE %s
                OR UPPER(a.technical_number) LIKE %s
                OR UPPER(COALESCE(a.cpl, '')) LIKE %s
+               OR UPPER(COALESCE(a.marketing_model_name, '')) LIKE %s
+               OR UPPER(COALESCE(a.service_model_name, '')) LIKE %s
                OR UPPER(COALESCE(m.engine_name, '')) LIKE %s
                OR UPPER(COALESCE(c.name, '')) LIKE %s
                OR UPPER(COALESCE(cd.database_name, '')) LIKE %s
@@ -1507,6 +1523,8 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
         """
         params.extend(
             [
+                normalized_search,
+                normalized_search,
                 normalized_search,
                 normalized_search,
                 normalized_search,
@@ -1539,6 +1557,8 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     a.engine_number,
                     a.technical_number,
                     a.cpl,
+                    a.marketing_model_name,
+                    a.service_model_name,
                     a.marca,
                     a.linea,
                     a.ano_modelo,
@@ -1626,6 +1646,8 @@ def register_vehicle_assignment(
     plate: str,
     technical_number: str,
     cpl: str | None = None,
+    marketing_model_name: str | None = None,
+    service_model_name: str | None = None,
     geotab_status: str = "unknown",
     vin: str | None = None,
     engine_number: str | None = None,
@@ -1652,13 +1674,15 @@ def register_vehicle_assignment(
                     engine_number,
                     technical_number,
                     cpl,
+                    marketing_model_name,
+                    service_model_name,
                     marca,
                     linea,
                     ano_modelo,
                     tipo_combustible,
                     nombre_vehiculo
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (plate)
                 DO UPDATE SET
                     vin = EXCLUDED.vin,
@@ -1666,6 +1690,8 @@ def register_vehicle_assignment(
                     engine_number = EXCLUDED.engine_number,
                     technical_number = EXCLUDED.technical_number,
                     cpl = EXCLUDED.cpl,
+                    marketing_model_name = EXCLUDED.marketing_model_name,
+                    service_model_name = EXCLUDED.service_model_name,
                     marca = EXCLUDED.marca,
                     linea = EXCLUDED.linea,
                     ano_modelo = EXCLUDED.ano_modelo,
@@ -1681,6 +1707,8 @@ def register_vehicle_assignment(
                     _normalize_optional_text(engine_number),
                     normalized_technical_number,
                     _normalize_cpl(cpl),
+                    _normalize_optional_text(marketing_model_name),
+                    _normalize_optional_text(service_model_name),
                     _normalize_optional_text(marca),
                     _normalize_optional_text(linea),
                     _normalize_optional_text(ano_modelo),
@@ -1702,6 +1730,8 @@ def update_vehicle_metadata(
     ano_modelo: str | None = None,
     tipo_combustible: str | None = None,
     nombre_vehiculo: str | None = None,
+    marketing_model_name: str | None = None,
+    service_model_name: str | None = None,
 ) -> None:
     """Update Fenix/Geotab fields on an existing vehicle WITHOUT touching technical_number."""
     normalized_plate = plate.strip().upper()
@@ -1723,6 +1753,8 @@ def update_vehicle_metadata(
                     ano_modelo = COALESCE(%s, ano_modelo),
                     tipo_combustible = COALESCE(%s, tipo_combustible),
                     nombre_vehiculo = COALESCE(%s, nombre_vehiculo),
+                    marketing_model_name = COALESCE(%s, marketing_model_name),
+                    service_model_name = COALESCE(%s, service_model_name),
                     updated_at = NOW(),
                     last_seen_at = NOW()
                 WHERE plate = %s;
@@ -1736,6 +1768,8 @@ def update_vehicle_metadata(
                     _normalize_optional_text(ano_modelo),
                     _normalize_optional_text(tipo_combustible),
                     _normalize_optional_text(nombre_vehiculo),
+                    _normalize_optional_text(marketing_model_name),
+                    _normalize_optional_text(service_model_name),
                     normalized_plate,
                 ),
             )
@@ -1871,6 +1905,8 @@ def get_cached_vehicle_lookup(plate: str) -> VehicleLookupResponse | None:
                     a.engine_number,
                     a.technical_number,
                     a.cpl,
+                    a.marketing_model_name,
+                    a.service_model_name,
                     a.marca,
                     a.linea,
                     a.ano_modelo,
@@ -1921,6 +1957,8 @@ def get_cached_vehicle_lookup(plate: str) -> VehicleLookupResponse | None:
         engine_number=row.get("engine_number"),
         technical_engine_configuration=row.get("technical_number"),
         cpl=row.get("cpl"),
+        marketing_model_name=row.get("marketing_model_name"),
+        service_model_name=row.get("service_model_name"),
         registered_motor=registered_motor,
         assigned_database=AssignedDatabaseSummary(
             client_name=row.get("client_name"),

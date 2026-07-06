@@ -430,6 +430,8 @@ export default function VehiclesPage() {
         await manualAssignVehicle(selectedVehicle.plate, {
           technical_number: payload.technical_number,
           cpl: selectedVehicle.cpl || null,
+          marketing_model_name: selectedVehicle.marketing_model_name || null,
+          service_model_name: selectedVehicle.service_model_name || null,
           vin: selectedVehicle.vin || null,
           engine_number: selectedVehicle.engine_number || null,
           marca: selectedVehicle.marca || null,

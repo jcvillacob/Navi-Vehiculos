@@ -173,6 +173,8 @@ export function useEngineLookup() {
         await manualAssignVehicle(lookupResult.plate, {
           technical_number: technicalNumber,
           cpl: payload.attachmentCpl || null,
+          marketing_model_name: lookupResult.marketing_model_name || null,
+          service_model_name: lookupResult.service_model_name || null,
           vin: lookupResult.vin || null,
           engine_number: lookupResult.engine_number || null,
           marca: lookupResult.marca || null,

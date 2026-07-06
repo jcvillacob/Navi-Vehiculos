@@ -134,6 +134,8 @@ export default function LookupDetails({
       <section className="lookup-result-section">
         <span className="lookup-section-label">Motor</span>
         <div className="data-grid">
+          <DataItem label="Marketing Model Name" value={result.marketing_model_name} />
+          <DataItem label="Service Model Name" value={result.service_model_name} />
           <DataItem label="TEC#" value={result.technical_engine_configuration} />
           <DataItem label="CPL" value={result.cpl} />
           <DataItem

@@ -131,8 +131,10 @@ class VehicleLookupResponse(BaseModel):
     )
     marca: str | None = Field(default=None, description="Marca del vehiculo (Fenix)")
     linea: str | None = Field(default=None, description="Linea del vehiculo (Fenix)")
+    modelo: str | None = Field(default=None, description="Modelo del vehiculo (Fenix)")
     ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo (Fenix)")
     tipo_combustible: str | None = Field(default=None, description="Tipo de combustible del vehiculo (Fenix)")
+    nombre_vehiculo: str | None = Field(default=None, description="Nombre del vehiculo (Fenix)")
     engine_number: str | None = Field(
         default=None, description="Numero de motor (ESN) obtenido desde inventario"
     )
@@ -141,6 +143,12 @@ class VehicleLookupResponse(BaseModel):
         description="Technical Engine Configuration # obtenido desde QuickServe",
     )
     cpl: str | None = Field(default=None, description="N.o CPL obtenido desde QuickServe")
+    marketing_model_name: str | None = Field(
+        default=None, description="Marketing Model Name obtenido desde QuickServe"
+    )
+    service_model_name: str | None = Field(
+        default=None, description="Service Model Name obtenido desde QuickServe"
+    )
     registered_motor: RegisteredMotorSummary | None = Field(
         default=None,
         description="Motor registrado asociado al Technical Engine Configuration #",
@@ -222,6 +230,12 @@ class VehicleAssignmentRecord(BaseModel):
     engine_number: str | None = Field(default=None, description="Numero de motor")
     technical_number: str = Field(..., description="Numero tecnico de motor")
     cpl: str | None = Field(default=None, description="CPL del motor consultado")
+    marketing_model_name: str | None = Field(
+        default=None, description="Marketing Model Name obtenido desde QuickServe"
+    )
+    service_model_name: str | None = Field(
+        default=None, description="Service Model Name obtenido desde QuickServe"
+    )
     marca: str | None = Field(default=None, description="Marca del vehiculo (Fenix)")
     linea: str | None = Field(default=None, description="Linea del vehiculo (Fenix)")
     ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo (Fenix)")
@@ -306,6 +320,8 @@ class VehicleVocacionalUpdateRequest(BaseModel):
 class ManualVehicleAssignmentRequest(BaseModel):
     technical_number: str = Field(..., min_length=1, description="Technical Engine Configuration #")
     cpl: str | None = Field(default=None, description="CPL del motor")
+    marketing_model_name: str | None = Field(default=None, description="Marketing Model Name")
+    service_model_name: str | None = Field(default=None, description="Service Model Name")
     vin: str | None = Field(default=None, description="VIN del vehiculo")
     engine_number: str | None = Field(default=None, description="Numero de motor (ESN)")
     marca: str | None = Field(default=None, description="Marca del vehiculo")
@@ -809,4 +825,3 @@ class BatchLookupRequest(BaseModel):
         default=False,
         description="Omitir consultas a Geotab (mas rapido)",
     )
-

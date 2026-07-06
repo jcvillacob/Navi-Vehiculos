@@ -247,14 +247,11 @@ export default function MapView({
       }
     }
 
-    // First-time fit to all zones + exited points
-    if (!hasFitRef.current && (zones.length || exited.length)) {
-      const pts = [
-        ...zones.map((z) => [z.lat, z.lng]),
-        ...exited.map((v) => [v.lat, v.lng]),
-      ];
-      if (pts.length) {
-        map.fitBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: 8 });
+    // First-time fit sobre las placas dentro de taller; fallback a salidos/zonas.
+    if (!hasFitRef.current) {
+      const fitPts = fitPoints();
+      if (fitPts.length) {
+        map.fitBounds(L.latLngBounds(fitPts), { padding: [60, 60], maxZoom: 12 });
         hasFitRef.current = true;
       }
     }
@@ -269,15 +266,22 @@ export default function MapView({
     }
   }, [ready, L, zones, vehicles, exited, selectedPlate, onSelectPlate]);
 
+  // Puntos para encuadrar: prioriza placas DENTRO de taller (las relevantes),
+  // luego salidos, luego centros de zona. Asi "Ver Colombia" centra en las
+  // placas y hace un zoom ajustado en vez de abarcar puntos dispersos.
+  const fitPoints = () => {
+    if (vehicles.length) return vehicles.map((v) => [v.lat, v.lng]);
+    if (exited.length) return exited.map((v) => [v.lat, v.lng]);
+    if (zones.length) return zones.map((z) => [z.lat, z.lng]);
+    return [];
+  };
+
   const handleResetView = () => {
     const map = mapRef.current;
     if (!map || !L) return;
-    const pts = [
-      ...zones.map((z) => [z.lat, z.lng]),
-      ...exited.map((v) => [v.lat, v.lng]),
-    ];
+    const pts = fitPoints();
     if (pts.length) {
-      map.flyToBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: 8 });
+      map.flyToBounds(L.latLngBounds(pts), { padding: [60, 60], maxZoom: 12 });
     } else {
       map.flyTo([4.5, -75], 6);
     }

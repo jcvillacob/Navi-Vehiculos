@@ -6342,6 +6342,99 @@ select.control-sm {
   overflow-y: auto;
 }
 
+/* Fecha/hora en dos lineas dentro de las celdas del historico. */
+.mapa-datetime {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.mapa-datetime-date {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.mapa-datetime-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Barra de paginacion del modal de historico. */
+.mapa-history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 4px 2px;
+  flex-wrap: wrap;
+}
+
+.mapa-history-pagination-info {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mapa-history-pagination-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mapa-history-pagination-pages {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.mapa-history-page-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.mapa-history-page-btn:hover:not(:disabled) {
+  background: var(--red);
+  color: #fff;
+  border-color: var(--red-hover);
+}
+
+.mapa-history-page-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mapa-history-pagination-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mapa-history-pagination-size select {
+  height: var(--control-h);
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+
 .mapa-geofence-label span {
   display: inline-block;
   font-family: "Montserrat", sans-serif;

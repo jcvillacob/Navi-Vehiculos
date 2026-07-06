@@ -212,6 +212,8 @@ export default function VehicleAssignmentModal({
           <DataItem label="Nombre" value={vehicle.nombre_vehiculo} />
           <DataItem label="VIN" value={vehicle.vin} />
           <DataItem label="ESN" value={vehicle.engine_number} />
+          <DataItem label="Marketing Model Name" value={vehicle.marketing_model_name} />
+          <DataItem label="Service Model Name" value={vehicle.service_model_name} />
           <DataItem label="CPL" value={vehicle.cpl} />
           <DataItem label="TEC#" value={vehicle.technical_number} />
           <DataItem label="Motor" value={vehicle.engine_name || "Sin catalogar"} />

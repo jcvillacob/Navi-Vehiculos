@@ -231,6 +231,8 @@ export default function EngineLookupPage() {
               technical_number: lookupResult?.technical_engine_configuration || null,
               engine_name: lookupResult?.registered_motor?.engine_name || null,
               cpl: lookupResult?.cpl || "",
+              marketing_model_name: lookupResult?.marketing_model_name || null,
+              service_model_name: lookupResult?.service_model_name || null,
               client_name: lookupResult?.assigned_database?.client_name || null,
               database_name: lookupResult?.assigned_database?.database_name || null,
               database_username: lookupResult?.assigned_database?.database_username || null,

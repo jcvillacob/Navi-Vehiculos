@@ -99,6 +99,7 @@ class TallerHistoryVisit(BaseModel):
     zone_name: str | None = None
     client_name: str | None = None
     motor: str | None = None
+    category: str = "Ninguna"
     enter_ts_local: datetime | None = None
     exit_ts_local: datetime | None = None
     minutes_inside: int | None = None

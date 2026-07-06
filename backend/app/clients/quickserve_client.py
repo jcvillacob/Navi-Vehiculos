@@ -404,6 +404,118 @@ def _set_esn(session: requests.Session, cfg: QuickServeConfig, esn: str) -> bool
         return False
 
 
+_DATAPLATE_HEADER_HINTS = (
+    "model name",
+    "modelo",
+    "shop order",
+    "pedido",
+    "build plant",
+    "planta",
+    "build date",
+    "fecha",
+    "warranty",
+    "garantía",
+    "garantia",
+    "ecm",
+    "fuel pump",
+    "bomba de combustible",
+    "engine configuration",
+    "configuración de motor",
+    "configuracion de motor",
+    "cpl",
+)
+
+_DATAPLATE_KNOWN_HEADER_LABELS = {
+    "marketing model name": "Marketing Model Name",
+    "nombre de modelo de marketing": "Marketing Model Name",
+    "nombre del modelo de marketing": "Marketing Model Name",
+    "service model name": "Service Model Name",
+    "nombre de modelo de servicio": "Service Model Name",
+    "nombre del modelo de servicio": "Service Model Name",
+    "epa model name": "EPA Model Name",
+    "nombre de modelo epa": "EPA Model Name",
+    "nombre del modelo epa": "EPA Model Name",
+    "shop order": "Pedido a tienda",
+    "pedido a tienda": "Pedido a tienda",
+    "build plant": "Planta de construcción",
+    "planta de construcción": "Planta de construcción",
+    "planta de construccion": "Planta de construcción",
+    "build date": "Fecha de construcción",
+    "fecha de construcción": "Fecha de construcción",
+    "fecha de construccion": "Fecha de construcción",
+    "warranty start date": "Fecha de inicio de la garantía",
+    "fecha de inicio de la garantía": "Fecha de inicio de la garantía",
+    "fecha de inicio de la garantia": "Fecha de inicio de la garantía",
+    "ecm code": "Código de ECM",
+    "código de ecm": "Código de ECM",
+    "codigo de ecm": "Código de ECM",
+    "fuel pump part #": "N.º de pieza de bomba de combustible",
+    "n.º de pieza de bomba de combustible": "N.º de pieza de bomba de combustible",
+    "n.o de pieza de bomba de combustible": "N.º de pieza de bomba de combustible",
+    "fuel pump calibration": "Calibración de bomba de combustible",
+    "calibración de bomba de combustible": "Calibración de bomba de combustible",
+    "calibracion de bomba de combustible": "Calibración de bomba de combustible",
+    "marketing engine configuration #": "Marketing Engine Configuration #",
+    "technical engine configuration #": "Technical Engine Configuration #",
+    "cpl #": "N.º CPL",
+    "n.º cpl": "N.º CPL",
+    "n.o cpl": "N.º CPL",
+}
+
+
+def _looks_like_dataplate_header_row(values: list[str]) -> bool:
+    meaningful_values = [value.strip().lower() for value in values if value.strip()]
+    if len(meaningful_values) < 2:
+        return False
+    return any(
+        any(hint in value for hint in _DATAPLATE_HEADER_HINTS)
+        for value in meaningful_values
+    )
+
+
+def _normalize_dataplate_label(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", value.strip().lower())
+    normalized = normalized.replace("n.o", "no.").replace("n.º", "no.")
+    return normalized
+
+
+def _canonical_dataplate_header(value: str) -> str | None:
+    normalized = _normalize_dataplate_label(value)
+    if normalized in _DATAPLATE_KNOWN_HEADER_LABELS:
+        return _DATAPLATE_KNOWN_HEADER_LABELS[normalized]
+    if "cpl" in normalized and "#" in normalized:
+        return "N.º CPL"
+    return None
+
+
+def _row_values(row) -> list[str]:
+    return [
+        cell.get_text(" ", strip=True)
+        for cell in row.find_all(["th", "td"])
+    ]
+
+
+def _first_meaningful_row_values(rows, start_index: int) -> list[str]:
+    for row in rows[start_index:]:
+        values = [value for value in _row_values(row) if value.strip()]
+        if values:
+            return values
+    return []
+
+
+def _looks_like_model_value_row(values: list[str]) -> bool:
+    if len(values) < 2:
+        return False
+    first = values[0].strip()
+    second = values[1].strip()
+    return bool(
+        first
+        and second
+        and not _canonical_dataplate_header(first)
+        and re.search(r"\bCM\d{3,5}\b", second, flags=re.IGNORECASE)
+    )
+
+
 def _parse_dataplate(html: str) -> dict[str, str]:
     soup = _make_soup(html)
     data: dict[str, str] = {}
@@ -416,16 +528,30 @@ def _parse_dataplate(html: str) -> dict[str, str]:
     i = 0
     while i < len(rows):
         row = rows[i]
-        headers = [th.get_text(strip=True) for th in row.find_all("th")]
-        if headers:
-            values_row = rows[i + 1] if i + 1 < len(rows) else None
-            if values_row:
-                values = [td.get_text(strip=True) for td in values_row.find_all("td")]
-                for h, v in zip(headers, values):
-                    if h and h.strip():
-                        data[h] = v
-                i += 2
-                continue
+        cell_values = _row_values(row)
+        canonical_headers = [
+            _canonical_dataplate_header(value) for value in cell_values if value.strip()
+        ]
+        canonical_headers = [header for header in canonical_headers if header]
+        if (
+            len(canonical_headers) >= 2
+            or (canonical_headers and _looks_like_dataplate_header_row(cell_values))
+        ):
+            next_values = _first_meaningful_row_values(rows, i + 1)
+            for key, val in zip(canonical_headers, next_values):
+                if key and key.strip() and "VIN:" not in key:
+                    data[key] = val
+            i += 2
+            continue
+
+        if _looks_like_model_value_row(cell_values):
+            for key, val in zip(
+                ("Marketing Model Name", "Service Model Name", "EPA Model Name"),
+                cell_values,
+            ):
+                data[key] = val
+            i += 1
+            continue
 
         cells = row.find_all(["th", "td"])
         if len(cells) >= 2:
@@ -436,6 +562,24 @@ def _parse_dataplate(html: str) -> dict[str, str]:
                     data[key] = val
         i += 1
     return data
+
+
+def extract_marketing_model_name(dataplate: dict[str, str]) -> str | None:
+    if dataplate.get("Marketing Model Name"):
+        return dataplate["Marketing Model Name"]
+    for key, value in dataplate.items():
+        if "marketing model name" in key.lower() and value:
+            return value
+    return None
+
+
+def extract_service_model_name(dataplate: dict[str, str]) -> str | None:
+    if dataplate.get("Service Model Name"):
+        return dataplate["Service Model Name"]
+    for key, value in dataplate.items():
+        if "service model name" in key.lower() and value:
+            return value
+    return None
 
 
 def _get_dataplate(session: requests.Session, cfg: QuickServeConfig) -> dict[str, str]:

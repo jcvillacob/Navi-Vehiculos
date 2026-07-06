@@ -10,6 +10,8 @@ from app.clients.geotab_client import (
 )
 from app.clients.quickserve_client import (
     extract_cpl,
+    extract_marketing_model_name,
+    extract_service_model_name,
     extract_technical_engine_configuration,
     get_engine_dataplate,
 )
@@ -236,6 +238,8 @@ def _lookup_cummins_only(plate: str) -> VehicleLookupResponse:
                 engine_number=engine_number,
                 technical_engine_configuration=cached.technical_engine_configuration,
                 cpl=cached.cpl,
+                marketing_model_name=cached.marketing_model_name,
+                service_model_name=cached.service_model_name,
                 registered_motor=cached.registered_motor,
                 assigned_database=get_vehicle_database_assignment(plate),
                 source_details={"fenix": {}, "cummins": cummins_details},
@@ -245,8 +249,23 @@ def _lookup_cummins_only(plate: str) -> VehicleLookupResponse:
             )
         technical_config = extract_technical_engine_configuration(cummins_details)
         cpl = extract_cpl(cummins_details)
+        marketing_model_name = extract_marketing_model_name(cummins_details)
+        service_model_name = extract_service_model_name(cummins_details)
         if not technical_config:
             warnings.append("Motor no encontrado en Cummins.")
+            update_vehicle_metadata(
+                plate,
+                geotab_status=geotab_status,
+                vin=vin,
+                engine_number=engine_number,
+                marca=cached.marca,
+                linea=cached.linea,
+                ano_modelo=cached.ano_modelo,
+                tipo_combustible=cached.tipo_combustible,
+                nombre_vehiculo=cached.nombre_vehiculo,
+                marketing_model_name=marketing_model_name,
+                service_model_name=service_model_name,
+            )
             return VehicleLookupResponse(
                 plate=plate,
                 lookup_value=plate,
@@ -261,6 +280,8 @@ def _lookup_cummins_only(plate: str) -> VehicleLookupResponse:
                 engine_number=engine_number,
                 technical_engine_configuration=None,
                 cpl=None,
+                marketing_model_name=marketing_model_name,
+                service_model_name=service_model_name,
                 registered_motor=None,
                 assigned_database=get_vehicle_database_assignment(plate),
                 source_details={"fenix": {}, "cummins": cummins_details},
@@ -272,6 +293,8 @@ def _lookup_cummins_only(plate: str) -> VehicleLookupResponse:
             plate=plate,
             technical_number=technical_config,
             cpl=cpl,
+            marketing_model_name=marketing_model_name,
+            service_model_name=service_model_name,
             geotab_status=geotab_status,
             vin=vin,
             engine_number=engine_number,
@@ -295,6 +318,8 @@ def _lookup_cummins_only(plate: str) -> VehicleLookupResponse:
             engine_number=engine_number,
             technical_engine_configuration=technical_config,
             cpl=cpl,
+            marketing_model_name=marketing_model_name,
+            service_model_name=service_model_name,
             registered_motor=find_registered_motor(technical_config),
             assigned_database=get_vehicle_database_assignment(plate),
             source_details={"fenix": {}, "cummins": cummins_details},
@@ -533,6 +558,8 @@ def lookup_vehicle(
             )
         technical_config = extract_technical_engine_configuration(cummins_details)
         cpl = extract_cpl(cummins_details)
+        marketing_model_name = extract_marketing_model_name(cummins_details)
+        service_model_name = extract_service_model_name(cummins_details)
         if not technical_config:
             warnings.append(
                 "Motor no encontrado en Cummins. Puedes asignar un motor manualmente."
@@ -549,6 +576,8 @@ def lookup_vehicle(
                     ano_modelo=fenix_details.get("ano_modelo"),
                     tipo_combustible=fenix_details.get("tipo_combustible"),
                     nombre_vehiculo=fenix_details.get("nombre_vehiculo"),
+                    marketing_model_name=marketing_model_name,
+                    service_model_name=service_model_name,
                 )
             geotab_customer_info = get_vehicle_geotab_customer_status(plate)
             return VehicleLookupResponse(
@@ -567,6 +596,8 @@ def lookup_vehicle(
                 engine_number=engine_number,
                 technical_engine_configuration=None,
                 cpl=None,
+                marketing_model_name=marketing_model_name,
+                service_model_name=service_model_name,
                 registered_motor=None,
                 assigned_database=get_vehicle_database_assignment(plate),
                 source_details={
@@ -591,6 +622,8 @@ def lookup_vehicle(
                 ano_modelo=fenix_details.get("ano_modelo"),
                 tipo_combustible=fenix_details.get("tipo_combustible"),
                 nombre_vehiculo=fenix_details.get("nombre_vehiculo"),
+                marketing_model_name=marketing_model_name,
+                service_model_name=service_model_name,
             )
 
         message = "Consulta completada."
@@ -633,6 +666,8 @@ def lookup_vehicle(
             engine_number=engine_number,
             technical_engine_configuration=technical_config,
             cpl=cpl,
+            marketing_model_name=marketing_model_name,
+            service_model_name=service_model_name,
             registered_motor=find_registered_motor(technical_config),
             assigned_database=get_vehicle_database_assignment(plate),
             source_details={

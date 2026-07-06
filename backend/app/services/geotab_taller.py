@@ -1066,6 +1066,7 @@ def get_taller_history(
                 f"""
                 SELECT e.plate, e.event_kind, e.event_ts,
                        e.zone_id, e.zone_name,
+                       COALESCE(a.category, c.category, 'Ninguna') AS category,
                        c.name AS client_name,
                        m.engine_name AS motor
                 FROM geotab_taller_events e
@@ -1103,6 +1104,7 @@ def get_taller_history(
                 or (exit_row.get("zone_name") if exit_row else None),
                 "client_name": enter_row.get("client_name"),
                 "motor": enter_row.get("motor"),
+                "category": (enter_row.get("category") or "Ninguna"),
                 "enter_ts_local": enter_ts.astimezone(_BOGOTA).isoformat(),
                 "exit_ts_local": (
                     exit_ts.astimezone(_BOGOTA).isoformat() if exit_ts else None
@@ -1136,6 +1138,7 @@ def get_taller_history(
                         "zone_name": row.get("zone_name"),
                         "client_name": row.get("client_name"),
                         "motor": row.get("motor"),
+                        "category": (row.get("category") or "Ninguna"),
                         "enter_ts_local": None,
                         "exit_ts_local": exit_ts.astimezone(_BOGOTA).isoformat(),
                         "minutes_inside": None,
