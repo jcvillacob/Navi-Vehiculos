@@ -195,7 +195,7 @@ export default function MapView({ zones, vehicles, selectedPlate, onSelectPlate 
     // First-time fit to all zones
     if (!hasFitRef.current && zones.length) {
       const bounds = L.latLngBounds(zones.map((z) => [z.lat, z.lng]));
-      map.fitBounds(bounds, { padding: [50, 50] });
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 8 });
       hasFitRef.current = true;
     }
 
@@ -214,7 +214,7 @@ export default function MapView({ zones, vehicles, selectedPlate, onSelectPlate 
     if (!map || !L) return;
     if (zones.length) {
       const bounds = L.latLngBounds(zones.map((z) => [z.lat, z.lng]));
-      map.flyToBounds(bounds, { padding: [50, 50] });
+      map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 8 });
     } else {
       map.flyTo([4.5, -75], 6);
     }
@@ -239,17 +239,15 @@ export default function MapView({ zones, vehicles, selectedPlate, onSelectPlate 
   return (
     <div className="mapa-view-wrapper">
       <div className="mapa-view" ref={containerRef} />
-      {(isZoomed || selectedPlate) && (
-        <button
-          type="button"
-          className="mapa-reset-btn"
-          onClick={handleResetView}
-          aria-label="Ver Colombia completa"
-          title="Ver Colombia completa"
-        >
-          Ver Colombia
-        </button>
-      )}
+      <button
+        type="button"
+        className="mapa-reset-btn"
+        onClick={handleResetView}
+        aria-label="Ver Colombia completa"
+        title="Ver Colombia completa"
+      >
+        Ver Colombia
+      </button>
     </div>
   );
 }
