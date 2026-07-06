@@ -6071,7 +6071,7 @@ select.control-sm {
 
 .mapa-layout {
   display: grid;
-  grid-template-columns: 340px minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
   flex: 1 1 0;
   min-height: 0;
@@ -6086,6 +6086,7 @@ select.control-sm {
 }
 
 .mapa-main {
+  grid-column: span 2;
   position: relative;
   min-height: 0;
   overflow: hidden;
@@ -6468,6 +6469,7 @@ select.control-sm {
     max-height: 320px;
   }
   .mapa-main {
+    grid-column: auto;
     height: 360px;
   }
 }
