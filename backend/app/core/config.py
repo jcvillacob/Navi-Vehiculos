@@ -45,6 +45,10 @@ class Settings:
     taller_grace_hours: int = int(os.getenv("TALLER_GRACE_HOURS", "1"))
     taller_in_ttl_days: int = int(os.getenv("TALLER_IN_TTL_DAYS", "30"))
     mapa_snapshot_ttl_seconds: int = int(os.getenv("MAPA_SNAPSHOT_TTL_SECONDS", "60"))
+    # Ventana (horas) para mostrar en el mapa vehiculos que ya salieron (marcador
+    # atenuado) y dias de historico enter->exit consultable desde el modal.
+    taller_exited_map_hours: int = int(os.getenv("TALLER_EXITED_MAP_HOURS", "24"))
+    taller_history_days: int = int(os.getenv("TALLER_HISTORY_DAYS", "45"))
 
     @property
     def is_production(self) -> bool:

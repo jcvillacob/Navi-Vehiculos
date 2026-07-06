@@ -26,6 +26,28 @@ export async function fetchMapaTaller({ etag } = {}) {
   return { snapshot, etag: newEtag, notModified: false };
 }
 
+export async function fetchTallerHistory({ plate, zoneId, days } = {}) {
+  const params = new URLSearchParams();
+  if (plate) params.set("plate", plate);
+  if (zoneId) params.set("zone_id", zoneId);
+  if (days) params.set("days", String(days));
+  const qs = params.toString();
+  const response = await fetchWithAuth(
+    buildUrl(`/api/v1/mapa/taller/history${qs ? `?${qs}` : ""}`)
+  );
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const payload = await response.json();
+      if (typeof payload?.detail === "string") detail = `: ${payload.detail}`;
+    } catch {
+      detail = "";
+    }
+    throw new Error(`Error cargando historico (${response.status})${detail}`);
+  }
+  return response.json();
+}
+
 export async function postManualTallerAction(plate, action, enterTs = null) {
   const body = { plate, action };
   if (enterTs) body.enter_ts = enterTs;

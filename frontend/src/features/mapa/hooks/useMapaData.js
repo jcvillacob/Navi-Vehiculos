@@ -22,6 +22,7 @@ export function useMapaData({ pollMs = POLL_MS } = {}) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [vehicles, setVehicles] = useState([]);
+  const [exited, setExited] = useState([]);
   const [zones, setZones] = useState([]);
   const [generatedAt, setGeneratedAt] = useState(null);
 
@@ -31,6 +32,7 @@ export function useMapaData({ pollMs = POLL_MS } = {}) {
   const applySnapshot = useCallback((snapshot) => {
     if (!snapshot) return;
     setVehicles(Array.isArray(snapshot.vehicles) ? snapshot.vehicles : []);
+    setExited(Array.isArray(snapshot.exited) ? snapshot.exited : []);
     setZones(Array.isArray(snapshot.zones) ? snapshot.zones : []);
     setGeneratedAt(snapshot.generated_at || null);
   }, []);
@@ -88,6 +90,7 @@ export function useMapaData({ pollMs = POLL_MS } = {}) {
     error,
     zones,
     vehicles,
+    exited,
     vehiclesByZoneId,
     generatedAt,
     refresh,

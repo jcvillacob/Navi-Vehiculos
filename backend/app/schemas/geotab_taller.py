@@ -70,11 +70,44 @@ class TallerVehicleSnapshot(BaseModel):
     odometer: str | None = None
 
 
+class TallerExitedVehicle(BaseModel):
+    """Vehiculo que ya salio del taller (marcador atenuado en el mapa)."""
+
+    plate: str
+    lat: float
+    lng: float
+    zone_id: str | None
+    zone_name: str | None
+    category: str
+    client_name: str | None
+    motor: str | None
+    exit_ts_local: datetime
+    minutes_ago: int
+
+
 class MapaTallerResponse(BaseModel):
     generated_at: datetime
     vehicles: list[TallerVehicleSnapshot]
+    exited: list[TallerExitedVehicle] = Field(default_factory=list)
     zones: list[TallerZone]
     etag: str = Field(..., description="Hash debil del snapshot; usarlo como ETag en el cliente")
+
+
+class TallerHistoryVisit(BaseModel):
+    plate: str
+    zone_id: str | None = None
+    zone_name: str | None = None
+    client_name: str | None = None
+    motor: str | None = None
+    enter_ts_local: datetime | None = None
+    exit_ts_local: datetime | None = None
+    minutes_inside: int | None = None
+
+
+class TallerHistoryResponse(BaseModel):
+    days: int
+    count: int
+    visits: list[TallerHistoryVisit]
 
 
 class WebhookResult(BaseModel):

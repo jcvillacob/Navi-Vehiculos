@@ -61,6 +61,26 @@ def get_mapa_taller(
     return JSONResponse(content=snapshot, headers=headers)
 
 
+@router.get(
+    "/mapa/taller/history",
+    summary="Historico enter->exit de vehiculos en taller",
+    description=(
+        "Devuelve las visitas (entrada->salida) de los ultimos "
+        "TALLER_HISTORY_DAYS dias, emparejadas por placa. Filtros opcionales "
+        "por placa y zona. Mismo acceso que el snapshot del mapa."
+    ),
+)
+def get_mapa_taller_history(
+    plate: str | None = None,
+    zone_id: str | None = None,
+    days: int | None = None,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    return geotab_taller.get_taller_history(
+        days=days, plate=plate, zone_id=zone_id
+    )
+
+
 @router.post(
     "/mapa/taller/manual",
     summary="Gestion manual del estado de un vehiculo en el mapa",

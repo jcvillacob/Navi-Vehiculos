@@ -6272,6 +6272,76 @@ select.control-sm {
   z-index: 1000;
 }
 
+/* Vehiculo que ya salio del taller: marcador atenuado, borde discontinuo. */
+.mapa-veh-marker.is-exited {
+  background: var(--surface);
+  border: 2px dashed var(--clear-gray);
+  color: var(--text-muted);
+  opacity: 0.9;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.mapa-popup-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--clear-gray);
+  color: var(--gray);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mapa-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.mapa-page-header-copy {
+  min-width: 0;
+}
+
+.mapa-history-btn {
+  flex: 0 0 auto;
+  margin-top: 4px;
+}
+
+@media (max-width: 640px) {
+  .mapa-page-header {
+    flex-direction: column;
+  }
+  .mapa-history-btn {
+    align-self: flex-start;
+  }
+}
+
+/* ── Modal de historico ── */
+.mapa-history-modal {
+  width: min(880px, calc(100vw - 40px));
+}
+
+.mapa-history-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mapa-history-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mapa-history-shell {
+  max-height: 60svh;
+  overflow-y: auto;
+}
+
 .mapa-geofence-label span {
   display: inline-block;
   font-family: "Montserrat", sans-serif;

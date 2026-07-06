@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 
 import MapView from "../features/mapa/components/MapView";
+import HistoryModal from "../features/mapa/components/HistoryModal";
 import { useMapaData } from "../features/mapa/hooks/useMapaData";
 import { usePermission } from "../context/AuthContext";
 import { postManualTallerAction } from "../api/mapaApi";
@@ -24,14 +25,23 @@ function formatLocalTime(iso) {
 }
 
 export default function MapaPage() {
-  const { loading, refreshing, error, zones, vehicles, vehiclesByZoneId, refresh } =
-    useMapaData();
+  const {
+    loading,
+    refreshing,
+    error,
+    zones,
+    vehicles,
+    exited,
+    vehiclesByZoneId,
+    refresh,
+  } = useMapaData();
   const canManage = usePermission("mapa.taller.manage");
   const [selectedPlate, setSelectedPlate] = useState(null);
   const [filterZoneId, setFilterZoneId] = useState(ALL);
   const [manualPlate, setManualPlate] = useState("");
   const [manualError, setManualError] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
 
   const handleSelectPlate = useCallback(
     (plate) => setSelectedPlate(plate),
@@ -44,6 +54,14 @@ export default function MapaPage() {
         ? vehicles
         : vehicles.filter((v) => v.zone_id === filterZoneId),
     [vehicles, filterZoneId]
+  );
+
+  const visibleExited = useMemo(
+    () =>
+      filterZoneId === ALL
+        ? exited
+        : exited.filter((v) => v.zone_id === filterZoneId),
+    [exited, filterZoneId]
   );
 
   const sortedVehicles = useMemo(
@@ -91,14 +109,23 @@ export default function MapaPage() {
 
   return (
     <section className="panel mapa-panel">
-      <header className="page-header">
-        <span className="eyebrow">Geocercas</span>
-        <h2>Mapa</h2>
-        <p>
-          Vehiculos en taller con mas de 30 minutos dentro de la geocerca.
-          Datos en vivo desde Geotab; se actualiza automaticamente cada 10
-          minutos.
-        </p>
+      <header className="page-header mapa-page-header">
+        <div className="mapa-page-header-copy">
+          <span className="eyebrow">Geocercas</span>
+          <h2>Mapa</h2>
+          <p>
+            Vehiculos en taller con mas de 30 minutos dentro de la geocerca.
+            Datos en vivo desde Geotab; se actualiza automaticamente cada 10
+            minutos.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="button-secondary mapa-history-btn"
+          onClick={() => setShowHistory(true)}
+        >
+          Ver histórico
+        </button>
       </header>
 
       <section className="vehicles-summary-grid">
@@ -295,11 +322,16 @@ export default function MapaPage() {
           <MapView
             zones={zones}
             vehicles={visibleVehicles}
+            exited={visibleExited}
             selectedPlate={selectedPlate}
             onSelectPlate={handleSelectPlate}
           />
         </div>
       </section>
+
+      {showHistory ? (
+        <HistoryModal zones={zones} onClose={() => setShowHistory(false)} />
+      ) : null}
     </section>
   );
 }

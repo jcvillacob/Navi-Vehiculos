@@ -815,7 +815,12 @@ def _build_snapshot(now_utc: datetime) -> dict[str, Any]:
     r = _redis_client()
     active = r.smembers(_KEY_ACTIVE_SET)
     if not active:
-        return _empty_snapshot(now_utc)
+        # Aun sin vehiculos "in" puede haber salidas recientes que mostrar.
+        exited = get_recent_exits(now_utc, in_plates=set())
+        snap = _empty_snapshot(now_utc)
+        snap["exited"] = exited
+        snap["zones"] = _zones_from_exited(exited)
+        return snap
 
     # Pipeline: una sola round-trip para todos los HGETALL.
     pipe = r.pipeline()
@@ -885,6 +890,11 @@ def _build_snapshot(now_utc: datetime) -> dict[str, Any]:
         for s in states
     ]
 
+    # Salidas recientes (marcador atenuado en el mapa), excluyendo placas que
+    # ahora mismo estan "in" para no duplicar.
+    in_plates = {s["plate"] for s in states}
+    exited = get_recent_exits(now_utc, in_plates=in_plates)
+
     # Zonas derivadas: una entrada por zone_id (coords del primer vehiculo).
     zones_map: dict[str, dict[str, Any]] = {}
     for s in states:
@@ -897,10 +907,23 @@ def _build_snapshot(now_utc: datetime) -> dict[str, Any]:
             "lat": s["lat"],
             "lng": s["lng"],
         }
+    # Incluir zonas de vehiculos salidos que no aparezcan ya (para que el mapa
+    # las encuadre aunque el taller solo tenga salidas recientes).
+    for e in exited:
+        zid = e.get("zone_id")
+        if not zid or zid in zones_map:
+            continue
+        zones_map[zid] = {
+            "id": zid,
+            "name": e.get("zone_name") or zid,
+            "lat": e["lat"],
+            "lng": e["lng"],
+        }
 
     return {
         "generated_at": now_utc.astimezone(_BOGOTA).isoformat(),
         "vehicles": vehicles,
+        "exited": exited,
         "zones": list(zones_map.values()),
     }
 
@@ -909,7 +932,237 @@ def _empty_snapshot(now_utc: datetime) -> dict[str, Any]:
     return {
         "generated_at": now_utc.astimezone(_BOGOTA).isoformat(),
         "vehicles": [],
+        "exited": [],
         "zones": [],
+    }
+
+
+def _zones_from_exited(exited: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    zones_map: dict[str, dict[str, Any]] = {}
+    for e in exited:
+        zid = e.get("zone_id")
+        if not zid or zid in zones_map:
+            continue
+        zones_map[zid] = {
+            "id": zid,
+            "name": e.get("zone_name") or zid,
+            "lat": e["lat"],
+            "lng": e["lng"],
+        }
+    return list(zones_map.values())
+
+
+# ─── Historico enter/exit desde Postgres ─────────────────────────────────
+
+
+def get_recent_exits(
+    now_utc: datetime, *, in_plates: set[str], hours: int | None = None
+) -> list[dict[str, Any]]:
+    """
+    Vehiculos cuyo ultimo evento en la ventana (`TALLER_EXITED_MAP_HOURS`) fue
+    un `exit`: ya salieron pero se muestran atenuados en el mapa.
+
+    Toma el evento mas reciente por placa (DISTINCT ON) y conserva solo los que
+    son `exit` con coordenadas. Excluye las placas que ahora mismo estan `in`
+    (`in_plates`) para no duplicar el marcador. Enriquecido con motor/cliente.
+    """
+    window_hours = hours if hours is not None else settings.taller_exited_map_hours
+    since = now_utc - timedelta(hours=max(1, window_hours))
+    _ensure_taller_events_table()
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (e.plate)
+                    e.plate, e.event_kind, e.event_ts,
+                    e.zone_id, e.zone_name,
+                    e.latitude AS lat, e.longitude AS lng,
+                    COALESCE(a.category, c.category, 'Ninguna') AS category,
+                    c.name AS client_name,
+                    m.engine_name AS motor
+                FROM geotab_taller_events e
+                LEFT JOIN vehicle_motor_assignments a ON a.plate = e.plate
+                LEFT JOIN customers c ON c.id = a.customer_id
+                LEFT JOIN motor_catalog m
+                       ON m.technical_number = a.technical_number
+                WHERE e.ignored = FALSE
+                  AND e.event_kind IN ('enter', 'exit')
+                  AND e.plate IS NOT NULL
+                  AND e.event_ts >= %s
+                ORDER BY e.plate, e.event_ts DESC
+                """,
+                (since,),
+            )
+            rows = cur.fetchall()
+
+    exited: list[dict[str, Any]] = []
+    for row in rows:
+        if row["event_kind"] != "exit":
+            continue  # su ultimo evento fue enter -> sigue dentro
+        plate = str(row["plate"]).strip().upper()
+        if plate in in_plates:
+            continue
+        lat, lng = row.get("lat"), row.get("lng")
+        if lat is None or lng is None:
+            continue
+        exit_ts = row["event_ts"]
+        if exit_ts.tzinfo is None:
+            exit_ts = exit_ts.replace(tzinfo=_UTC)
+        exited.append(
+            {
+                "plate": plate,
+                "lat": float(lat),
+                "lng": float(lng),
+                "zone_id": row.get("zone_id"),
+                "zone_name": row.get("zone_name"),
+                "category": (row.get("category") or "Ninguna"),
+                "client_name": row.get("client_name"),
+                "motor": row.get("motor"),
+                "exit_ts_local": exit_ts.astimezone(_BOGOTA).isoformat(),
+                "minutes_ago": int((now_utc - exit_ts).total_seconds() // 60),
+            }
+        )
+    return exited
+
+
+def get_taller_history(
+    *,
+    days: int | None = None,
+    plate: str | None = None,
+    zone_id: str | None = None,
+    limit: int = 1000,
+) -> dict[str, Any]:
+    """
+    Empareja eventos enter->exit en visitas para el modal de historico
+    (ultimos `TALLER_HISTORY_DAYS`). Cada visita: placa, taller, entrada,
+    salida, duracion en minutos.
+
+    El emparejamiento es por placa en orden cronologico: un `enter` abre una
+    visita; el siguiente `exit` la cierra. Un segundo `enter` sin `exit`
+    intermedio cierra la anterior como abierta (missed exit) y abre otra.
+
+    Solo se devuelven las visitas que cumplieron las condiciones de ingreso al
+    mapa: categoria valida (ya garantizada por `ignored = FALSE`, que excluye
+    los eventos de categoria "Ninguna") y permanencia completa >=
+    `TALLER_MIN_MINUTES`. Visitas abiertas/huerfanas o mas cortas se descartan.
+    """
+    window_days = days if days is not None else settings.taller_history_days
+    since = datetime.now(tz=_UTC) - timedelta(days=max(1, window_days))
+    _ensure_taller_events_table()
+
+    filters = ["e.ignored = FALSE", "e.event_kind IN ('enter', 'exit')",
+               "e.plate IS NOT NULL", "e.event_ts >= %s"]
+    params: list[Any] = [since]
+    if plate:
+        filters.append("e.plate = UPPER(%s)")
+        params.append(plate.strip())
+    if zone_id:
+        filters.append("e.zone_id = %s")
+        params.append(zone_id)
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                f"""
+                SELECT e.plate, e.event_kind, e.event_ts,
+                       e.zone_id, e.zone_name,
+                       c.name AS client_name,
+                       m.engine_name AS motor
+                FROM geotab_taller_events e
+                LEFT JOIN vehicle_motor_assignments a ON a.plate = e.plate
+                LEFT JOIN customers c ON c.id = a.customer_id
+                LEFT JOIN motor_catalog m
+                       ON m.technical_number = a.technical_number
+                WHERE {' AND '.join(filters)}
+                ORDER BY e.plate, e.event_ts ASC
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+
+    def _aware(ts: datetime) -> datetime:
+        return ts.replace(tzinfo=_UTC) if ts.tzinfo is None else ts
+
+    visits: list[dict[str, Any]] = []
+    open_enter: dict[str, Any] | None = None
+    current_plate: str | None = None
+
+    def _close(enter_row: dict[str, Any], exit_row: dict[str, Any] | None) -> None:
+        enter_ts = _aware(enter_row["event_ts"])
+        exit_ts = _aware(exit_row["event_ts"]) if exit_row else None
+        minutes = (
+            int((exit_ts - enter_ts).total_seconds() // 60)
+            if exit_ts is not None
+            else None
+        )
+        visits.append(
+            {
+                "plate": enter_row["plate"],
+                "zone_id": enter_row.get("zone_id"),
+                "zone_name": enter_row.get("zone_name")
+                or (exit_row.get("zone_name") if exit_row else None),
+                "client_name": enter_row.get("client_name"),
+                "motor": enter_row.get("motor"),
+                "enter_ts_local": enter_ts.astimezone(_BOGOTA).isoformat(),
+                "exit_ts_local": (
+                    exit_ts.astimezone(_BOGOTA).isoformat() if exit_ts else None
+                ),
+                "minutes_inside": minutes,
+            }
+        )
+
+    for row in rows:
+        if row["plate"] != current_plate:
+            # Cambio de placa: cerrar visita abierta de la placa anterior.
+            if open_enter is not None:
+                _close(open_enter, None)
+            open_enter = None
+            current_plate = row["plate"]
+        if row["event_kind"] == "enter":
+            if open_enter is not None:
+                _close(open_enter, None)  # missed exit
+            open_enter = row
+        else:  # exit
+            if open_enter is not None:
+                _close(open_enter, row)
+                open_enter = None
+            else:
+                # exit huerfano: visita sin entrada conocida.
+                exit_ts = _aware(row["event_ts"])
+                visits.append(
+                    {
+                        "plate": row["plate"],
+                        "zone_id": row.get("zone_id"),
+                        "zone_name": row.get("zone_name"),
+                        "client_name": row.get("client_name"),
+                        "motor": row.get("motor"),
+                        "enter_ts_local": None,
+                        "exit_ts_local": exit_ts.astimezone(_BOGOTA).isoformat(),
+                        "minutes_inside": None,
+                    }
+                )
+    if open_enter is not None:
+        _close(open_enter, None)
+
+    # Solo visitas completas que cumplieron el umbral de permanencia del mapa.
+    min_minutes = settings.taller_min_minutes
+    qualified = [
+        v
+        for v in visits
+        if v["exit_ts_local"] is not None
+        and v["minutes_inside"] is not None
+        and v["minutes_inside"] >= min_minutes
+    ]
+
+    # Orden global: mas reciente primero (por salida, luego entrada).
+    def _sort_key(v: dict[str, Any]) -> str:
+        return v.get("exit_ts_local") or v.get("enter_ts_local") or ""
+
+    qualified.sort(key=_sort_key, reverse=True)
+    return {
+        "days": window_days,
+        "count": len(qualified),
+        "visits": qualified[:limit],
     }
 
 
@@ -1214,6 +1467,8 @@ def _persist_ignored(
 __all__ = [
     "process_webhook",
     "get_mapa_snapshot_cacheable",
+    "get_recent_exits",
+    "get_taller_history",
     "invalidate_snapshot_cache",
     "sweep_expired_grace",
     "resolve_vehicle",

@@ -44,6 +44,25 @@ function buildVehicleIcon(plate, isSel) {
   });
 }
 
+function buildExitedIcon(plate) {
+  return L.divIcon({
+    className: "mapa-veh-icon",
+    html: `<div class="mapa-veh-marker is-exited">${plate}</div>`,
+    iconSize: [60, 22],
+    iconAnchor: [30, 11],
+  });
+}
+
+function buildExitedPopup(v) {
+  return (
+    `<strong>${v.plate}</strong> <span class="mapa-popup-tag">salió</span>` +
+    `<br/>${v.zone_name || "—"}` +
+    (v.motor ? `<br/>Motor: ${v.motor}` : "") +
+    (v.client_name ? `<br/>Cliente: ${v.client_name}` : "") +
+    (v.exit_ts_local ? `<br/>Salida: ${formatLocalTime(v.exit_ts_local)}` : "")
+  );
+}
+
 function buildVehiclePopup(v, zoneName) {
   return (
     `<strong>${v.plate}</strong>` +
@@ -56,13 +75,20 @@ function buildVehiclePopup(v, zoneName) {
   );
 }
 
-export default function MapView({ zones, vehicles, selectedPlate, onSelectPlate }) {
+export default function MapView({
+  zones,
+  vehicles,
+  exited = [],
+  selectedPlate,
+  onSelectPlate,
+}) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
-  const groupsRef = useRef({ zones: null, vehicles: null });
+  const groupsRef = useRef({ zones: null, vehicles: null, exited: null });
   const hasFitRef = useRef(false);
   const zoneLayersRef = useRef(new Map());
   const vehicleMarkersRef = useRef(new Map());
+  const exitedMarkersRef = useRef(new Map());
   const { L, ready, loading, error } = useLeaflet();
   const [isZoomed, setIsZoomed] = useState(false);
 
@@ -74,6 +100,7 @@ export default function MapView({ zones, vehicles, selectedPlate, onSelectPlate 
     }).setView([4.5, -75], 6);
     L.tileLayer(TILE_URL, { attribution: TILE_ATTR, maxZoom: 19 }).addTo(map);
     groupsRef.current.zones = L.layerGroup().addTo(map);
+    groupsRef.current.exited = L.layerGroup().addTo(map);
     groupsRef.current.vehicles = L.layerGroup().addTo(map);
     mapRef.current = map;
 
@@ -86,10 +113,11 @@ export default function MapView({ zones, vehicles, selectedPlate, onSelectPlate 
       ro.disconnect();
       map.remove();
       mapRef.current = null;
-      groupsRef.current = { zones: null, vehicles: null };
+      groupsRef.current = { zones: null, vehicles: null, exited: null };
       hasFitRef.current = false;
       zoneLayersRef.current.clear();
       vehicleMarkersRef.current.clear();
+      exitedMarkersRef.current.clear();
     };
   }, [ready, L]);
 
@@ -98,8 +126,10 @@ export default function MapView({ zones, vehicles, selectedPlate, onSelectPlate 
     const map = mapRef.current;
     const zGroup = groupsRef.current.zones;
     const vGroup = groupsRef.current.vehicles;
+    const eGroup = groupsRef.current.exited;
     const zoneLayers = zoneLayersRef.current;
     const vehicleMarkers = vehicleMarkersRef.current;
+    const exitedMarkers = exitedMarkersRef.current;
 
     const zoneById = new Map();
 
@@ -192,11 +222,41 @@ export default function MapView({ zones, vehicles, selectedPlate, onSelectPlate 
       }
     }
 
-    // First-time fit to all zones
-    if (!hasFitRef.current && zones.length) {
-      const bounds = L.latLngBounds(zones.map((z) => [z.lat, z.lng]));
-      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 8 });
-      hasFitRef.current = true;
+    // ── Exited vehicles: markers atenuados (ya salieron) ──
+    const exitedSet = new Set();
+    exited.forEach((v) => {
+      exitedSet.add(v.plate);
+      const popupHtml = buildExitedPopup(v);
+      const existing = exitedMarkers.get(v.plate);
+      if (existing) {
+        existing.marker.setLatLng([v.lat, v.lng]);
+        existing.marker.setPopupContent(popupHtml);
+      } else {
+        const marker = L.marker([v.lat, v.lng], {
+          icon: buildExitedIcon(v.plate),
+          zIndexOffset: -500,
+        }).addTo(eGroup);
+        marker.bindPopup(popupHtml);
+        exitedMarkers.set(v.plate, { marker });
+      }
+    });
+    for (const [plate, entry] of exitedMarkers) {
+      if (!exitedSet.has(plate)) {
+        entry.marker.remove();
+        exitedMarkers.delete(plate);
+      }
+    }
+
+    // First-time fit to all zones + exited points
+    if (!hasFitRef.current && (zones.length || exited.length)) {
+      const pts = [
+        ...zones.map((z) => [z.lat, z.lng]),
+        ...exited.map((v) => [v.lat, v.lng]),
+      ];
+      if (pts.length) {
+        map.fitBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: 8 });
+        hasFitRef.current = true;
+      }
     }
 
     // Fly to selected plate
@@ -207,14 +267,17 @@ export default function MapView({ zones, vehicles, selectedPlate, onSelectPlate 
         setIsZoomed(true);
       }
     }
-  }, [ready, L, zones, vehicles, selectedPlate, onSelectPlate]);
+  }, [ready, L, zones, vehicles, exited, selectedPlate, onSelectPlate]);
 
   const handleResetView = () => {
     const map = mapRef.current;
     if (!map || !L) return;
-    if (zones.length) {
-      const bounds = L.latLngBounds(zones.map((z) => [z.lat, z.lng]));
-      map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 8 });
+    const pts = [
+      ...zones.map((z) => [z.lat, z.lng]),
+      ...exited.map((v) => [v.lat, v.lng]),
+    ];
+    if (pts.length) {
+      map.flyToBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: 8 });
     } else {
       map.flyTo([4.5, -75], 6);
     }
