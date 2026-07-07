@@ -4091,17 +4091,86 @@ select.control-sm {
 
 .th-multifilter-dropdown {
   position: absolute;
-  top: 100%;
-  left: 0;
+  top: calc(100% + 7px);
+  left: -10px;
   z-index: 50;
-  min-width: 130px;
-  max-height: 200px;
+  min-width: 160px;
+  max-height: 240px;
   overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  margin-top: 2px;
+}
+
+.th-multifilter-dropdown-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.th-multifilter-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.th-multifilter-search {
+  width: 100%;
+  height: 28px;
+  padding: 0 26px 0 10px;
+  font-size: 12px;
+  font-family: var(--font-body);
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.th-multifilter-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(238, 46, 47, 0.1);
+}
+
+.th-multifilter-search::placeholder {
+  color: var(--text-subtle);
+}
+
+.th-multifilter-search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+}
+
+.th-multifilter-search-clear:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.th-multifilter-empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-muted);
 }
 
 .th-multifilter-option {
@@ -4357,6 +4426,10 @@ select.control-sm {
   gap: 6px;
   width: 100%;
   min-width: 0;
+}
+
+.vehicles-th-content.has-filter {
+  cursor: pointer;
 }
 
 .vehicles-sort-btn {

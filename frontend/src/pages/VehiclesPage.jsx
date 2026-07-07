@@ -133,7 +133,10 @@ function SortButton({ columnKey, currentSort, onSortChange }) {
     <button
       type="button"
       className={`vehicles-sort-btn${dir ? ` is-${dir}` : ""}`}
-      onClick={handleClick}
+      onClick={(event) => {
+        event.stopPropagation();
+        handleClick();
+      }}
       title={label}
       aria-label={label}
     >
@@ -198,21 +201,51 @@ function DbConnectionBadge({ vehicle, result, checking }) {
   );
 }
 
-function MultiSelectFilter({ label, options, selected, onChange }) {
-  const [open, setOpen] = useState(false);
+function normalizeFilterText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u0303\u0305]/g, "");
+}
+
+function MultiSelectFilter({ label, options, selected, onChange, open, onOpenChange }) {
+  const [query, setQuery] = useState("");
   const ref = useRef(null);
+  const searchRef = useRef(null);
 
   useEffect(() => {
     function handleClickOutside(e) {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target)) onOpenChange(false);
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [onOpenChange]);
+
+  useEffect(() => {
+    if (open) {
+      setQuery("");
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (open) {
+      const id = requestAnimationFrame(() => {
+        searchRef.current?.focus();
+      });
+      return () => cancelAnimationFrame(id);
+    }
+    return undefined;
+  }, [open]);
 
   const items = options.map((opt) =>
     typeof opt === "string" ? { value: opt, label: opt } : opt
   );
+
+  const filteredItems = (() => {
+    const q = normalizeFilterText(query);
+    if (!q) return items;
+    return items.filter((item) => normalizeFilterText(item.label).includes(q));
+  })();
 
   const toggle = (value) => {
     const next = selected.includes(value)
@@ -221,24 +254,75 @@ function MultiSelectFilter({ label, options, selected, onChange }) {
     onChange(next);
   };
 
+  const handleSearchKeyDown = (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      if (query) {
+        setQuery("");
+      } else {
+        onOpenChange(false);
+      }
+    }
+  };
+
   return (
     <div className={`th-multifilter ${selected.length ? "is-active" : ""}`} ref={ref}>
-      <button type="button" className="th-multifilter-trigger" onClick={() => setOpen(!open)}>
+      <button
+        type="button"
+        className="th-multifilter-trigger"
+        onClick={() => onOpenChange(!open)}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+      >
         <span className="th-multifilter-text">{label}</span>
         <span className="th-multifilter-arrow">▼</span>
       </button>
       {open && (
-        <div className="th-multifilter-dropdown">
-          {items.map((item) => (
-            <label key={item.value} className="th-multifilter-option">
+        <div className="th-multifilter-dropdown" role="listbox">
+          <div className="th-multifilter-dropdown-header">
+            <div className="th-multifilter-search-wrap">
               <input
-                type="checkbox"
-                checked={selected.includes(item.value)}
-                onChange={() => toggle(item.value)}
+                ref={searchRef}
+                type="text"
+                className="th-multifilter-search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder="Buscar..."
+                onClick={(event) => event.stopPropagation()}
+                onMouseDown={(event) => event.stopPropagation()}
               />
-              <span>{item.label}</span>
-            </label>
-          ))}
+              {query ? (
+                <button
+                  type="button"
+                  className="th-multifilter-search-clear"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setQuery("");
+                    searchRef.current?.focus();
+                  }}
+                  aria-label="Limpiar busqueda"
+                  title="Limpiar busqueda"
+                >
+                  ✕
+                </button>
+              ) : null}
+            </div>
+          </div>
+          {filteredItems.length > 0 ? (
+            filteredItems.map((item) => (
+              <label key={item.value} className="th-multifilter-option">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(item.value)}
+                  onChange={() => toggle(item.value)}
+                />
+                <span>{item.label}</span>
+              </label>
+            ))
+          ) : (
+            <div className="th-multifilter-empty">Sin coincidencias</div>
+          )}
         </div>
       )}
     </div>
@@ -265,6 +349,7 @@ export default function VehiclesPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [sort, setSort] = useState({ key: null, dir: null });
+  const [openFilterKey, setOpenFilterKey] = useState(null);
   // Solo la fila en edicion monta un <select> nativo; las demas muestran el badge.
   // Asi evitamos cientos de selects nativos en el DOM (coste de paint + hit-testing).
   const [editingCategoryPlate, setEditingCategoryPlate] = useState(null);
@@ -973,65 +1058,79 @@ export default function VehiclesPage() {
                     aria-label="Seleccionar vehiculos visibles"
                   />
                 </th>
-                {activeColumns.map((col) => (
-                  <th key={col.key} style={col.width ? { width: col.width } : undefined}>
-                    <div className="vehicles-th-content">
-                      {col.key === "client_name" && (
-                        <MultiSelectFilter
-                          label={col.label}
-                          options={clientOptions}
-                          selected={filterClient}
-                          onChange={handleFilterClient}
+                {activeColumns.map((col) => {
+                  const isFilterColumn = [ "client_name", "category", "engine_name", "database_name", "db_connection" ].includes(col.key);
+                  return (
+                    <th key={col.key} style={col.width ? { width: col.width } : undefined}>
+                      <div
+                        className={`vehicles-th-content${isFilterColumn ? " has-filter" : ""}`}
+                        onClick={isFilterColumn ? () => setOpenFilterKey(col.key) : undefined}
+                      >
+                        {col.key === "client_name" && (
+                          <MultiSelectFilter
+                            label={col.label}
+                            options={clientOptions}
+                            selected={filterClient}
+                            onChange={handleFilterClient}
+                            open={openFilterKey === col.key}
+                            onOpenChange={(isOpen) => setOpenFilterKey(isOpen ? col.key : null)}
+                          />
+                        )}
+                        {col.key === "category" && (
+                          <MultiSelectFilter
+                            label={col.label}
+                            options={CUSTOMER_CATEGORIES}
+                            selected={filterCategory}
+                            onChange={handleFilterCategory}
+                            open={openFilterKey === col.key}
+                            onOpenChange={(isOpen) => setOpenFilterKey(isOpen ? col.key : null)}
+                          />
+                        )}
+                        {col.key === "engine_name" && (
+                          <MultiSelectFilter
+                            label={col.label}
+                            options={motorOptions}
+                            selected={filterMotor}
+                            onChange={handleFilterMotor}
+                            open={openFilterKey === col.key}
+                            onOpenChange={(isOpen) => setOpenFilterKey(isOpen ? col.key : null)}
+                          />
+                        )}
+                        {col.key === "database_name" && (
+                          <MultiSelectFilter
+                            label={col.label}
+                            options={databaseOptions}
+                            selected={filterDatabase}
+                            onChange={handleFilterDatabase}
+                            open={openFilterKey === col.key}
+                            onOpenChange={(isOpen) => setOpenFilterKey(isOpen ? col.key : null)}
+                          />
+                        )}
+                        {col.key === "db_connection" && (
+                          <MultiSelectFilter
+                            label={col.label}
+                            options={[
+                              { value: "active", label: "Activos" },
+                              { value: "inactive", label: "Inactivos" },
+                              { value: "unchecked", label: "Sin revisar" },
+                              { value: "not_applicable", label: "No aplica" }
+                            ]}
+                            selected={filterConnection}
+                            onChange={handleFilterConnection}
+                            open={openFilterKey === col.key}
+                            onOpenChange={(isOpen) => setOpenFilterKey(isOpen ? col.key : null)}
+                          />
+                        )}
+                        {!isFilterColumn && <span>{col.label}</span>}
+                        <SortButton
+                          columnKey={col.key}
+                          currentSort={sort}
+                          onSortChange={setSort}
                         />
-                      )}
-                      {col.key === "category" && (
-                        <MultiSelectFilter
-                          label={col.label}
-                          options={CUSTOMER_CATEGORIES}
-                          selected={filterCategory}
-                          onChange={handleFilterCategory}
-                        />
-                      )}
-                      {col.key === "engine_name" && (
-                        <MultiSelectFilter
-                          label={col.label}
-                          options={motorOptions}
-                          selected={filterMotor}
-                          onChange={handleFilterMotor}
-                        />
-                      )}
-                      {col.key === "database_name" && (
-                        <MultiSelectFilter
-                          label={col.label}
-                          options={databaseOptions}
-                          selected={filterDatabase}
-                          onChange={handleFilterDatabase}
-                        />
-                      )}
-                      {col.key === "db_connection" && (
-                        <MultiSelectFilter
-                          label={col.label}
-                          options={[
-                            { value: "active", label: "Activos" },
-                            { value: "inactive", label: "Inactivos" },
-                            { value: "unchecked", label: "Sin revisar" },
-                            { value: "not_applicable", label: "No aplica" }
-                          ]}
-                          selected={filterConnection}
-                          onChange={handleFilterConnection}
-                        />
-                      )}
-                      {![ "client_name", "category", "engine_name", "database_name", "db_connection" ].includes(col.key) && (
-                        <span>{col.label}</span>
-                      )}
-                      <SortButton
-                        columnKey={col.key}
-                        currentSort={sort}
-                        onSortChange={setSort}
-                      />
-                    </div>
-                  </th>
-                ))}
+                      </div>
+                    </th>
+                  );
+                })}
                 <th style={{ width: 80 }}>Detalles</th>
               </tr>
             </thead>
