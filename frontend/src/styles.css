@@ -1694,10 +1694,10 @@ select.control-sm {
 .detail-editable-cards {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  background: var(--bg-muted, rgba(53, 69, 80, 0.04));
-  border: 1px solid var(--border-color, rgba(53, 69, 80, 0.12));
+  gap: 12px;
+  padding: 16px;
+  background: rgba(53, 69, 80, 0.04);
+  border: 1px solid rgba(53, 69, 80, 0.12);
   border-radius: var(--radius-md, 10px);
 }
 
@@ -1714,16 +1714,16 @@ select.control-sm {
 .editable-cards-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--space-3);
+  gap: 12px;
 }
 
 .editable-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
+  gap: 8px;
+  padding: 12px;
   background: var(--surface, #fff);
-  border: 1px solid var(--border-color, rgba(53, 69, 80, 0.16));
+  border: 1px solid rgba(53, 69, 80, 0.16);
   border-radius: var(--radius-sm, 7px);
   min-width: 0;
 }
@@ -1732,7 +1732,7 @@ select.control-sm {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -4202,6 +4202,46 @@ select.control-sm {
   border: 1px solid var(--border);
 }
 
+.vehicles-pagination {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding: 4px 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.vehicles-pagination-info {
+  font-weight: 500;
+}
+
+.vehicles-pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vehicles-pagination-pages {
+  min-width: 110px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.vehicles-pagination-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.vehicles-pagination-size select {
+  height: var(--control-h);
+  font-size: 12px;
+  padding: 0 30px 0 10px;
+}
+
 .vehicles-table {
   width: 100%;
   /* 'separate' evita el recalculo de bordes compartidos entre celdas adyacentes
@@ -6197,6 +6237,69 @@ select.control-sm {
   background: var(--bg-subtle);
 }
 
+.mapa-table tbody tr.mapa-section-row {
+  cursor: default;
+}
+
+.mapa-table tbody tr.mapa-section-row:hover td {
+  background: var(--bg-subtle);
+}
+
+.mapa-section-row td {
+  padding: 12px 10px 7px;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: "Poppins", sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.mapa-section-row td span {
+  vertical-align: middle;
+}
+
+.mapa-section-row small {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.mapa-section-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 999px;
+  background: var(--mapa-section-color, var(--text-subtle));
+}
+
+.mapa-section-flota,
+.mapa-category-flota {
+  --mapa-section-color: #1f8f5f;
+}
+
+.mapa-section-experiencia,
+.mapa-category-experiencia {
+  --mapa-section-color: #7a5af8;
+}
+
+.mapa-section-otras,
+.mapa-category-otras {
+  --mapa-section-color: var(--text-subtle);
+}
+
+.mapa-category-flota td:first-child,
+.mapa-category-experiencia td:first-child,
+.mapa-category-otras td:first-child {
+  border-left: 3px solid var(--mapa-section-color);
+  padding-left: 7px;
+}
+
 .mapa-table tbody tr.is-selected td {
   background: var(--red-soft);
 }
@@ -6339,8 +6442,7 @@ select.control-sm {
 }
 
 .mapa-history-shell {
-  max-height: 60svh;
-  overflow-y: auto;
+  overflow: visible;
 }
 
 /* Fecha/hora en dos lineas dentro de las celdas del historico. */

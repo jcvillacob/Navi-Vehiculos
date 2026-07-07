@@ -180,6 +180,8 @@ export default function VehiclesPage() {
   const [filterConnection, setFilterConnection] = useState([]);
   const [savingCategoryPlates, setSavingCategoryPlates] = useState(() => new Set());
   const [savingVocacionalPlates, setSavingVocacionalPlates] = useState(() => new Set());
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   // Solo la fila en edicion monta un <select> nativo; las demas muestran el badge.
   // Asi evitamos cientos de selects nativos en el DOM (coste de paint + hit-testing).
   const [editingCategoryPlate, setEditingCategoryPlate] = useState(null);
@@ -300,6 +302,27 @@ export default function VehiclesPage() {
     [visibleColumns]
   );
 
+  const totalVehicles = filteredVehicles.length;
+  const totalPages = Math.max(1, Math.ceil(totalVehicles / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageStart = (safePage - 1) * pageSize;
+  const pagedVehicles = filteredVehicles.slice(pageStart, pageStart + pageSize);
+  const fromRow = totalVehicles === 0 ? 0 : pageStart + 1;
+  const toRow = Math.min(pageStart + pageSize, totalVehicles);
+
+  const resetPage = useCallback(() => setPage(1), []);
+  const handleFilterClient = useCallback((next) => { setFilterClient(next); resetPage(); }, [resetPage]);
+  const handleFilterCategory = useCallback((next) => { setFilterCategory(next); resetPage(); }, [resetPage]);
+  const handleFilterMotor = useCallback((next) => { setFilterMotor(next); resetPage(); }, [resetPage]);
+  const handleFilterDatabase = useCallback((next) => { setFilterDatabase(next); resetPage(); }, [resetPage]);
+  const handleFilterConnection = useCallback((next) => { setFilterConnection(next); resetPage(); }, [resetPage]);
+  const handleSearchChange = useCallback((event) => { setSearch(event.target.value.toUpperCase()); resetPage(); }, [resetPage, setSearch]);
+  const handleSearchClear = useCallback(() => { setSearch(""); resetPage(); }, [resetPage, setSearch]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
   const handleExportExcel = useCallback(() => {
     try {
       const headers = activeColumns.map((col) => col.label);
@@ -385,11 +408,13 @@ export default function VehiclesPage() {
   const handleClear = () => {
     setSearch("");
     setFilterClient([]);
+    setFilterCategory([]);
     setFilterMotor([]);
     setFilterDatabase([]);
     setFilterConnection([]);
     setSelectedPlates(new Set());
     setBulkAssignOpen(false);
+    resetPage();
   };
 
   const handleToggleVehicleSelection = (plate) => {
@@ -707,14 +732,14 @@ export default function VehiclesPage() {
               <input
                 id="vehicles-search"
                 value={search}
-                onChange={(event) => setSearch(event.target.value.toUpperCase())}
+                onChange={handleSearchChange}
                 placeholder="Placa, VIN, TEC#, CPL, motor, cliente, database, nombre, linea o marca"
               />
               {search && (
                 <button
                   type="button"
                   className="search-clear-button"
-                  onClick={() => setSearch("")}
+                  onClick={handleSearchClear}
                   aria-label="Limpiar busqueda"
                 >
                   ✕
@@ -780,7 +805,7 @@ export default function VehiclesPage() {
                         label={col.label}
                         options={clientOptions}
                         selected={filterClient}
-                        onChange={setFilterClient}
+                        onChange={handleFilterClient}
                       />
                     )}
                     {col.key === "category" && (
@@ -788,7 +813,7 @@ export default function VehiclesPage() {
                         label={col.label}
                         options={CUSTOMER_CATEGORIES}
                         selected={filterCategory}
-                        onChange={setFilterCategory}
+                        onChange={handleFilterCategory}
                       />
                     )}
                     {col.key === "engine_name" && (
@@ -796,7 +821,7 @@ export default function VehiclesPage() {
                         label={col.label}
                         options={motorOptions}
                         selected={filterMotor}
-                        onChange={setFilterMotor}
+                        onChange={handleFilterMotor}
                       />
                     )}
                     {col.key === "database_name" && (
@@ -804,7 +829,7 @@ export default function VehiclesPage() {
                         label={col.label}
                         options={databaseOptions}
                         selected={filterDatabase}
-                        onChange={setFilterDatabase}
+                        onChange={handleFilterDatabase}
                       />
                     )}
                     {col.key === "db_connection" && (
@@ -817,7 +842,7 @@ export default function VehiclesPage() {
                           { value: "not_applicable", label: "No aplica" }
                         ]}
                         selected={filterConnection}
-                        onChange={setFilterConnection}
+                        onChange={handleFilterConnection}
                       />
                     )}
                     {![ "client_name", "category", "engine_name", "database_name", "db_connection" ].includes(col.key) && (
@@ -825,18 +850,18 @@ export default function VehiclesPage() {
                     )}
                   </th>
                 ))}
-                <th style={{ width: 120 }}>Acciones</th>
+                <th style={{ width: 80 }}>Detalles</th>
               </tr>
             </thead>
             <tbody>
-              {filteredVehicles.length === 0 ? (
+              {pagedVehicles.length === 0 ? (
                 <tr>
                   <td colSpan={activeColumns.length + 2} className="table-empty-row">
                     {loading ? "Cargando..." : "No hay vehiculos que coincidan con los filtros actuales."}
                   </td>
                 </tr>
               ) : (
-                filteredVehicles.map((vehicle) => (
+                pagedVehicles.map((vehicle) => (
                   <tr key={vehicle.plate} className={selectedPlates.has(vehicle.plate) ? "is-selected" : ""}>
                     <td data-label="Seleccion">
                       <input
@@ -982,41 +1007,30 @@ export default function VehiclesPage() {
                         </td>
                       );
                     })}
-                    <td data-label="Acciones">
+                    <td data-label="Detalles">
                       <div className="actions-row vehicles-row-actions">
                         <button
                           type="button"
-                          className="button-secondary button-sm"
+                          className="icon-button"
+                          title="Ver detalles del vehiculo"
+                          aria-label="Ver detalles del vehiculo"
                           onClick={() => setSelectedVehicle(vehicle)}
                         >
-                          Detalles
-                        </button>
-                        <Can permission="vehicles.refresh">
-                          <button
-                            type="button"
-                            className="icon-button"
-                            title="Actualizar datos del vehiculo"
-                            onClick={() => handleRefreshVehicle(vehicle.plate)}
-                            disabled={refreshingPlates.has(vehicle.plate)}
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
                           >
-                            <svg
-                              className={refreshingPlates.has(vehicle.plate) ? "spin" : ""}
-                              width="16"
-                              height="16"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M21 2v6h-6" />
-                              <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
-                              <path d="M3 22v-6h6" />
-                              <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
-                            </svg>
-                          </button>
-                        </Can>
+                            <circle cx="12" cy="12" r="9" />
+                            <line x1="12" y1="8" x2="12" y2="12" />
+                            <line x1="12" y1="16" x2="12.01" y2="16" />
+                          </svg>
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1024,6 +1038,51 @@ export default function VehiclesPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        <div className="vehicles-pagination">
+          <span className="vehicles-pagination-info">
+            {totalVehicles === 0
+              ? "0 vehiculos"
+              : `${fromRow}–${toRow} de ${totalVehicles}`}
+          </span>
+          <div className="vehicles-pagination-controls">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => setPage(Math.max(1, safePage - 1))}
+              disabled={safePage <= 1}
+              aria-label="Pagina anterior"
+              title="Pagina anterior"
+            >
+              ‹
+            </button>
+            <span className="vehicles-pagination-pages">
+              Pagina {safePage} de {totalPages}
+            </span>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => setPage(Math.min(totalPages, safePage + 1))}
+              disabled={safePage >= totalPages}
+              aria-label="Pagina siguiente"
+              title="Pagina siguiente"
+            >
+              ›
+            </button>
+          </div>
+          <label className="vehicles-pagination-size">
+            Filas
+            <select
+              value={pageSize}
+              onChange={(event) => setPageSize(Number(event.target.value))}
+              aria-label="Filas por pagina"
+            >
+              {[10, 25, 50, 100, 200].map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </label>
         </div>
 
       </section>

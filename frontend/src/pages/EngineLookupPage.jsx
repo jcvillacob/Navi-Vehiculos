@@ -244,6 +244,7 @@ export default function EngineLookupPage() {
             lockTechnicalNumber={!isManualAssignment}
             registeredMotor={lookupResult?.registered_motor || null}
             requiresMotorRegistration={!lookupResult?.registered_motor}
+            allowCreateMotor
             onClose={() => setIsRegisterOpen(false)}
             onSubmit={handleRegisterMotor}
             canEditVehicle={canEditVehicles}

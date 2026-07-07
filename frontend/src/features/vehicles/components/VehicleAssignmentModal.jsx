@@ -42,6 +42,7 @@ export default function VehicleAssignmentModal({
   motors = [],
   registeredMotor = null,
   requiresMotorRegistration = false,
+  allowCreateMotor = false,
   initialTechnicalNumber = "",
   lockTechnicalNumber = false,
   onClose,
@@ -74,7 +75,7 @@ export default function VehicleAssignmentModal({
     setEngineName("");
     setAttachmentFile(null);
     setAttachmentCpl(vehicle?.cpl || "");
-    setMotorMode(motors.length > 0 ? "existing" : "new");
+    setMotorMode("existing");
 
     // Pre-select the motor that matches the vehicle's current technical_number
     const currentMotor = motors.find(
@@ -301,7 +302,7 @@ export default function VehicleAssignmentModal({
         <form className="register-form" onSubmit={handleSubmit}>
           {requiresMotorRegistration ? (
             <>
-              {motors.length > 0 ? (
+              {motors.length > 0 && allowCreateMotor ? (
                 <div className="form-field">
                   <label>Motor</label>
                   <div className="motor-mode-toggle">
@@ -323,7 +324,7 @@ export default function VehicleAssignmentModal({
                 </div>
               ) : null}
 
-              {motors.length > 0 && motorMode === "existing" ? (
+              {motors.length > 0 && (!allowCreateMotor || motorMode === "existing") ? (
                 <div className="form-field">
                   <label htmlFor="assign-existing-motor">Motor del catalogo</label>
                   <select

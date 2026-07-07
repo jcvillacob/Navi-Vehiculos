@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 
 import MapView from "../features/mapa/components/MapView";
 import HistoryModal from "../features/mapa/components/HistoryModal";
@@ -7,6 +7,36 @@ import { usePermission } from "../context/AuthContext";
 import { postManualTallerAction } from "../api/mapaApi";
 
 const ALL = "all";
+
+const VEHICLE_CATEGORY_SECTIONS = [
+  {
+    key: "flota",
+    label: "Flotas administradas",
+    match: (category) => category === "flota administrada",
+  },
+  {
+    key: "experiencia",
+    label: "Experiencia superior",
+    match: (category) => category === "experiencia superior",
+  },
+  {
+    key: "otras",
+    label: "Sin categoría prioritaria",
+    match: () => true,
+  },
+];
+
+function normalizeCategory(category) {
+  return String(category || "Ninguna").trim().toLowerCase();
+}
+
+function resolveCategorySection(vehicle) {
+  const normalized = normalizeCategory(vehicle.category);
+  return (
+    VEHICLE_CATEGORY_SECTIONS.find((section) => section.match(normalized)) ||
+    VEHICLE_CATEGORY_SECTIONS[VEHICLE_CATEGORY_SECTIONS.length - 1]
+  );
+}
 
 function formatDuration(minutes) {
   if (minutes == null) return "—";
@@ -64,10 +94,29 @@ export default function MapaPage() {
     [exited, filterZoneId]
   );
 
-  const sortedVehicles = useMemo(
-    () => [...visibleVehicles].sort((a, b) => b.minutes_inside - a.minutes_inside),
-    [visibleVehicles]
-  );
+  const groupedVehicleSections = useMemo(() => {
+    const groups = new Map(
+      VEHICLE_CATEGORY_SECTIONS.map((section) => [section.key, { ...section, vehicles: [] }])
+    );
+
+    visibleVehicles.forEach((vehicle) => {
+      const section = resolveCategorySection(vehicle);
+      groups.get(section.key)?.vehicles.push(vehicle);
+    });
+
+    return Array.from(groups.values())
+      .map((section) => ({
+        ...section,
+        vehicles: [...section.vehicles].sort((a, b) => {
+          const aMinutes = Number.isFinite(a.minutes_inside) ? a.minutes_inside : Number.MAX_SAFE_INTEGER;
+          const bMinutes = Number.isFinite(b.minutes_inside) ? b.minutes_inside : Number.MAX_SAFE_INTEGER;
+          return aMinutes - bMinutes || String(a.plate).localeCompare(String(b.plate));
+        }),
+      }))
+      .filter((section) => section.vehicles.length > 0);
+  }, [visibleVehicles]);
+
+  const tableColumnCount = canManage ? 4 : 3;
 
   const totals = useMemo(() => {
     const count = vehicles.length;
@@ -227,91 +276,102 @@ export default function MapaPage() {
                       Cargando…
                     </td>
                   </tr>
-                ) : sortedVehicles.length === 0 ? (
+                ) : groupedVehicleSections.length === 0 ? (
                   <tr>
-                    <td colSpan={canManage ? 4 : 3} className="table-empty-row">
+                    <td colSpan={tableColumnCount} className="table-empty-row">
                       No hay vehiculos en este taller.
                     </td>
                   </tr>
                 ) : (
-                  sortedVehicles.map((v) => {
-                    const isSel = v.plate === selectedPlate;
-                    return (
-                      <tr
-                        key={v.plate}
-                        className={isSel ? "is-selected" : ""}
-                        onClick={() => setSelectedPlate(v.plate)}
-                      >
-                        <td>
-                          <strong>{v.plate}</strong>
-                          {v.manual ? (
-                            <span
-                              className="status-pill status-soft"
-                              style={{ marginLeft: 6, fontSize: 9 }}
-                            >
-                              MANUAL
-                            </span>
-                          ) : null}
-                          {v.motor ? (
-                            <span className="mapa-row-sub">{v.motor}</span>
-                          ) : null}
-                          {v.client_name ? (
-                            <span className="mapa-row-sub">{v.client_name}</span>
-                          ) : null}
+                  groupedVehicleSections.map((section) => (
+                    <Fragment key={section.key}>
+                      <tr className={`mapa-section-row mapa-section-${section.key}`}>
+                        <td colSpan={tableColumnCount}>
+                          <span className="mapa-section-dot" />
+                          <span>{section.label}</span>
+                          <small>{section.vehicles.length}</small>
                         </td>
-                        <td>
-                          <span className="mapa-geofence-chip">
-                            {v.zone_name || "—"}
-                          </span>
-                          {v.category ? (
-                            <span className="mapa-row-sub">{v.category}</span>
-                          ) : null}
-                        </td>
-                        <td className="mapa-hours">
-                          {formatDuration(v.minutes_inside)}
-                          <span className="mapa-row-sub">
-                            desde {formatLocalTime(v.enter_ts_local)}
-                          </span>
-                        </td>
-                        {canManage ? (
-                          <td>
-                            <div
-                              style={{
-                                display: "flex",
-                                gap: 4,
-                                flexWrap: "wrap",
-                              }}
-                            >
-                              <button
-                                type="button"
-                                className="button-sm button-secondary"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleManualAction(v.plate, "hide");
-                                }}
-                                disabled={actionLoading}
-                                title="Ocultar del mapa"
-                              >
-                                Ocultar
-                              </button>
-                              <button
-                                type="button"
-                                className="button-sm button-danger-outline"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleManualAction(v.plate, "close");
-                                }}
-                                disabled={actionLoading}
-                                title="Cerrar y eliminar del mapa"
-                              >
-                                Cerrar
-                              </button>
-                            </div>
-                          </td>
-                        ) : null}
                       </tr>
-                    );
-                  })
+                      {section.vehicles.map((v) => {
+                        const isSel = v.plate === selectedPlate;
+                        return (
+                          <tr
+                            key={v.plate}
+                            className={`${isSel ? "is-selected " : ""}mapa-category-${section.key}`}
+                            onClick={() => setSelectedPlate(v.plate)}
+                          >
+                            <td>
+                              <strong>{v.plate}</strong>
+                              {v.manual ? (
+                                <span
+                                  className="status-pill status-soft"
+                                  style={{ marginLeft: 6, fontSize: 9 }}
+                                >
+                                  MANUAL
+                                </span>
+                              ) : null}
+                              {v.motor ? (
+                                <span className="mapa-row-sub">{v.motor}</span>
+                              ) : null}
+                              {v.client_name ? (
+                                <span className="mapa-row-sub">{v.client_name}</span>
+                              ) : null}
+                            </td>
+                            <td>
+                              <span className="mapa-geofence-chip">
+                                {v.zone_name || "—"}
+                              </span>
+                              {v.category ? (
+                                <span className="mapa-row-sub">{v.category}</span>
+                              ) : null}
+                            </td>
+                            <td className="mapa-hours">
+                              {formatDuration(v.minutes_inside)}
+                              <span className="mapa-row-sub">
+                                desde {formatLocalTime(v.enter_ts_local)}
+                              </span>
+                            </td>
+                            {canManage ? (
+                              <td>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    gap: 4,
+                                    flexWrap: "wrap",
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    className="button-sm button-secondary"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleManualAction(v.plate, "hide");
+                                    }}
+                                    disabled={actionLoading}
+                                    title="Ocultar del mapa"
+                                  >
+                                    Ocultar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="button-sm button-danger-outline"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleManualAction(v.plate, "close");
+                                    }}
+                                    disabled={actionLoading}
+                                    title="Cerrar y eliminar del mapa"
+                                  >
+                                    Cerrar
+                                  </button>
+                                </div>
+                              </td>
+                            ) : null}
+                          </tr>
+                        );
+                      })}
+                    </Fragment>
+                  ))
                 )}
               </tbody>
             </table>
