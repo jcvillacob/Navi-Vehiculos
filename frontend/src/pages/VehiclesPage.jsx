@@ -28,15 +28,45 @@ const VEHICLE_COLUMNS = [
   { key: "tipo_combustible", label: "Combustible", width: 110, getValue: (v) => v.tipo_combustible || "-" },
   { key: "vin", label: "VIN", width: 170, getValue: (v) => v.vin || "Sin VIN" },
   { key: "cpl", label: "CPL", width: 80, getValue: (v) => v.cpl || "Sin CPL" },
-  { key: "db_connection", label: "DB", width: 96, getExportValue: (v) => v.database_connection_type || "-" },
+  {
+    key: "db_connection",
+    label: "DB",
+    width: 96,
+    getSortValue: (v) => v.database_connection_type || "",
+    getExportValue: (v) => v.database_connection_type || "-",
+  },
   { key: "engine_name", label: "Motor", width: 140, getValue: (v) => v.engine_name || "Sin catalogar" },
   { key: "technical_number", label: "TEC#", width: 110, getValue: (v) => v.technical_number },
   { key: "client_name", label: "Cliente", width: 140, getValue: (v) => v.client_name || "Sin cliente" },
-  { key: "category", label: "Categoria", width: 160, getExportValue: (v) => v.category || "Ninguna" },
-  { key: "vocacional", label: "Uso", width: 110, getExportValue: (v) => (v.vocacional ? "Vocacional" : "Transporte") },
+  {
+    key: "category",
+    label: "Categoria",
+    width: 160,
+    getSortValue: (v) => v.category || "Ninguna",
+    getExportValue: (v) => v.category || "Ninguna",
+  },
+  {
+    key: "vocacional",
+    label: "Uso",
+    width: 110,
+    getSortValue: (v) => (v.vocacional ? 1 : 0),
+    getExportValue: (v) => (v.vocacional ? "Vocacional" : "Transporte"),
+  },
   { key: "database_name", label: "Database", width: 130, getValue: (v) => v.database_name || "Sin database" },
-  { key: "has_motor_rules", label: "Reglas", width: 70, getExportValue: (v) => (v.has_motor_rules ? "Si" : "No") },
-  { key: "attachments", label: "Adjuntos", width: 90, getExportValue: (v) => v.attachments_count ?? v.attachments?.length ?? 0 },
+  {
+    key: "has_motor_rules",
+    label: "Reglas",
+    width: 70,
+    getSortValue: (v) => (v.has_motor_rules ? 1 : 0),
+    getExportValue: (v) => (v.has_motor_rules ? "Si" : "No"),
+  },
+  {
+    key: "attachments",
+    label: "Adjuntos",
+    width: 90,
+    getSortValue: (v) => v.attachments_count ?? v.attachments?.length ?? 0,
+    getExportValue: (v) => v.attachments_count ?? v.attachments?.length ?? 0,
+  },
 ];
 
 function AttachmentIcon({ contentType }) {
@@ -53,12 +83,62 @@ function AttachmentIcon({ contentType }) {
         </svg>
       ) : (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="5" width="18" height="14" rx="2" />
-          <circle cx="9" cy="10" r="1.2" />
-          <path d="m21 15-4.5-4.5L8 19" />
+          <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6" />
         </svg>
       )}
     </span>
+  );
+}
+
+function SortButton({ columnKey, currentSort, onSortChange }) {
+  const isActive = currentSort.key === columnKey;
+  const dir = isActive ? currentSort.dir : null;
+  const Icon =
+    dir === "asc"
+      ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m5 12 7-7 7 7" />
+          <path d="M12 19V5" />
+        </svg>
+      )
+      : dir === "desc"
+        ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 5v14" />
+          <path d="m19 12-7 7-7-7" />
+        </svg>
+        )
+        : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m7 15 5 5 5-5" />
+          <path d="m7 9 5-5 5 5" />
+        </svg>
+        );
+  const label =
+    dir === "asc"
+      ? "Orden ascendente (clic para descendente)"
+      : dir === "desc"
+        ? "Orden descendente (clic para quitar orden)"
+        : "Ordenar ascendente";
+  const handleClick = () => {
+    if (!isActive) {
+      onSortChange({ key: columnKey, dir: "asc" });
+      return;
+    }
+    if (dir === "asc") onSortChange({ key: columnKey, dir: "desc" });
+    else onSortChange({ key: null, dir: null });
+  };
+  return (
+    <button
+      type="button"
+      className={`vehicles-sort-btn${dir ? ` is-${dir}` : ""}`}
+      onClick={handleClick}
+      title={label}
+      aria-label={label}
+    >
+      {Icon}
+    </button>
   );
 }
 
@@ -184,6 +264,7 @@ export default function VehiclesPage() {
   const [savingVocacionalPlates, setSavingVocacionalPlates] = useState(() => new Set());
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const [sort, setSort] = useState({ key: null, dir: null });
   // Solo la fila en edicion monta un <select> nativo; las demas muestran el badge.
   // Asi evitamos cientos de selects nativos en el DOM (coste de paint + hit-testing).
   const [editingCategoryPlate, setEditingCategoryPlate] = useState(null);
@@ -272,6 +353,10 @@ export default function VehiclesPage() {
     setFilterDatabase((current) => current.filter((name) => databaseOptions.includes(name)));
   }, [databaseOptions]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [sort.key, sort.dir]);
+
   const filteredVehicles = useMemo(() => {
     let result = vehicles;
     if (filterClient.length) {
@@ -305,11 +390,34 @@ export default function VehiclesPage() {
     [visibleColumns]
   );
 
+  const sortedVehicles = useMemo(() => {
+    if (!sort.key || !sort.dir) return filteredVehicles;
+    const col = VEHICLE_COLUMNS.find((c) => c.key === sort.key);
+    if (!col) return filteredVehicles;
+    const accessor = (v) => col.getSortValue?.(v) ?? col.getValue?.(v);
+    const factor = sort.dir === "asc" ? 1 : -1;
+    return [...filteredVehicles].sort((a, b) => {
+      const va = accessor(a);
+      const vb = accessor(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === "number" && typeof vb === "number") {
+        return (va - vb) * factor;
+      }
+      return (
+        String(va)
+          .localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" }) *
+        factor
+      );
+    });
+  }, [filteredVehicles, sort]);
+
   const totalVehicles = filteredVehicles.length;
   const totalPages = Math.max(1, Math.ceil(totalVehicles / pageSize));
   const safePage = Math.min(page, totalPages);
   const pageStart = (safePage - 1) * pageSize;
-  const pagedVehicles = filteredVehicles.slice(pageStart, pageStart + pageSize);
+  const pagedVehicles = sortedVehicles.slice(pageStart, pageStart + pageSize);
   const fromRow = totalVehicles === 0 ? 0 : pageStart + 1;
   const toRow = Math.min(pageStart + pageSize, totalVehicles);
 
@@ -867,54 +975,61 @@ export default function VehiclesPage() {
                 </th>
                 {activeColumns.map((col) => (
                   <th key={col.key} style={col.width ? { width: col.width } : undefined}>
-                    {col.key === "client_name" && (
-                      <MultiSelectFilter
-                        label={col.label}
-                        options={clientOptions}
-                        selected={filterClient}
-                        onChange={handleFilterClient}
+                    <div className="vehicles-th-content">
+                      {col.key === "client_name" && (
+                        <MultiSelectFilter
+                          label={col.label}
+                          options={clientOptions}
+                          selected={filterClient}
+                          onChange={handleFilterClient}
+                        />
+                      )}
+                      {col.key === "category" && (
+                        <MultiSelectFilter
+                          label={col.label}
+                          options={CUSTOMER_CATEGORIES}
+                          selected={filterCategory}
+                          onChange={handleFilterCategory}
+                        />
+                      )}
+                      {col.key === "engine_name" && (
+                        <MultiSelectFilter
+                          label={col.label}
+                          options={motorOptions}
+                          selected={filterMotor}
+                          onChange={handleFilterMotor}
+                        />
+                      )}
+                      {col.key === "database_name" && (
+                        <MultiSelectFilter
+                          label={col.label}
+                          options={databaseOptions}
+                          selected={filterDatabase}
+                          onChange={handleFilterDatabase}
+                        />
+                      )}
+                      {col.key === "db_connection" && (
+                        <MultiSelectFilter
+                          label={col.label}
+                          options={[
+                            { value: "active", label: "Activos" },
+                            { value: "inactive", label: "Inactivos" },
+                            { value: "unchecked", label: "Sin revisar" },
+                            { value: "not_applicable", label: "No aplica" }
+                          ]}
+                          selected={filterConnection}
+                          onChange={handleFilterConnection}
+                        />
+                      )}
+                      {![ "client_name", "category", "engine_name", "database_name", "db_connection" ].includes(col.key) && (
+                        <span>{col.label}</span>
+                      )}
+                      <SortButton
+                        columnKey={col.key}
+                        currentSort={sort}
+                        onSortChange={setSort}
                       />
-                    )}
-                    {col.key === "category" && (
-                      <MultiSelectFilter
-                        label={col.label}
-                        options={CUSTOMER_CATEGORIES}
-                        selected={filterCategory}
-                        onChange={handleFilterCategory}
-                      />
-                    )}
-                    {col.key === "engine_name" && (
-                      <MultiSelectFilter
-                        label={col.label}
-                        options={motorOptions}
-                        selected={filterMotor}
-                        onChange={handleFilterMotor}
-                      />
-                    )}
-                    {col.key === "database_name" && (
-                      <MultiSelectFilter
-                        label={col.label}
-                        options={databaseOptions}
-                        selected={filterDatabase}
-                        onChange={handleFilterDatabase}
-                      />
-                    )}
-                    {col.key === "db_connection" && (
-                      <MultiSelectFilter
-                        label={col.label}
-                        options={[
-                          { value: "active", label: "Activos" },
-                          { value: "inactive", label: "Inactivos" },
-                          { value: "unchecked", label: "Sin revisar" },
-                          { value: "not_applicable", label: "No aplica" }
-                        ]}
-                        selected={filterConnection}
-                        onChange={handleFilterConnection}
-                      />
-                    )}
-                    {![ "client_name", "category", "engine_name", "database_name", "db_connection" ].includes(col.key) && (
-                      <span>{col.label}</span>
-                    )}
+                    </div>
                   </th>
                 ))}
                 <th style={{ width: 80 }}>Detalles</th>
@@ -1084,7 +1199,9 @@ export default function VehiclesPage() {
                       }
                       return (
                         <td key={col.key} data-label={col.label}>
-                          {col.getValue(vehicle)}
+                          <span className="cell-truncate" title={typeof col.getValue(vehicle) === "string" ? col.getValue(vehicle) : undefined}>
+                            {col.getValue(vehicle)}
+                          </span>
                         </td>
                       );
                     })}

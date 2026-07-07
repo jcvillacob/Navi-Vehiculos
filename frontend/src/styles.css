@@ -151,31 +151,27 @@ h1, h2, h3, h4, h5, h6 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   padding: 0;
-  border: 1px solid var(--border-strong);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text-secondary);
+  background: var(--gray-deep);
+  color: #fff;
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
-  box-shadow: var(--shadow-xs);
-  transition: background 120ms ease, color 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
 .sidebar-toggle:hover {
-  background: var(--red);
-  color: #fff;
-  border-color: var(--red-hover);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.22);
 }
 
 /* Toggle para cerrar, dentro del brand-block del sidebar */
 .sidebar-toggle-close {
-  position: absolute;
-  top: 18px;
-  right: 14px;
+  flex: 0 0 auto;
 }
 
 /* Toggle para abrir, flotante arriba a la izquierda del content-area */
@@ -184,6 +180,16 @@ h1, h2, h3, h4, h5, h6 {
   top: 16px;
   left: 16px;
   z-index: 20;
+  background: var(--surface);
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-xs);
+}
+
+.sidebar-toggle-open:hover {
+  background: var(--red);
+  color: #fff;
+  border-color: var(--red-hover);
 }
 
 /* ─────────────────────────────
@@ -202,6 +208,25 @@ h1, h2, h3, h4, h5, h6 {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.sidebar-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-panel::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+
+.sidebar-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
 }
 
 /* Brand block */
@@ -213,13 +238,16 @@ h1, h2, h3, h4, h5, h6 {
 
 .sidebar-logo-wrap {
   display: flex;
-  justify-content: center;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin-bottom: 18px;
 }
 
 .sidebar-logo {
   display: block;
-  width: min(100%, 168px);
+  width: auto;
+  max-width: calc(100% - 38px);
   height: auto;
   object-fit: contain;
 }
@@ -620,6 +648,11 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   background: var(--surface);
+}
+
+.lookup-bar-input-wrap {
+  flex: 1;
+  min-width: 0;
 }
 
 .lookup-bar-input:focus {
@@ -1858,6 +1891,12 @@ select.control-sm {
 .db-type-badge {
   font-size: 11px;
   letter-spacing: 0.03em;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .db-type-geotab {
@@ -3995,6 +4034,8 @@ select.control-sm {
 
 .th-multifilter {
   position: relative;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .th-multifilter-trigger {
@@ -4309,6 +4350,46 @@ select.control-sm {
   white-space: nowrap;
 }
 
+.vehicles-th-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.vehicles-sort-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.vehicles-sort-btn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.vehicles-sort-btn.is-asc,
+.vehicles-sort-btn.is-desc {
+  color: var(--red);
+}
+
+.vehicles-sort-btn.is-asc:hover,
+.vehicles-sort-btn.is-desc:hover {
+  background: rgba(238, 46, 47, 0.08);
+}
+
 .vehicles-table tbody td {
   padding: 12px 14px;
   vertical-align: middle;
@@ -4316,6 +4397,14 @@ select.control-sm {
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-secondary);
+}
+
+.cell-truncate {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .vehicles-table tbody tr:last-child td {
@@ -5702,6 +5791,47 @@ select.control-sm {
   font-size: 15px;
 }
 
+.bulk-upload-summary-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+
+.bulk-upload-summary-toggle:focus,
+.bulk-upload-summary-toggle:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.bulk-upload-summary-toggle:hover strong {
+  color: var(--red);
+}
+
+.bulk-upload-summary-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 150ms ease, color 150ms ease;
+}
+
+.bulk-upload-summary-chevron.is-open {
+  transform: rotate(180deg);
+  color: var(--text);
+}
+
 .bulk-upload-list {
   display: grid;
   gap: 8px;
@@ -6228,6 +6358,26 @@ select.control-sm {
   overflow: auto;
   min-height: 0;
   margin-top: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.mapa-table-shell::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.mapa-table-shell::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mapa-table-shell::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.mapa-table-shell::-webkit-scrollbar-thumb:hover {
+  background: var(--text-subtle);
 }
 
 .mapa-table {

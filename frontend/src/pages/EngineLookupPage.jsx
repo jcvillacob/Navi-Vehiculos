@@ -156,23 +156,30 @@ export default function EngineLookupPage() {
       ) : (
         <>
           <form className="lookup-bar" onSubmit={handleSubmit}>
-            <input
-              id="lookup-identifier"
-              className="lookup-bar-input"
-              value={identifier}
-              onChange={(event) => setIdentifier(event.target.value.toUpperCase())}
-              placeholder="Placa o VIN — Ej: TLK240, 3HSDJAPR6GN123456"
-              minLength={3}
-              maxLength={32}
-            />
+            <div className="search-input-wrap lookup-bar-input-wrap">
+              <input
+                id="lookup-identifier"
+                className="lookup-bar-input"
+                value={identifier}
+                onChange={(event) => setIdentifier(event.target.value.toUpperCase())}
+                placeholder="Placa o VIN — Ej: TLK240, 3HSDJAPR6GN123456"
+                minLength={3}
+                maxLength={32}
+              />
+              {identifier ? (
+                <button
+                  type="button"
+                  className="search-clear-button"
+                  onClick={clearLookup}
+                  aria-label="Limpiar busqueda"
+                >
+                  ✕
+                </button>
+              ) : null}
+            </div>
             <button type="submit" disabled={loading || identifier.trim().length < 3}>
               {loading ? "Buscando..." : "Consultar"}
             </button>
-            {lookupResult ? (
-              <button type="button" className="button-secondary button-sm" onClick={clearLookup}>
-                Limpiar
-              </button>
-            ) : null}
           </form>
 
           {history.length > 0 && !lookupResult ? (

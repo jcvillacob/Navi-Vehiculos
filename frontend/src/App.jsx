@@ -131,16 +131,30 @@ function AppShell() {
                   src="/logo-navitrans.png"
                   alt="Navitrans"
                 />
+                <button
+                  type="button"
+                  className="sidebar-toggle sidebar-toggle-close"
+                  onClick={() => setSidebarOpen(false)}
+                  aria-label="Ocultar menu"
+                  title="Ocultar menu"
+                >
+                  <svg
+                    className="lucide lucide-panel-left-close"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <rect width="18" height="18" x="3" y="3" rx="2" />
+                    <path d="M9 3v18" />
+                    <path d="m16 15-3-3 3-3" />
+                  </svg>
+                </button>
               </div>
-              <button
-                type="button"
-                className="sidebar-toggle sidebar-toggle-close"
-                onClick={() => setSidebarOpen(false)}
-                aria-label="Ocultar menu"
-                title="Ocultar menu"
-              >
-                &larr;
-              </button>
             </div>
 
             <nav className="sidebar-nav">
@@ -249,15 +263,29 @@ function AppShell() {
 
         <main className="content-area">
           {!sidebarOpen ? (
-            <button
-              type="button"
-              className="sidebar-toggle sidebar-toggle-open"
-              onClick={() => setSidebarOpen(true)}
-              aria-label="Mostrar menu"
-              title="Mostrar menu"
-            >
-              &rarr;
-            </button>
+              <button
+                type="button"
+                className="sidebar-toggle sidebar-toggle-open"
+                onClick={() => setSidebarOpen(true)}
+                aria-label="Mostrar menu"
+                title="Mostrar menu"
+              >
+                <svg
+                  className="lucide lucide-panel-left-open"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect width="18" height="18" x="3" y="3" rx="2" />
+                  <path d="M9 3v18" />
+                  <path d="m14 9 3 3-3 3" />
+                </svg>
+              </button>
           ) : null}
           <div className="content-shell">
             <Routes>

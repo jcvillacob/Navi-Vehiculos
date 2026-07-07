@@ -11,6 +11,7 @@ export default function BulkLookupUploader({ onParsed, onReset }) {
   const [fileName, setFileName] = useState("");
   const [error, setError] = useState("");
   const [summaryItems, setSummaryItems] = useState([]);
+  const [summaryOpen, setSummaryOpen] = useState(false);
 
   const handleOpenPicker = () => {
     inputRef.current?.click();
@@ -98,20 +99,33 @@ export default function BulkLookupUploader({ onParsed, onReset }) {
 
       {summaryItems.length > 0 ? (
         <div className="bulk-upload-summary">
-          <strong>{summaryItems.length} dispositivos detectados</strong>
-          <div className="bulk-upload-list" role="list" aria-label="Dispositivos detectados">
-            {visibleItems.map((item) => (
-              <div key={`${item.identifier}-${item.rowNumber}`} role="listitem" className="bulk-upload-list-item">
-                <span>{item.identifier}</span>
-                <small>Fila {item.rowNumber}</small>
-              </div>
-            ))}
-            {remainingCount > 0 ? (
-              <div className="bulk-upload-list-item bulk-upload-list-more">
-                <span>...y {remainingCount} mas</span>
-              </div>
-            ) : null}
-          </div>
+          <button
+            type="button"
+            className="bulk-upload-summary-toggle"
+            onClick={() => setSummaryOpen((prev) => !prev)}
+            aria-expanded={summaryOpen}
+            aria-controls="bulk-upload-summary-list"
+          >
+            <strong>{summaryItems.length} dispositivos detectados</strong>
+            <span className={`bulk-upload-summary-chevron${summaryOpen ? " is-open" : ""}`} aria-hidden="true">
+              ▾
+            </span>
+          </button>
+          {summaryOpen ? (
+            <div id="bulk-upload-summary-list" className="bulk-upload-list" role="list" aria-label="Dispositivos detectados">
+              {visibleItems.map((item) => (
+                <div key={`${item.identifier}-${item.rowNumber}`} role="listitem" className="bulk-upload-list-item">
+                  <span>{item.identifier}</span>
+                  <small>Fila {item.rowNumber}</small>
+                </div>
+              ))}
+              {remainingCount > 0 ? (
+                <div className="bulk-upload-list-item bulk-upload-list-more">
+                  <span>...y {remainingCount} mas</span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </article>
