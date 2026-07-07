@@ -3864,14 +3864,14 @@ select.control-sm {
 .column-drawer-option {
   position: relative;
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto auto 1fr auto;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: 10px;
+  padding: 8px 10px 8px 12px;
   border-radius: var(--radius-sm);
   background: transparent;
-  cursor: pointer;
-  transition: background 140ms ease, transform 140ms ease;
+  cursor: grab;
+  transition: background 140ms ease, transform 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
   user-select: none;
 }
 
@@ -3880,7 +3880,32 @@ select.control-sm {
 }
 
 .column-drawer-option:active {
-  transform: scale(0.99);
+  cursor: grabbing;
+}
+
+.column-drawer-option.is-dragging {
+  opacity: 0.5;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
+}
+
+.column-drawer-option.is-drop-before::before,
+.column-drawer-option.is-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--red);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.column-drawer-option.is-drop-before::before {
+  top: -1px;
+}
+
+.column-drawer-option.is-drop-after::after {
+  bottom: -1px;
 }
 
 .column-drawer-option.is-checked {
@@ -3973,6 +3998,69 @@ select.control-sm {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.column-drawer-option-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 24px;
+  color: var(--text-subtle);
+  cursor: grab;
+  flex-shrink: 0;
+}
+
+.column-drawer-option-handle:active {
+  cursor: grabbing;
+}
+
+.column-drawer-option-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.column-drawer-option-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.column-drawer-option:hover .column-drawer-option-move,
+.column-drawer-option:focus-within .column-drawer-option-move {
+  opacity: 1;
+}
+
+.column-drawer-option-move-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.column-drawer-option-move-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.column-drawer-option-move-btn:disabled {
+  color: var(--text-subtle);
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .column-drawer-footer {

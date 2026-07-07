@@ -3,22 +3,34 @@ import { useEffect, useMemo, useRef, useState } from "react";
 export default function ColumnSelectorDrawer({
   open,
   title = "Columnas visibles",
-  description = "Selecciona las columnas que quieres ver en la tabla y aplica los cambios.",
+  description = "Selecciona las columnas que quieres ver en la tabla, reordenalas y aplica los cambios.",
   columns = [],
   visibleKeys,
   onApply,
   onClose
 }) {
-  const [pending, setPending] = useState(() => new Set(visibleKeys || []));
+  const [order, setOrder] = useState(() => (Array.isArray(visibleKeys) && visibleKeys.length > 0 ? visibleKeys : columns.map((c) => c.key)));
+  const [selected, setSelected] = useState(() => new Set(Array.isArray(visibleKeys) ? visibleKeys : columns.map((c) => c.key)));
   const [query, setQuery] = useState("");
+  const [draggedKey, setDraggedKey] = useState(null);
+  const [dropPosition, setDropPosition] = useState(null);
   const panelRef = useRef(null);
 
   useEffect(() => {
     if (open) {
-      setPending(new Set(visibleKeys || []));
+      const known = new Set(columns.map((c) => c.key));
+      const initialOrder = Array.isArray(visibleKeys) && visibleKeys.length > 0
+        ? visibleKeys.filter((k) => known.has(k))
+        : [];
+      const missing = columns.map((c) => c.key).filter((k) => !initialOrder.includes(k));
+      const fullOrder = [...initialOrder, ...missing];
+      setOrder(fullOrder);
+      setSelected(new Set(Array.isArray(visibleKeys) && visibleKeys.length > 0 ? visibleKeys : fullOrder));
       setQuery("");
+      setDraggedKey(null);
+      setDropPosition(null);
     }
-  }, [open, visibleKeys]);
+  }, [open, visibleKeys, columns]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -38,21 +50,29 @@ export default function ColumnSelectorDrawer({
     };
   }, [open]);
 
+  const normalizedQuery = query.trim().toLowerCase();
+  const hasQuery = normalizedQuery.length > 0;
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return columns.map((c, i) => ({ col: c, index: i + 1 }));
-    return columns
-      .map((c, i) => ({ col: c, index: i + 1 }))
-      .filter(({ col }) => col.label.toLowerCase().includes(q) || col.key.toLowerCase().includes(q));
-  }, [columns, query]);
+    if (!hasQuery) return order.map((k, originalIndex) => ({ key: k, originalIndex }));
+    return order
+      .map((k, originalIndex) => {
+        const col = columns.find((c) => c.key === k);
+        if (!col) return null;
+        const matches =
+          col.label.toLowerCase().includes(normalizedQuery) ||
+          col.key.toLowerCase().includes(normalizedQuery);
+        return matches ? { key: k, originalIndex } : null;
+      })
+      .filter(Boolean);
+  }, [order, columns, normalizedQuery, hasQuery]);
 
-  const totalSelected = pending.size;
+  const totalSelected = selected.size;
   const totalColumns = columns.length;
   const allSelected = totalSelected === totalColumns;
   const noneSelected = totalSelected === 0;
 
   const toggle = (key) => {
-    setPending((prev) => {
+    setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -60,16 +80,87 @@ export default function ColumnSelectorDrawer({
     });
   };
 
-  const selectAll = () => setPending(new Set(columns.map((c) => c.key)));
-  const selectNone = () => setPending(new Set());
+  const selectAll = () => setSelected(new Set(order));
+  const selectNone = () => setSelected(new Set());
+
+  const moveKey = (fromIndex, toIndex) => {
+    if (fromIndex === toIndex) return;
+    setOrder((prev) => {
+      if (fromIndex < 0 || fromIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      const target = toIndex > fromIndex ? toIndex - 1 : toIndex;
+      next.splice(Math.max(0, Math.min(next.length, target)), 0, moved);
+      return next;
+    });
+  };
+
+  const handleMoveUp = (originalIndex) => {
+    if (hasQuery) return;
+    if (originalIndex <= 0) return;
+    moveKey(originalIndex, originalIndex - 1);
+  };
+
+  const handleMoveDown = (originalIndex) => {
+    if (hasQuery) return;
+    if (originalIndex >= order.length - 1) return;
+    moveKey(originalIndex, originalIndex + 2);
+  };
+
+  const handleDragStart = (event, key) => {
+    setDraggedKey(key);
+    setDropPosition(null);
+    event.dataTransfer.effectAllowed = "move";
+    try {
+      event.dataTransfer.setData("text/plain", key);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleDragOver = (event) => {
+    if (!draggedKey) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDragEnterRow = (event, originalIndex) => {
+    if (!draggedKey) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const isAfter = event.clientY - rect.top > rect.height / 2;
+    setDropPosition({ key: order[originalIndex], position: isAfter ? "after" : "before" });
+  };
+
+  const handleDrop = (event, targetOriginalIndex) => {
+    event.preventDefault();
+    if (!draggedKey) return;
+    const fromIndex = order.indexOf(draggedKey);
+    if (fromIndex === -1) {
+      setDraggedKey(null);
+      setDropPosition(null);
+      return;
+    }
+    const position = dropPosition?.key === order[targetOriginalIndex] ? dropPosition.position : "before";
+    const targetIndex = position === "after" ? targetOriginalIndex + 1 : targetOriginalIndex;
+    moveKey(fromIndex, targetIndex);
+    setDraggedKey(null);
+    setDropPosition(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedKey(null);
+    setDropPosition(null);
+  };
 
   const handleApply = () => {
-    onApply?.(pending);
+    if (noneSelected) return;
+    const orderedSelected = order.filter((k) => selected.has(k));
+    onApply?.(orderedSelected);
     onClose?.();
   };
 
   const handleCancel = () => {
-    setPending(new Set(visibleKeys || []));
     onClose?.();
   };
 
@@ -176,32 +267,98 @@ export default function ColumnSelectorDrawer({
               <span>Sin coincidencias para "{query}"</span>
             </div>
           ) : (
-            filtered.map(({ col, index }) => {
-              const checked = pending.has(col.key);
+            filtered.map(({ key, originalIndex }) => {
+              const col = columns.find((c) => c.key === key);
+              if (!col) return null;
+              const checked = selected.has(key);
+              const isDragging = draggedKey === key;
+              const isDropBefore =
+                dropPosition?.key === key && dropPosition.position === "before";
+              const isDropAfter =
+                dropPosition?.key === key && dropPosition.position === "after";
+              const isFirst = originalIndex === 0;
+              const isLast = originalIndex === order.length - 1;
+              const disableMove = hasQuery;
               return (
-                <label
-                  key={col.key}
-                  className={`column-drawer-option ${checked ? "is-checked" : ""}`}
+                <div
+                  key={key}
+                  className={[
+                    "column-drawer-option",
+                    checked ? "is-checked" : "",
+                    isDragging ? "is-dragging" : "",
+                    isDropBefore ? "is-drop-before" : "",
+                    isDropAfter ? "is-drop-after" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, key)}
+                  onDragOver={handleDragOver}
+                  onDragEnter={(e) => handleDragEnterRow(e, originalIndex)}
+                  onDrop={(e) => handleDrop(e, originalIndex)}
+                  onDragEnd={handleDragEnd}
                 >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggle(col.key)}
-                    aria-label={`Mostrar columna ${col.label}`}
-                  />
-                  <span className="column-drawer-option-mark" aria-hidden>
-                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M20 6 9 17l-5-5" />
+                  <span
+                    className="column-drawer-option-handle"
+                    aria-hidden="true"
+                    title="Arrastrar para reordenar"
+                  >
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="9" cy="6" r="1" />
+                      <circle cx="9" cy="12" r="1" />
+                      <circle cx="9" cy="18" r="1" />
+                      <circle cx="15" cy="6" r="1" />
+                      <circle cx="15" cy="12" r="1" />
+                      <circle cx="15" cy="18" r="1" />
                     </svg>
                   </span>
+                  <label className="column-drawer-option-toggle">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggle(key)}
+                      aria-label={`Mostrar columna ${col.label}`}
+                    />
+                    <span className="column-drawer-option-mark" aria-hidden>
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 6 9 17l-5-5" />
+                      </svg>
+                    </span>
+                  </label>
                   <span className="column-drawer-option-body">
-                    <span className="column-drawer-option-index">{String(index).padStart(2, "0")}</span>
+                    <span className="column-drawer-option-index">{String(originalIndex + 1).padStart(2, "0")}</span>
                     <span className="column-drawer-option-text">
                       <span className="column-drawer-option-label">{col.label}</span>
                       <span className="column-drawer-option-key">{col.key}</span>
                     </span>
                   </span>
-                </label>
+                  <div className="column-drawer-option-move">
+                    <button
+                      type="button"
+                      className="column-drawer-option-move-btn"
+                      onClick={() => handleMoveUp(originalIndex)}
+                      disabled={disableMove || isFirst}
+                      aria-label={`Mover ${col.label} arriba`}
+                      title="Mover arriba"
+                    >
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="m18 15-6-6-6 6" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="column-drawer-option-move-btn"
+                      onClick={() => handleMoveDown(originalIndex)}
+                      disabled={disableMove || isLast}
+                      aria-label={`Mover ${col.label} abajo`}
+                      title="Mover abajo"
+                    >
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="m6 9 6 6 6-6" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
               );
             })
           )}

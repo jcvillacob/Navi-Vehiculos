@@ -10,6 +10,7 @@ import { useBulkRefresh } from "../context/BulkRefreshContext";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
 import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicleAssignments";
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
+import { useUserPreference } from "../hooks/useUserPreference";
 import BulkVehicleAssignmentModal from "../features/vehicles/components/BulkVehicleAssignmentModal";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
 import { assignVehicleDatabase, checkVehicleConnections, fetchVehicleDetail, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleVocacional } from "../api/vehicleApi";
@@ -365,12 +366,33 @@ export default function VehiclesPage() {
   const canEditVehicles = usePermission("vehicles.edit");
   const canRefreshVehicles = usePermission("vehicles.refresh");
 
-  const [visibleColumns, setVisibleColumns] = useState(() => new Set(VEHICLE_COLUMNS.map((c) => c.key)));
   const [columnSelectorOpen, setColumnSelectorOpen] = useState(false);
+  const defaultVisibleColumns = useMemo(() => VEHICLE_COLUMNS.map((c) => c.key), []);
+  const validColumnKeys = useMemo(() => new Set(VEHICLE_COLUMNS.map((c) => c.key)), []);
+  const validateVisibleColumns = useCallback(
+    (raw) => {
+      if (!Array.isArray(raw)) return null;
+      const filtered = raw.filter((k) => typeof k === "string" && validColumnKeys.has(k));
+      return filtered.length > 0 ? filtered : null;
+    },
+    [validColumnKeys]
+  );
+  const { value: savedColumns, setValue: persistColumns } = useUserPreference(
+    "vehicles.visible_columns",
+    null,
+    { validator: validateVisibleColumns }
+  );
 
-  const handleApplyColumns = useCallback((nextKeys) => {
-    setVisibleColumns(new Set(nextKeys));
-  }, []);
+  const visibleColumns = Array.isArray(savedColumns) && savedColumns.length > 0
+    ? savedColumns
+    : defaultVisibleColumns;
+
+  const handleApplyColumns = useCallback(
+    (nextKeys) => {
+      persistColumns(nextKeys);
+    },
+    [persistColumns]
+  );
 
   // React to bulk refresh finishing (works even if user navigated away and came back)
   useEffect(() => {
@@ -470,10 +492,15 @@ export default function VehiclesPage() {
     return result;
   }, [vehicles, filterClient, filterCategory, filterMotor, filterDatabase, filterConnection, connectionResults]);
 
-  const activeColumns = useMemo(
-    () => VEHICLE_COLUMNS.filter((col) => visibleColumns.has(col.key)),
-    [visibleColumns]
-  );
+  const activeColumns = useMemo(() => {
+    const byKey = new Map(VEHICLE_COLUMNS.map((col) => [col.key, col]));
+    const ordered = visibleColumns
+      .map((key) => byKey.get(key))
+      .filter((col) => Boolean(col));
+    const known = new Set(visibleColumns);
+    const missing = VEHICLE_COLUMNS.filter((col) => !known.has(col.key));
+    return [...ordered, ...missing];
+  }, [visibleColumns]);
 
   const sortedVehicles = useMemo(() => {
     if (!sort.key || !sort.dir) return filteredVehicles;
@@ -936,7 +963,7 @@ export default function VehiclesPage() {
               aria-haspopup="dialog"
               aria-expanded={columnSelectorOpen}
             >
-              Columnas ({visibleColumns.size}/{VEHICLE_COLUMNS.length})
+              Columnas ({visibleColumns.length}/{VEHICLE_COLUMNS.length})
             </button>
             <button
               type="button"
