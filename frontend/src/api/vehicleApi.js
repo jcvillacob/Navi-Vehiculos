@@ -423,6 +423,15 @@ export async function listVehicleAssignments(search = "") {
   return parseJsonOrThrow(response, "Error listando vehiculos");
 }
 
+export async function fetchVehicleDetail(plate) {
+  const normalizedPlate = (plate || "").trim().toUpperCase();
+  if (!normalizedPlate) {
+    throw new Error("Se requiere una placa para obtener el detalle del vehiculo");
+  }
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${encodeURIComponent(normalizedPlate)}`));
+  return parseJsonOrThrow(response, "Error cargando el detalle del vehiculo");
+}
+
 export async function manualAssignVehicle(plate, payload) {
   const normalizedPlate = plate.trim().toUpperCase();
   const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/manual-assign`), {

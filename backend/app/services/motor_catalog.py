@@ -42,6 +42,7 @@ from app.schemas.vehicle import (
     RegisteredMotorSummary,
     VehicleDatabaseAssignmentRequest,
     VehicleAssignmentRecord,
+    VehicleAssignmentSummary,
     VehicleLookupResponse,
 )
 from app.services.storage import (
@@ -76,6 +77,11 @@ def _normalize_optional_text(value: str | None) -> str | None:
 
 def _normalize_cpl(value: str | None) -> str | None:
     return _normalize_optional_text(value)
+
+
+def _attachment_matches_vehicle_cpl(attachment_cpl: str | None, vehicle_cpl: str | None) -> bool:
+    normalized_attachment_cpl = _normalize_cpl(attachment_cpl)
+    return normalized_attachment_cpl is None or normalized_attachment_cpl == vehicle_cpl
 
 
 def _normalize_category(value: str | None, *, default: str = "Ninguna") -> str:
@@ -1500,6 +1506,131 @@ def find_registered_motor(technical_number: str) -> RegisteredMotorSummary | Non
     return RegisteredMotorSummary(**row)
 
 
+def list_vehicle_assignment_summaries(search: str | None = None) -> list[VehicleAssignmentSummary]:
+    """Listado ligero de vehiculos para la tabla: omite adjuntos completos
+    y campos exclusivos del modal de detalles. Solo trae el conteo de
+    adjuntos matching CPL por vehiculo."""
+    params: list[Any] = []
+    where_clause = ""
+
+    if search:
+        normalized_search = f"%{search.strip().upper()}%"
+        where_clause = """
+            WHERE UPPER(a.plate) LIKE %s
+               OR UPPER(COALESCE(a.vin, '')) LIKE %s
+               OR UPPER(a.technical_number) LIKE %s
+               OR UPPER(COALESCE(a.cpl, '')) LIKE %s
+               OR UPPER(COALESCE(a.marketing_model_name, '')) LIKE %s
+               OR UPPER(COALESCE(a.service_model_name, '')) LIKE %s
+               OR UPPER(COALESCE(m.engine_name, '')) LIKE %s
+               OR UPPER(COALESCE(c.name, '')) LIKE %s
+               OR UPPER(COALESCE(cd.database_name, '')) LIKE %s
+               OR UPPER(COALESCE(cd.username, '')) LIKE %s
+               OR UPPER(COALESCE(a.nombre_vehiculo, '')) LIKE %s
+               OR UPPER(COALESCE(a.marca, '')) LIKE %s
+               OR UPPER(COALESCE(a.linea, '')) LIKE %s
+        """
+        params.extend([normalized_search] * 13)
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    a.plate,
+                    a.customer_database_id,
+                    a.vin,
+                    a.technical_number,
+                    a.cpl,
+                    a.marca,
+                    a.linea,
+                    a.ano_modelo,
+                    a.tipo_combustible,
+                    a.nombre_vehiculo,
+                    a.engine_number,
+                    m.engine_name,
+                    c.name AS client_name,
+                    COALESCE(a.category, c.category, 'Ninguna') AS category,
+                    (a.category IS NULL) AS category_is_inherited,
+                    COALESCE(c.category, 'Ninguna') AS customer_category,
+                    cd.database_name,
+                    cd.username AS database_username,
+                    cd.connection_type AS database_connection_type,
+                    COALESCE(a.access_url, cd.access_url) AS access_url,
+                    EXISTS (
+                        SELECT 1
+                        FROM geotab_rule_groups grg
+                        INNER JOIN motor_catalog mc
+                            ON mc.id = grg.motor_id
+                           AND mc.technical_number = a.technical_number
+                        INNER JOIN customer_databases sibling_db
+                            ON sibling_db.id = grg.database_id
+                        WHERE cd.connection_type = 'geotab'
+                          AND sibling_db.connection_type = 'geotab'
+                          AND LOWER(sibling_db.database_name) = LOWER(cd.database_name)
+                    ) AS has_motor_rules,
+                    a.vocacional,
+                    a.last_seen_at,
+                    COALESCE((
+                        SELECT COUNT(*)
+                        FROM motor_catalog mc2
+                        INNER JOIN motor_attachments ma2
+                            ON ma2.motor_id = mc2.id
+                        WHERE mc2.technical_number = a.technical_number
+                          AND (ma2.cpl IS NULL OR ma2.cpl = '' OR ma2.cpl = a.cpl)
+                    ), 0) AS attachments_count
+                FROM vehicle_motor_assignments a
+                LEFT JOIN motor_catalog m
+                    ON m.technical_number = a.technical_number
+                LEFT JOIN customers c
+                    ON c.id = a.customer_id
+                LEFT JOIN customer_databases cd
+                    ON cd.id = a.customer_database_id
+                {where_clause}
+                ORDER BY a.last_seen_at DESC, a.plate ASC;
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+
+    summaries: list[VehicleAssignmentSummary] = []
+    for row in rows:
+        effective_provider = infer_provider_key(
+            connection_type=row.get("database_connection_type"),
+            database_name=row.get("database_name"),
+            access_url=row.get("access_url"),
+        )
+        summaries.append(
+            VehicleAssignmentSummary(
+                plate=row["plate"],
+                customer_database_id=row.get("customer_database_id"),
+                vin=row.get("vin"),
+                technical_number=str(row["technical_number"]),
+                cpl=_normalize_cpl(row.get("cpl")),
+                marca=row.get("marca"),
+                linea=row.get("linea"),
+                ano_modelo=row.get("ano_modelo"),
+                tipo_combustible=row.get("tipo_combustible"),
+                nombre_vehiculo=row.get("nombre_vehiculo"),
+                engine_name=row.get("engine_name"),
+                engine_number=row.get("engine_number"),
+                client_name=row.get("client_name"),
+                category=row.get("category") or "Ninguna",
+                category_is_inherited=bool(row.get("category_is_inherited")),
+                customer_category=row.get("customer_category") or "Ninguna",
+                database_name=row.get("database_name"),
+                database_username=row.get("database_username"),
+                database_connection_type=effective_provider if row.get("database_name") else None,
+                has_motor_rules=bool(row.get("has_motor_rules")),
+                vocacional=bool(row.get("vocacional")),
+                attachments_count=int(row.get("attachments_count") or 0),
+                last_seen_at=row["last_seen_at"],
+            )
+        )
+    return summaries
+
+
 def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmentRecord]:
     params: list[Any] = []
     where_clause = ""
@@ -1627,7 +1758,9 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
         )
         candidate_attachments = attachments_by_technical_number.get(str(row["technical_number"]), [])
         matching_attachments = [
-            attachment for attachment in candidate_attachments if attachment.cpl == row_cpl
+            attachment
+            for attachment in candidate_attachments
+            if _attachment_matches_vehicle_cpl(attachment.cpl, row_cpl)
         ]
         payload = dict(row)
         payload["database_connection_type"] = effective_provider if payload.get("database_name") else None
@@ -1640,6 +1773,113 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
             )
         )
     return records
+
+
+def get_vehicle_assignment(plate: str) -> VehicleAssignmentRecord | None:
+    """Devuelve el registro completo (con adjuntos) de un vehiculo por placa.
+    Pensado para el modal de Detalles; el listado usa el summary ligero."""
+    normalized_plate = plate.strip().upper()
+    if not normalized_plate:
+        return None
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    a.plate,
+                    a.customer_id,
+                    a.customer_database_id,
+                    a.vin,
+                    a.geotab_status,
+                    a.geotab_customer_status,
+                    a.geotab_customer_database_id,
+                    a.geotab_device_id,
+                    a.geotab_device_synced_at,
+                    a.engine_number,
+                    a.technical_number,
+                    a.cpl,
+                    a.marketing_model_name,
+                    a.service_model_name,
+                    a.marca,
+                    a.linea,
+                    a.ano_modelo,
+                    a.tipo_combustible,
+                    a.nombre_vehiculo,
+                    m.engine_name,
+                    c.name AS client_name,
+                    COALESCE(a.category, c.category, 'Ninguna') AS category,
+                    (a.category IS NULL) AS category_is_inherited,
+                    COALESCE(c.category, 'Ninguna') AS customer_category,
+                    cd.database_name,
+                    cd.username AS database_username,
+                    cd.connection_type AS database_connection_type,
+                    (cd.password IS NOT NULL AND cd.password <> '') AS has_database_password,
+                    COALESCE(a.access_url, cd.access_url) AS access_url,
+                    EXISTS (
+                        SELECT 1
+                        FROM geotab_rule_groups grg
+                        INNER JOIN motor_catalog mc
+                            ON mc.id = grg.motor_id
+                           AND mc.technical_number = a.technical_number
+                        INNER JOIN customer_databases sibling_db
+                            ON sibling_db.id = grg.database_id
+                        WHERE cd.connection_type = 'geotab'
+                          AND sibling_db.connection_type = 'geotab'
+                          AND LOWER(sibling_db.database_name) = LOWER(cd.database_name)
+                    ) AS has_motor_rules,
+                    a.created_at,
+                    a.updated_at,
+                    a.last_seen_at,
+                    a.vocacional,
+                    vpb.provider_vehicle_id,
+                    vpb.is_manual AS provider_vehicle_id_is_manual
+                FROM vehicle_motor_assignments a
+                LEFT JOIN motor_catalog m
+                    ON m.technical_number = a.technical_number
+                LEFT JOIN customers c
+                    ON c.id = a.customer_id
+                LEFT JOIN customer_databases cd
+                    ON cd.id = a.customer_database_id
+                LEFT JOIN LATERAL (
+                    SELECT vpb.provider_vehicle_id, vpb.is_manual, vpb.binding_status
+                    FROM vehicle_provider_bindings vpb
+                    WHERE vpb.plate = a.plate
+                      AND vpb.customer_database_id = a.customer_database_id
+                    ORDER BY vpb.is_manual DESC, vpb.updated_at DESC
+                    LIMIT 1
+                ) vpb ON TRUE
+                WHERE a.plate = %s
+                ORDER BY a.last_seen_at DESC, a.plate ASC
+                LIMIT 1;
+                """,
+                (normalized_plate,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        attachments_by_technical_number = _list_attachments_by_technical_numbers(
+            conn, [str(row["technical_number"])]
+        )
+
+    row_cpl = _normalize_cpl(row.get("cpl"))
+    effective_provider = infer_provider_key(
+        connection_type=row.get("database_connection_type"),
+        database_name=row.get("database_name"),
+        access_url=row.get("access_url"),
+    )
+    candidate_attachments = attachments_by_technical_number.get(str(row["technical_number"]), [])
+    matching_attachments = [
+        attachment
+        for attachment in candidate_attachments
+        if _attachment_matches_vehicle_cpl(attachment.cpl, row_cpl)
+    ]
+    payload = dict(row)
+    payload["database_connection_type"] = effective_provider if payload.get("database_name") else None
+    payload["provider_vehicle_id"] = row.get("provider_vehicle_id")
+    payload["is_provider_vehicle_id_manual"] = bool(row.get("provider_vehicle_id_is_manual"))
+    return VehicleAssignmentRecord(**payload, attachments=matching_attachments)
 
 
 def register_vehicle_assignment(

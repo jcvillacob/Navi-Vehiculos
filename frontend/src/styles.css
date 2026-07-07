@@ -1701,6 +1701,12 @@ select.control-sm {
   border-radius: var(--radius-md, 10px);
 }
 
+.detail-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .detail-section-title {
   margin: 0;
   font-family: "Poppins", sans-serif;
@@ -2985,6 +2991,31 @@ select.control-sm {
 
 .attachment-list-compact {
   min-width: 0;
+}
+
+.attachment-count-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.attachment-count-chip:hover {
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
+}
+
+.attachment-count-chip .attachment-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .attachment-chip {

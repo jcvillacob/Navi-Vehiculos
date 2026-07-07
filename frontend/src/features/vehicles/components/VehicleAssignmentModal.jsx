@@ -4,12 +4,37 @@ import FileDropzone from "../../../components/FileDropzone";
 import { getDatabaseTypeLabel, providerSupportsManualVehicleId } from "../../customers/providerCatalog";
 import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../../categories";
 
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
+
 function DataItem({ label, value }) {
   return (
     <div className="data-item">
       <span>{label}</span>
       <strong>{value || "-"}</strong>
     </div>
+  );
+}
+
+function AttachmentIcon({ contentType }) {
+  const isPdf = contentType === "application/pdf";
+
+  return (
+    <span className="attachment-icon" aria-hidden="true">
+      {isPdf ? (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6" />
+          <path d="M8 13h8" />
+          <path d="M8 17h5" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <circle cx="9" cy="10" r="1.2" />
+          <path d="m21 15-4.5-4.5L8 19" />
+        </svg>
+      )}
+    </span>
   );
 }
 
@@ -144,6 +169,8 @@ export default function VehicleAssignmentModal({
     return null;
   }
 
+  const attachments = Array.isArray(vehicle.attachments) ? vehicle.attachments : [];
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     const shouldSendProviderId =
@@ -228,6 +255,32 @@ export default function VehicleAssignmentModal({
             />
           ) : null}
         </div>
+
+        <section className="detail-attachments">
+          <h4 className="detail-section-title">Adjuntos</h4>
+          {loading && !Array.isArray(vehicle.attachments) ? (
+            <p className="support-copy">Cargando adjuntos...</p>
+          ) : attachments.length ? (
+            <div className="attachment-list">
+              {attachments.map((attachment) => (
+                <a
+                  key={attachment.id}
+                  className="attachment-chip"
+                  href={`${API_BASE}${attachment.download_url}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={attachment.original_filename}
+                  aria-label={`Abrir ${attachment.original_filename}`}
+                >
+                  <AttachmentIcon contentType={attachment.content_type} />
+                  <span className="attachment-chip-cpl">{attachment.cpl || "—"}</span>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <p className="support-copy">Sin adjuntos.</p>
+          )}
+        </section>
 
         <section className="detail-editable-cards">
           <h4 className="detail-section-title">Informacion general</h4>

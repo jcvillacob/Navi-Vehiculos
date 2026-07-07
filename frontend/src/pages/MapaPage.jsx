@@ -119,14 +119,18 @@ export default function MapaPage() {
   const tableColumnCount = canManage ? 4 : 3;
 
   const totals = useMemo(() => {
-    const count = vehicles.length;
-    const avg = count
-      ? vehicles.reduce((acc, v) => acc + (v.minutes_inside || 0), 0) / count
+    const fleet = vehicles.filter(
+      (v) => normalizeCategory(v.category) === "flota administrada"
+    );
+    const totalCount = vehicles.length;
+    const fleetCount = fleet.length;
+    const avg = fleetCount
+      ? fleet.reduce((acc, v) => acc + (v.minutes_inside || 0), 0) / fleetCount
       : 0;
-    const max = count
-      ? Math.max(...vehicles.map((v) => v.minutes_inside || 0))
+    const max = fleetCount
+      ? Math.max(...fleet.map((v) => v.minutes_inside || 0))
       : 0;
-    return { count, avg, max };
+    return { totalCount, fleetCount, avg, max };
   }, [vehicles]);
 
   const handleManualAction = useCallback(
@@ -180,7 +184,10 @@ export default function MapaPage() {
       <section className="vehicles-summary-grid">
         <article className="card metric-card metric-card-compact">
           <span className="eyebrow">Vehiculos en taller</span>
-          <strong>{totals.count}</strong>
+          <strong>{totals.totalCount}</strong>
+          <span className="mapa-row-sub">
+            {totals.fleetCount} de flota administrada
+          </span>
         </article>
         <article className="card metric-card metric-card-compact feature-card-accent">
           <span className="eyebrow">Promedio dentro</span>

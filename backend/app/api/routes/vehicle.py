@@ -14,6 +14,7 @@ from app.schemas.vehicle import (
     BatchLookupRequest,
     ManualVehicleAssignmentRequest,
     VehicleAssignmentRecord,
+    VehicleAssignmentSummary,
     VehicleCategoryUpdateRequest,
     VehicleDatabaseAssignmentRequest,
     VehicleLookupResponse,
@@ -24,7 +25,9 @@ from app.services.motor_catalog import (
     backfill_geotab_device_ids,
     check_all_geotab_connections,
     get_connection_stats,
+    get_vehicle_assignment,
     list_vehicle_assignments,
+    list_vehicle_assignment_summaries,
     register_vehicle_assignment,
     revalidate_vehicle_customer_geotab,
     set_vehicle_category,
@@ -108,7 +111,7 @@ def lookup_vehicle_stream(
     return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
-@router.get("", response_model=list[VehicleAssignmentRecord])
+@router.get("", response_model=list[VehicleAssignmentSummary])
 def get_vehicle_assignments(
     search: str | None = Query(
         default=None,
@@ -117,8 +120,8 @@ def get_vehicle_assignments(
         description="Texto para filtrar por placa, VIN, TEC# o nombre del motor",
     ),
     _user: dict = Depends(require_permission("vehicles.list")),
-) -> list[VehicleAssignmentRecord]:
-    return list_vehicle_assignments(search)
+) -> list[VehicleAssignmentSummary]:
+    return list_vehicle_assignment_summaries(search)
 
 
 @router.post("/batch-lookup")
@@ -254,3 +257,14 @@ def vehicle_connection_stats(
     _user: dict = Depends(require_permission("rendimientos.view")),
 ) -> list[dict]:
     return get_connection_stats(month)
+
+
+@router.get("/{plate}", response_model=VehicleAssignmentRecord)
+def get_vehicle_detail(
+    plate: str = Path(..., min_length=1, max_length=32, description="Placa del vehiculo"),
+    _user: dict = Depends(require_permission("vehicles.list")),
+):
+    record = get_vehicle_assignment(plate)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Vehiculo no encontrado")
+    return record

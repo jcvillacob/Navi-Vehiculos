@@ -207,6 +207,36 @@ class MotorCatalogRecord(BaseModel):
     updated_at: datetime = Field(..., description="Fecha de actualizacion")
 
 
+class VehicleAssignmentSummary(BaseModel):
+    """Vista ligera de vehiculos para el listado: sin adjuntos ni campos
+    exclusivos del modal de detalles (geotab device, marketing/service model,
+    provider_vehicle_id, access_url, fechas internas, etc.)."""
+
+    plate: str = Field(..., description="Placa del vehiculo")
+    customer_database_id: int | None = Field(default=None, description="ID local de la database")
+    vin: str | None = Field(default=None, description="VIN asociado")
+    technical_number: str = Field(..., description="Numero tecnico de motor")
+    cpl: str | None = Field(default=None, description="CPL del motor consultado")
+    marca: str | None = Field(default=None, description="Marca del vehiculo (Fenix)")
+    linea: str | None = Field(default=None, description="Linea del vehiculo (Fenix)")
+    ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo (Fenix)")
+    tipo_combustible: str | None = Field(default=None, description="Tipo de combustible (Fenix)")
+    nombre_vehiculo: str | None = Field(default=None, description="Nombre del vehiculo (Fenix)")
+    engine_name: str | None = Field(default=None, description="Nombre visible del motor")
+    engine_number: str | None = Field(default=None, description="Numero de motor")
+    client_name: str | None = Field(default=None, description="Cliente asociado al vehiculo")
+    category: CustomerCategory = Field(default="Ninguna", description="Categoria efectiva")
+    category_is_inherited: bool = Field(default=True, description="Si la categoria se hereda del cliente")
+    customer_category: CustomerCategory = Field(default="Ninguna", description="Categoria del cliente")
+    database_name: str | None = Field(default=None, description="Database asociada")
+    database_username: str | None = Field(default=None, description="Usuario de la database")
+    database_connection_type: str | None = Field(default=None, description="Tipo de conexion de la database")
+    has_motor_rules: bool = Field(default=False, description="Si el motor tiene reglas Geotab")
+    vocacional: bool = Field(default=False, description="Uso vocacional")
+    attachments_count: int = Field(default=0, description="Cantidad de adjuntos del motor matching CPL")
+    last_seen_at: datetime = Field(..., description="Fecha de ultima consulta exitosa")
+
+
 class VehicleAssignmentRecord(BaseModel):
     plate: str = Field(..., description="Placa del vehiculo")
     customer_id: int | None = Field(default=None, description="ID local del cliente")

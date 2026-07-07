@@ -12,7 +12,7 @@ import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicle
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
 import BulkVehicleAssignmentModal from "../features/vehicles/components/BulkVehicleAssignmentModal";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
-import { assignVehicleDatabase, checkVehicleConnections, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleVocacional } from "../api/vehicleApi";
+import { assignVehicleDatabase, checkVehicleConnections, fetchVehicleDetail, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleVocacional } from "../api/vehicleApi";
 import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../features/categories";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
@@ -36,7 +36,7 @@ const VEHICLE_COLUMNS = [
   { key: "vocacional", label: "Uso", width: 110, getExportValue: (v) => (v.vocacional ? "Vocacional" : "Transporte") },
   { key: "database_name", label: "Database", width: 130, getValue: (v) => v.database_name || "Sin database" },
   { key: "has_motor_rules", label: "Reglas", width: 70, getExportValue: (v) => (v.has_motor_rules ? "Si" : "No") },
-  { key: "attachments", label: "Adjuntos", width: 90, getExportValue: (v) => v.attachments?.length || 0 },
+  { key: "attachments", label: "Adjuntos", width: 90, getExportValue: (v) => v.attachments_count ?? v.attachments?.length ?? 0 },
 ];
 
 function AttachmentIcon({ contentType }) {
@@ -167,6 +167,8 @@ function MultiSelectFilter({ label, options, selected, onChange }) {
 
 export default function VehiclesPage() {
   const [selectedVehicle, setSelectedVehicle] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [loadingAttachmentPlates, setLoadingAttachmentPlates] = useState(() => new Set());
   const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [selectedPlates, setSelectedPlates] = useState(() => new Set());
@@ -188,6 +190,7 @@ export default function VehiclesPage() {
   const [reprocessPromptPlates, setReprocessPromptPlates] = useState(null);
   const [reprocessSkipGeotab, setReprocessSkipGeotab] = useState(false);
   const selectAllRef = useRef(null);
+  const detailRequestRef = useRef(0);
   const { loading, vehicles, error, search, setSearch, loadVehicles, patchVehicle } = useVehicleAssignments();
   const { customers, loading: customersLoading } = useCustomersCatalog();
   const { motors, loading: motorsLoading } = useMotorsCatalog();
@@ -322,6 +325,70 @@ export default function VehiclesPage() {
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
+
+  const handleOpenDetails = useCallback((vehicle) => {
+    const requestId = detailRequestRef.current + 1;
+    detailRequestRef.current = requestId;
+    setSelectedVehicle(vehicle);
+    setDetailLoading(true);
+    fetchVehicleDetail(vehicle.plate)
+      .then((detail) => {
+        if (detailRequestRef.current === requestId) setSelectedVehicle(detail);
+      })
+      .catch((err) => {
+        if (detailRequestRef.current === requestId) {
+          pushToast("error", err instanceof Error ? err.message : "No fue posible cargar el detalle del vehiculo");
+        }
+      })
+      .finally(() => {
+        if (detailRequestRef.current === requestId) setDetailLoading(false);
+      });
+  }, [pushToast]);
+
+  const handleCloseDetails = useCallback(() => {
+    detailRequestRef.current += 1;
+    setDetailLoading(false);
+    setSelectedVehicle(null);
+  }, []);
+
+  const handleLoadAttachments = useCallback(async (vehicle) => {
+    if (Array.isArray(vehicle.attachments)) {
+      return;
+    }
+
+    const count = vehicle.attachments_count ?? 0;
+    const pendingWindow = count === 1 ? window.open("", "_blank") : null;
+    setLoadingAttachmentPlates((current) => new Set(current).add(vehicle.plate));
+
+    try {
+      const detail = await fetchVehicleDetail(vehicle.plate);
+      patchVehicle(vehicle.plate, detail);
+      setSelectedVehicle((current) =>
+        current?.plate === vehicle.plate ? detail : current
+      );
+
+      const attachments = Array.isArray(detail.attachments) ? detail.attachments : [];
+      if (pendingWindow && attachments.length === 1) {
+        pendingWindow.opener = null;
+        pendingWindow.location.href = `${API_BASE}${attachments[0].download_url}`;
+      } else {
+        pendingWindow?.close();
+      }
+
+      if (!attachments.length) {
+        pushToast("error", `No se encontraron adjuntos para ${vehicle.plate}.`);
+      }
+    } catch (err) {
+      pendingWindow?.close();
+      pushToast("error", err instanceof Error ? err.message : "No fue posible cargar los adjuntos");
+    } finally {
+      setLoadingAttachmentPlates((current) => {
+        const next = new Set(current);
+        next.delete(vehicle.plate);
+        return next;
+      });
+    }
+  }, [patchVehicle, pushToast]);
 
   const handleExportExcel = useCallback(() => {
     try {
@@ -684,7 +751,7 @@ export default function VehiclesPage() {
               onClick={handleExportExcel}
               disabled={filteredVehicles.length === 0}
             >
-              Exportar Excel
+              Exportar
             </button>
             <Can permission="vehicles.edit">
               <button
@@ -693,7 +760,7 @@ export default function VehiclesPage() {
                 onClick={() => setBulkAssignOpen(true)}
                 disabled={loading || bulkAssigning || selectedVehicles.length === 0}
               >
-                Asignar seleccionados ({selectedVehicles.length})
+                Asignar ({selectedVehicles.length})
               </button>
             </Can>
             <Can permission="vehicles.refresh">
@@ -703,7 +770,7 @@ export default function VehiclesPage() {
                 onClick={handleCheckConnections}
                 disabled={loading || checkingConnections}
               >
-                {checkingConnections ? "Revisando..." : "Revisar conexión"}
+                {checkingConnections ? "Revisando..." : "Conexión"}
               </button>
             </Can>
             <Can permission="vehicles.refresh">
@@ -719,7 +786,7 @@ export default function VehiclesPage() {
                 }
                 disabled={loading || Boolean(bulkRefresh) || filteredVehicles.length === 0}
               >
-                Reprocesar {selectedVehicles.length > 0 ? `(${selectedVehicles.length})` : `todos (${filteredVehicles.length})`}
+                Reprocesar ({selectedVehicles.length > 0 ? selectedVehicles.length : filteredVehicles.length})
               </button>
             </Can>
           </div>
@@ -977,11 +1044,13 @@ export default function VehiclesPage() {
                         );
                       }
                       if (col.key === "attachments") {
+                        const attachments = Array.isArray(vehicle.attachments) ? vehicle.attachments : null;
+                        const count = vehicle.attachments_count ?? vehicle.attachments?.length ?? 0;
                         return (
                           <td key={col.key} data-label={col.label}>
-                            {vehicle.attachments?.length ? (
+                            {attachments?.length ? (
                               <div className="attachment-list attachment-list-compact">
-                                {vehicle.attachments.map((attachment) => (
+                                {attachments.map((attachment) => (
                                   <a
                                     key={attachment.id}
                                     className="attachment-chip"
@@ -989,12 +1058,24 @@ export default function VehiclesPage() {
                                     target="_blank"
                                     rel="noreferrer"
                                     title={`${attachment.original_filename} | CPL ${attachment.cpl || "Sin CPL"}`}
-                                    aria-label={`Abrir adjunto ${attachment.original_filename} del CPL ${attachment.cpl || "sin cpl"} en otra pestana`}
+                                    aria-label={`Abrir adjunto ${attachment.original_filename}`}
                                   >
                                     <AttachmentIcon contentType={attachment.content_type} />
                                   </a>
                                 ))}
                               </div>
+                            ) : count ? (
+                              <button
+                                type="button"
+                                className="attachment-count-chip"
+                                onClick={() => handleLoadAttachments(vehicle)}
+                                disabled={loadingAttachmentPlates.has(vehicle.plate)}
+                                title={`${count} adjunto(s) — cargar adjuntos`}
+                                aria-label={`${count} adjuntos; cargar adjuntos`}
+                              >
+                                <AttachmentIcon contentType={null} />
+                                <span>{loadingAttachmentPlates.has(vehicle.plate) ? "..." : count}</span>
+                              </button>
                             ) : (
                               "Sin adjuntos"
                             )}
@@ -1014,7 +1095,7 @@ export default function VehiclesPage() {
                           className="icon-button"
                           title="Ver detalles del vehiculo"
                           aria-label="Ver detalles del vehiculo"
-                          onClick={() => setSelectedVehicle(vehicle)}
+                          onClick={() => handleOpenDetails(vehicle)}
                         >
                           <svg
                             width="16"
@@ -1089,14 +1170,14 @@ export default function VehiclesPage() {
 
       <VehicleAssignmentModal
         open={Boolean(selectedVehicle)}
-        loading={loading || customersLoading || motorsLoading}
+        loading={loading || customersLoading || motorsLoading || detailLoading}
         title={selectedVehicle ? `Detalles ${selectedVehicle.plate}` : "Detalles del vehiculo"}
         vehicle={selectedVehicle}
         customers={customers}
         motors={motors}
         requiresMotorRegistration
         initialTechnicalNumber={selectedVehicle?.technical_number || ""}
-        onClose={() => setSelectedVehicle(null)}
+        onClose={handleCloseDetails}
         onSubmit={handleUpdateVehicle}
         onRevalidateCustomerGeotab={handleRevalidateCustomerGeotab}
         canEditVehicle={canEditVehicles}
