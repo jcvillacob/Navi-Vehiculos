@@ -4509,8 +4509,11 @@ def get_connection_stats(month: str) -> list[dict[str, Any]]:
                 """
                 SELECT
                     plate,
-                    COUNT(*) AS days_checked,
-                    COUNT(*) FILTER (WHERE status = 'connected') AS days_connected
+                    COUNT(*) FILTER (WHERE status IN ('connected', 'disconnected')) AS days_checked,
+                    COUNT(*) FILTER (WHERE status = 'connected') AS days_connected,
+                    COUNT(*) FILTER (WHERE status = 'disconnected') AS days_disconnected,
+                    COUNT(*) FILTER (WHERE status = 'not_found') AS days_not_found,
+                    COUNT(*) FILTER (WHERE status = 'error') AS days_error
                 FROM vehicle_connection_log
                 WHERE check_date >= %s::date
                   AND check_date < (%s::date + INTERVAL '1 month')
@@ -4533,7 +4536,7 @@ def get_connection_stats(month: str) -> list[dict[str, Any]]:
             latest_by_plate = {row["plate"]: row for row in cur.fetchall()}
 
             streak_plates = [
-                p for p, row in latest_by_plate.items() if row["status"] != "connected"
+                p for p, row in latest_by_plate.items() if row["status"] == "disconnected"
             ]
             streaks: dict[str, int] = {}
             for plate in streak_plates:
@@ -4550,7 +4553,7 @@ def get_connection_stats(month: str) -> list[dict[str, Any]]:
                 )
                 count = 0
                 for row in cur.fetchall():
-                    if row["status"] != "connected":
+                    if row["status"] == "disconnected":
                         count += 1
                     else:
                         break
@@ -4561,14 +4564,19 @@ def get_connection_stats(month: str) -> list[dict[str, Any]]:
         plate = row["plate"]
         days_checked = row["days_checked"]
         days_connected = row["days_connected"]
+        days_disconnected = row["days_disconnected"]
         pct = round(days_connected / days_checked * 100, 1) if days_checked > 0 else 0
         stats.append({
             "plate": plate,
             "days_checked": days_checked,
             "days_connected": days_connected,
-            "days_disconnected": days_checked - days_connected,
+            "days_disconnected": days_disconnected,
+            "days_not_found": row["days_not_found"],
+            "days_error": row["days_error"],
             "connection_pct": pct,
             "consecutive_disconnected": streaks.get(plate, 0),
+            "latest_status": latest_by_plate.get(plate, {}).get("status"),
+            "latest_check_date": latest_by_plate.get(plate, {}).get("check_date"),
         })
 
     return stats

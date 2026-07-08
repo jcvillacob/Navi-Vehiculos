@@ -52,7 +52,7 @@ const RENDIMIENTOS_COLUMNS = [
   { key: "fuel_gallons", label: "Galones", getValue: (row) => formatMetric(row.fuel_gallons, 0), getSortValue: (row) => row.fuel_gallons },
   { key: "kpg", label: "KPG", getValue: (row) => row.fuel_gallons > 0 && row.kms_ecm != null ? formatMetric(row.kms_ecm / row.fuel_gallons, 2) : "-", getSortValue: (row) => row.fuel_gallons > 0 && row.kms_ecm != null ? row.kms_ecm / row.fuel_gallons : null },
   { key: "gph", label: "GPH", getValue: (row) => row.hours_ecm > 0 && row.fuel_gallons != null ? formatMetric(row.fuel_gallons / row.hours_ecm, 2) : "-", getSortValue: (row) => row.hours_ecm > 0 && row.fuel_gallons != null ? row.fuel_gallons / row.hours_ecm : null },
-  { key: "conn_pct", label: "Conexion %", getValue: (row, ctx) => ctx?.connStats?.[row.plate] ? `${Math.round(ctx.connStats[row.plate].connection_pct)}%` : "--", getSortValue: (row, ctx) => ctx?.connStats?.[row.plate]?.connection_pct ?? -1 },
+  { key: "conn_pct", label: "Conexion %", getValue: (row, ctx) => { const cs = ctx?.connStats?.[row.plate]; return cs?.days_checked > 0 ? `${Math.round(cs.connection_pct)}%` : "--"; }, getSortValue: (row, ctx) => { const cs = ctx?.connStats?.[row.plate]; return cs?.days_checked > 0 ? cs.connection_pct : -1; } },
   { key: "availability_pct", label: "Disp %", getValue: (row, ctx) => { const a = ctx?.availabilityByPlate?.[row.plate]; if (!a) return "Sin Datos"; if (a.calculation_status === "not_in_cloudfleet") return "No Aplica"; if (a.calculation_status === "error") return "Error"; return `${(a.project_availability_pct ?? 0).toFixed(1)}%`; }, getSortValue: (row, ctx) => { const a = ctx?.availabilityByPlate?.[row.plate]; if (!a) return -1; if (a.calculation_status === "not_in_cloudfleet") return -2; if (a.calculation_status === "error") return -3; return a.project_availability_pct ?? -1; } },
   { key: "calculated_at", label: "Último cálculo", getValue: (row) => row.calculated_at ? new Date(row.calculated_at).toLocaleString("es-CO") : "-", getSortValue: (row) => row.calculated_at ? new Date(row.calculated_at).getTime() : 0 },
 ];
@@ -356,12 +356,9 @@ export default function RendimientosPage() {
 
   const activeColumns = useMemo(() => {
     const byKey = new Map(RENDIMIENTOS_COLUMNS.map((col) => [col.key, col]));
-    const ordered = visibleColumns
+    return visibleColumns
       .map((key) => byKey.get(key))
       .filter((col) => Boolean(col));
-    const known = new Set(visibleColumns);
-    const missing = RENDIMIENTOS_COLUMNS.filter((col) => !known.has(col.key));
-    return [...ordered, ...missing];
   }, [visibleColumns]);
 
   const totalHistoryPages = useMemo(() => Math.max(1, Math.ceil(recentJobs.length / historyPageSize)), [recentJobs.length, historyPageSize]);
@@ -604,6 +601,8 @@ export default function RendimientosPage() {
               prev.days_checked += row.days_checked;
               prev.days_connected += row.days_connected;
               prev.days_disconnected += row.days_disconnected;
+              prev.days_not_found = (prev.days_not_found || 0) + (row.days_not_found || 0);
+              prev.days_error = (prev.days_error || 0) + (row.days_error || 0);
               prev.connection_pct = prev.days_checked > 0
                 ? Math.round(prev.days_connected / prev.days_checked * 1000) / 10
                 : 0;
@@ -918,7 +917,7 @@ export default function RendimientosPage() {
           if (col.key === "status") return getStatusLabel(row.calculation_status);
           if (col.key === "conn_pct") {
             const cs = connStats[row.plate];
-            return cs?.connection_pct ?? null;
+            return cs?.days_checked > 0 ? cs.connection_pct : null;
           }
           if (col.key === "availability_pct") {
             const a = availabilityByPlate[row.plate];
@@ -1313,16 +1312,20 @@ export default function RendimientosPage() {
                           const cs = connStats[row.plate];
                           return (
                             <td key={col.key} data-label={col.label}>
-                              {!cs ? (
+                              {!cs || cs.days_checked <= 0 ? (
                                 <span className="conn-pct-badge conn-pct-none">--</span>
                               ) : (
                                 (() => {
                                   const level = cs.connection_pct >= 80 ? "good" : cs.connection_pct >= 50 ? "warn" : "bad";
                                   const alert = cs.consecutive_disconnected >= 3;
+                                  const unresolved = [];
+                                  if (cs.days_not_found) unresolved.push(`${cs.days_not_found} no encontrado`);
+                                  if (cs.days_error) unresolved.push(`${cs.days_error} error`);
+                                  const unresolvedLabel = unresolved.length ? ` | ${unresolved.join(", ")}` : "";
                                   return (
                                     <span
                                       className={`conn-pct-badge conn-pct-${level}${alert ? " conn-pct-alert" : ""}`}
-                                      title={`${cs.days_connected}/${cs.days_checked} dias conectado${alert ? ` | ${cs.consecutive_disconnected} dias seguidos desconectado` : ""}`}
+                                      title={`${cs.days_connected}/${cs.days_checked} dias medidos conectado${alert ? ` | ${cs.consecutive_disconnected} dias seguidos desconectado` : ""}${unresolvedLabel}`}
                                     >
                                       <span className="conn-pct-bar">
                                         <span className="conn-pct-fill" style={{ width: `${cs.connection_pct}%` }} />

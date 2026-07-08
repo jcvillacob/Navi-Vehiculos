@@ -15,7 +15,7 @@ import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalo
 import { useUserPreference } from "../hooks/useUserPreference";
 import BulkVehicleAssignmentModal from "../features/vehicles/components/BulkVehicleAssignmentModal";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
-import { assignVehicleDatabase, checkVehicleConnections, fetchVehicleDetail, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleVocacional } from "../api/vehicleApi";
+import { assignVehicleDatabase, checkVehicleConnections, fetchConnectionStats, fetchVehicleDetail, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleVocacional } from "../api/vehicleApi";
 import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../features/categories";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
@@ -72,6 +72,10 @@ const VEHICLE_COLUMNS = [
   },
 ];
 
+function getCurrentMonth() {
+  return new Date().toISOString().slice(0, 7);
+}
+
 function AttachmentIcon({ contentType }) {
   const isPdf = contentType === "application/pdf";
 
@@ -90,6 +94,47 @@ function AttachmentIcon({ contentType }) {
           <path d="M14 2v6h6" />
         </svg>
       )}
+    </span>
+  );
+}
+
+function DbConnectionBadge({ vehicle, result, checking }) {
+  const connectionType = vehicle?.database_connection_type || null;
+  const hasCustomerDatabase = Boolean(vehicle?.customer_database_id);
+  const isGeotabEligible = connectionType === "geotab" || !hasCustomerDatabase;
+
+  if (checking && isGeotabEligible && !result) {
+    return (
+      <span className="status db-status-disconnected" title="Revision de conexion en curso">
+        <span className="db-status-dot db-status-dot-warn" aria-hidden="true" />
+        Revisando
+      </span>
+    );
+  }
+
+  if (!isGeotabEligible) {
+    return (
+      <span className="status db-status-disconnected" title={`Proveedor ${connectionType || "sin tipo"}: conexion Geotab no aplica`}>
+        <span className="db-status-dot db-status-dot-warn" aria-hidden="true" />
+        No aplica
+      </span>
+    );
+  }
+
+  const status = result?.status || "unchecked";
+  const suffix = result?.latest_check_date ? ` (${result.latest_check_date})` : "";
+  const meta = {
+    connected: { label: "Activa", className: "db-status-connected", dotClass: "db-status-dot-ok", title: `Conexion activa${suffix}` },
+    disconnected: { label: "Inactiva", className: "db-status-disconnected", dotClass: "db-status-dot-warn", title: `Conexion inactiva${suffix}` },
+    not_found: { label: "No enc.", className: "db-status-not-found", dotClass: "db-status-dot-error", title: `Vehiculo no encontrado en Geotab${suffix}` },
+    error: { label: "Error", className: "db-status-error", dotClass: "db-status-dot-error", title: `Error revisando conexion${suffix}` },
+    unchecked: { label: "Sin revisar", className: "db-status-disconnected", dotClass: "db-status-dot-warn", title: "Conexion pendiente de revisar" },
+  }[status] || { label: status, className: "db-status-error", dotClass: "db-status-dot-error", title: "Estado de conexion desconocido" };
+
+  return (
+    <span className={`status ${meta.className}`} title={meta.title}>
+      <span className={`db-status-dot ${meta.dotClass}`} aria-hidden="true" />
+      {meta.label}
     </span>
   );
 }
@@ -178,6 +223,30 @@ export default function VehiclesPage() {
   useEffect(() => {
     if (error) pushToast("error", error);
   }, [error, pushToast]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchConnectionStats(getCurrentMonth())
+      .then((rows) => {
+        if (cancelled) return;
+        const latestResults = {};
+        for (const row of rows) {
+          if (!row?.plate || !row.latest_status) continue;
+          latestResults[row.plate] = {
+            status: row.latest_status,
+            latest_check_date: row.latest_check_date,
+            source: "snapshot",
+          };
+        }
+        setConnectionResults(latestResults);
+      })
+      .catch(() => {
+        if (!cancelled) setConnectionResults({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const clientOptions = useMemo(() => {
     let subset = vehicles;

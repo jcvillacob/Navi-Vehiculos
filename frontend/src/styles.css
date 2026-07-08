@@ -4672,6 +4672,16 @@ select.control-sm {
   border: 1px solid var(--status-ok-border);
 }
 
+.vehicles-table .status[class*="db-status-"] {
+  max-width: 100%;
+  min-width: 0;
+  padding-inline: 7px;
+  letter-spacing: 0.03em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .db-status-disconnected {
   background: var(--status-partial-bg);
   color: var(--status-partial-text);
