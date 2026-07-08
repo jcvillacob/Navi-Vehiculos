@@ -1390,10 +1390,49 @@ select.control-sm {
 }
 
 .rendimientos-last-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   color: var(--text-muted);
   margin-right: 8px;
   white-space: nowrap;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.rendimientos-last-run-icon {
+  color: var(--text-subtle);
+  flex-shrink: 0;
+}
+
+.rendimientos-last-run-date {
+  color: var(--text-secondary);
+}
+
+.rendimientos-last-run-divider {
+  color: var(--text-subtle);
+  margin: 0 2px;
+}
+
+.rendimientos-last-run-count {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.rendimientos-last-run-pct {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--red-soft, rgba(238, 46, 47, 0.1));
+  color: var(--red);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .motor-cards-grid {
@@ -4507,7 +4546,7 @@ select.control-sm {
   white-space: nowrap;
 }
 
-.vehicles-th-content {
+.th-content {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4516,11 +4555,11 @@ select.control-sm {
   min-width: 0;
 }
 
-.vehicles-th-content.has-filter {
+.th-content.has-filter {
   cursor: pointer;
 }
 
-.vehicles-sort-btn {
+.th-sort-btn {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -4536,18 +4575,18 @@ select.control-sm {
   transition: color 120ms ease, background 120ms ease;
 }
 
-.vehicles-sort-btn:hover {
+.th-sort-btn:hover {
   color: var(--text);
   background: var(--surface-2);
 }
 
-.vehicles-sort-btn.is-asc,
-.vehicles-sort-btn.is-desc {
+.th-sort-btn.is-asc,
+.th-sort-btn.is-desc {
   color: var(--red);
 }
 
-.vehicles-sort-btn.is-asc:hover,
-.vehicles-sort-btn.is-desc:hover {
+.th-sort-btn.is-asc:hover,
+.th-sort-btn.is-desc:hover {
   background: rgba(238, 46, 47, 0.08);
 }
 
@@ -5080,6 +5119,26 @@ select.control-sm {
   overflow: auto;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.rendimientos-table-shell::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.rendimientos-table-shell::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.rendimientos-table-shell::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.rendimientos-table-shell::-webkit-scrollbar-thumb:hover {
+  background: var(--text-subtle);
 }
 
 .rendimientos-table {
@@ -5102,38 +5161,9 @@ select.control-sm {
   white-space: nowrap;
 }
 
-.table-sort-button {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.rendimientos-table thead th .th-content {
   padding: 10px 14px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-  cursor: pointer;
-}
-
-.table-sort-button:hover {
-  background: rgba(53, 69, 80, 0.04);
-}
-
-.table-sort-button.is-active {
-  color: var(--text-secondary);
-}
-
-.table-sort-indicator {
-  font-size: 10px;
-  color: var(--text-subtle);
-}
-
-.table-sort-button.is-active .table-sort-indicator {
-  color: var(--red);
+  gap: 8px;
 }
 
 .rendimientos-table tbody td {

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
 import Can from "../components/Can";
 import ColumnSelectorDrawer from "../components/ColumnSelectorDrawer";
+import { SingleSelectFilter } from "../components/SingleSelectFilter";
+import { SortButton } from "../components/SortButton";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import {
@@ -18,6 +20,7 @@ import {
   listVehicleAssignments
 } from "../api/vehicleApi";
 import { DATABASE_PROVIDERS } from "../features/customers/providerCatalog";
+import { useUserPreference } from "../hooks/useUserPreference";
 
 const PERFORMANCE_PROVIDER_KEYS = new Set(
   DATABASE_PROVIDERS.filter((provider) => provider.supportsMonthlyPerformance).map((provider) => provider.key)
@@ -285,27 +288,81 @@ export default function RendimientosPage() {
     motorGroup: "",
     plateSearch: ""
   });
-  const [sortConfig, setSortConfig] = useState({ key: "", direction: "asc" });
   const [connStats, setConnStats] = useState({});
   const [availabilityByPlate, setAvailabilityByPlate] = useState({});
   const [recentJobs, setRecentJobs] = useState([]);
   const [recentJobsLoading, setRecentJobsLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [visibleColumns, setVisibleColumns] = useState(() => new Set(RENDIMIENTOS_COLUMNS.map((c) => c.key)));
   const [columnSelectorOpen, setColumnSelectorOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyPageSize, setHistoryPageSize] = useState(10);
 
-  const handleApplyColumns = useCallback((nextKeys) => {
-    setVisibleColumns(new Set(nextKeys));
-  }, []);
-
-  const activeColumns = useMemo(
-    () => RENDIMIENTOS_COLUMNS.filter((col) => visibleColumns.has(col.key)),
-    [visibleColumns]
+  const defaultVisibleColumns = useMemo(() => RENDIMIENTOS_COLUMNS.map((c) => c.key), []);
+  const validColumnKeys = useMemo(() => new Set(RENDIMIENTOS_COLUMNS.map((c) => c.key)), []);
+  const validateVisibleColumns = useCallback(
+    (raw) => {
+      if (!Array.isArray(raw)) return null;
+      const filtered = raw.filter((k) => typeof k === "string" && validColumnKeys.has(k));
+      return filtered.length > 0 ? filtered : null;
+    },
+    [validColumnKeys]
   );
+  const validateSort = useCallback((raw) => {
+    if (!raw || typeof raw !== "object") return null;
+    const { key, dir } = raw;
+    if (typeof key !== "string" || !validColumnKeys.has(key)) return null;
+    if (dir !== "asc" && dir !== "desc" && dir !== null) return null;
+    return { key, dir };
+  }, [validColumnKeys]);
+
+  const { value: savedColumns, setValue: persistColumns } = useUserPreference(
+    "rendimientos.visible_columns",
+    null,
+    { validator: validateVisibleColumns }
+  );
+  const { value: savedSort, setValue: persistSort } = useUserPreference(
+    "rendimientos.sort",
+    null,
+    { validator: validateSort }
+  );
+
+  const visibleColumns = Array.isArray(savedColumns) && savedColumns.length > 0
+    ? savedColumns
+    : defaultVisibleColumns;
+
+  const sortConfig = savedSort && typeof savedSort === "object"
+    ? { key: savedSort.key ?? null, direction: savedSort.dir ?? null }
+    : { key: null, direction: null };
+
+  const handleApplyColumns = useCallback(
+    (nextKeys) => {
+      persistColumns(nextKeys);
+    },
+    [persistColumns]
+  );
+
+  const handleSortChange = useCallback(
+    (next) => {
+      persistSort(next);
+    },
+    [persistSort]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [savedSort?.key, savedSort?.dir]);
+
+  const activeColumns = useMemo(() => {
+    const byKey = new Map(RENDIMIENTOS_COLUMNS.map((col) => [col.key, col]));
+    const ordered = visibleColumns
+      .map((key) => byKey.get(key))
+      .filter((col) => Boolean(col));
+    const known = new Set(visibleColumns);
+    const missing = RENDIMIENTOS_COLUMNS.filter((col) => !known.has(col.key));
+    return [...ordered, ...missing];
+  }, [visibleColumns]);
 
   const totalHistoryPages = useMemo(() => Math.max(1, Math.ceil(recentJobs.length / historyPageSize)), [recentJobs.length, historyPageSize]);
   const paginatedJobs = useMemo(() => {
@@ -421,7 +478,10 @@ export default function RendimientosPage() {
     setLoading(true);
     try {
       const response = await fetchMonthlyPerformance({ month_from: from, month_to: to });
-      setPayload(response);
+      setPayload({
+        ...response,
+        rows: Array.isArray(response?.rows) ? response.rows : [],
+      });
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message : "No fue posible cargar rendimientos");
     } finally {
@@ -600,7 +660,7 @@ export default function RendimientosPage() {
   }, [filters, payload.rows]);
 
   const sortedRows = useMemo(() => {
-    if (!sortConfig.key) return filteredRows;
+    if (!sortConfig.key || !sortConfig.direction) return filteredRows;
 
     const col = RENDIMIENTOS_COLUMNS.find((c) => c.key === sortConfig.key);
     if (!col) return filteredRows;
@@ -656,20 +716,21 @@ export default function RendimientosPage() {
     setFilters({ status: "", client: "", database: "", motorGroup: "", plateSearch: "" });
   };
 
+  const activeFilterCount = useMemo(() => {
+    return [
+      filters.status,
+      filters.client,
+      filters.database,
+      filters.motorGroup,
+      filters.plateSearch,
+    ].filter(Boolean).length;
+  }, [filters]);
+
   const handleStatusChipClick = (status) => {
     setFilters((current) => ({
       ...current,
       status: current.status === status ? "" : status
     }));
-  };
-
-  const handleSort = (key) => {
-    setSortConfig((current) => {
-      if (current.key === key) {
-        return { key, direction: current.direction === "asc" ? "desc" : "asc" };
-      }
-      return { key, direction: "asc" };
-    });
   };
 
   const ensureNotificationPermission = useCallback(async () => {
@@ -924,11 +985,38 @@ export default function RendimientosPage() {
             const last = recentJobs[0];
             if (last.status !== "done") return null;
             const d = last.finished_at ? new Date(last.finished_at) : null;
-            const dateStr = d ? `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}` : "";
+            const dateStr = d
+              ? d.toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" })
+              : "";
             const s = last.summary || {};
+            const calculated = s.calculated || 0;
+            const total = s.total || 0;
+            const pct = total > 0 ? Math.round((calculated / total) * 100) : 0;
             return (
-              <span className="rendimientos-last-run">
-                {dateStr} - {s.calculated || 0} de {s.total || 0}
+              <span className="rendimientos-last-run" title="Ultimo calculo completado">
+                <svg
+                  className="rendimientos-last-run-icon"
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="4" width="18" height="18" rx="2" />
+                  <path d="M16 2v4" />
+                  <path d="M8 2v4" />
+                  <path d="M3 10h18" />
+                </svg>
+                <span className="rendimientos-last-run-date">{dateStr}</span>
+                <span className="rendimientos-last-run-divider" aria-hidden="true">·</span>
+                <strong className="rendimientos-last-run-count">
+                  {calculated.toLocaleString("es-CO")} / {total.toLocaleString("es-CO")}
+                </strong>
+                <span className="rendimientos-last-run-pct">{pct}%</span>
               </span>
             );
           })()}
@@ -1035,8 +1123,13 @@ export default function RendimientosPage() {
             >
               {loading ? "Cargando..." : "Recargar"}
             </button>
-            <button type="button" className="button-secondary button-sm" onClick={handleClear}>
-              Limpiar
+            <button
+              type="button"
+              className="button-secondary button-sm"
+              onClick={handleClear}
+              disabled={activeFilterCount === 0}
+            >
+              Limpiar ({activeFilterCount})
             </button>
             <button
               type="button"
@@ -1044,7 +1137,7 @@ export default function RendimientosPage() {
               onClick={handleExport}
               disabled={!filteredRows.length}
             >
-              Exportar Excel
+              Exportar
             </button>
             <button
               type="button"
@@ -1053,7 +1146,7 @@ export default function RendimientosPage() {
               aria-haspopup="dialog"
               aria-expanded={columnSelectorOpen}
             >
-              Columnas ({visibleColumns.size}/{RENDIMIENTOS_COLUMNS.length})
+              Columnas ({visibleColumns.length}/{RENDIMIENTOS_COLUMNS.length})
             </button>
           </div>
         </header>
@@ -1100,42 +1193,57 @@ export default function RendimientosPage() {
         <div className="rendimientos-filter-bar">
           <div className="form-field rendimientos-search-field">
             <label htmlFor="rendimientos-plate-search">Buscar</label>
-            <input
-              id="rendimientos-plate-search"
-              value={filters.plateSearch}
-              onChange={handleChange("plateSearch")}
-              placeholder="Placa, nombre, marca o línea"
+            <div className="search-input-wrap">
+              <input
+                id="rendimientos-plate-search"
+                value={filters.plateSearch}
+                onChange={handleChange("plateSearch")}
+                placeholder="Placa, nombre, marca o línea"
+              />
+              {filters.plateSearch ? (
+                <button
+                  type="button"
+                  className="search-clear-button"
+                  onClick={() => setFilters((current) => ({ ...current, plateSearch: "" }))}
+                  aria-label="Limpiar busqueda"
+                >
+                  ✕
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="form-field">
+            <label>Clientes</label>
+            <SingleSelectFilter
+              label="Clientes"
+              options={clientOptions}
+              value={filters.client}
+              onChange={(value) => setFilters((current) => ({ ...current, client: value }))}
+              placeholder="Todos"
             />
           </div>
 
           <div className="form-field">
-            <label htmlFor="rendimientos-client">Clientes</label>
-            <select id="rendimientos-client" value={filters.client} onChange={handleChange("client")}>
-              <option value="">Todos</option>
-              {clientOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
+            <label>Database</label>
+            <SingleSelectFilter
+              label="Database"
+              options={databaseOptions}
+              value={filters.database}
+              onChange={(value) => setFilters((current) => ({ ...current, database: value }))}
+              placeholder="Todas"
+            />
           </div>
 
           <div className="form-field">
-            <label htmlFor="rendimientos-database">Database</label>
-            <select id="rendimientos-database" value={filters.database} onChange={handleChange("database")}>
-              <option value="">Todas</option>
-              {databaseOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="rendimientos-motor-group">Grupo de motor</label>
-            <select id="rendimientos-motor-group" value={filters.motorGroup} onChange={handleChange("motorGroup")}>
-              <option value="">Todos</option>
-              {motorGroupOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
+            <label>Grupo de motor</label>
+            <SingleSelectFilter
+              label="Grupo de motor"
+              options={motorGroupOptions}
+              value={filters.motorGroup}
+              onChange={(value) => setFilters((current) => ({ ...current, motorGroup: value }))}
+              placeholder="Todos"
+            />
           </div>
 
         </div>
@@ -1144,24 +1252,18 @@ export default function RendimientosPage() {
           <table className="rendimientos-table">
             <thead>
               <tr>
-                {activeColumns.map((column) => {
-                  const isActive = sortConfig.key === column.key;
-                  const directionSymbol = isActive ? (sortConfig.direction === "asc" ? "▲" : "▼") : "↕";
-
-                  return (
-                    <th key={column.key}>
-                      <button
-                        type="button"
-                        className={`table-sort-button ${isActive ? "is-active" : ""}`}
-                        onClick={() => handleSort(column.key)}
-                        aria-label={`Ordenar por ${column.label} ${isActive && sortConfig.direction === "asc" ? "descendente" : "ascendente"}`}
-                      >
-                        <span>{column.label}</span>
-                        <span className="table-sort-indicator" aria-hidden="true">{directionSymbol}</span>
-                      </button>
-                    </th>
-                  );
-                })}
+                {activeColumns.map((column) => (
+                  <th key={column.key}>
+                    <div className="th-content">
+                      <span>{column.label}</span>
+                      <SortButton
+                        columnKey={column.key}
+                        currentSort={{ key: sortConfig.key, dir: sortConfig.direction }}
+                        onSortChange={handleSortChange}
+                      />
+                    </div>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -1263,7 +1365,13 @@ export default function RendimientosPage() {
                         if (col.key === "source_provider") {
                           return <td key={col.key} data-label={col.label}>{row.source_provider || "-"}</td>;
                         }
-                        return <td key={col.key} data-label={col.label}>{col.getValue(row, ctx)}</td>;
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            <span className="cell-truncate" title={typeof col.getValue(row, ctx) === "string" ? col.getValue(row, ctx) : undefined}>
+                              {col.getValue(row, ctx)}
+                            </span>
+                          </td>
+                        );
                       })}
                     </tr>
                   );
