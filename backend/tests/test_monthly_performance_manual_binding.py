@@ -128,6 +128,39 @@ class TestGeotabManualBinding:
         assert len(result.records) == 1
         assert result.records[0].provider_vehicle_id == "M1"
 
+    def test_auto_binding_is_refreshed_from_current_geotab_database(self):
+        provider = GeotabMonthlyPerformanceProvider()
+        target = _make_target(provider_key="geotab", plate="TEST001")
+        bindings = {("geotab", 1, "TEST001"): BindingSnapshot("STALE_ID", "resolved", is_manual=False)}
+        previous_records = {}
+
+        mock_find = MagicMock(return_value={"id": "AUTO_DEVICE_ID"})
+        mock_api = MagicMock()
+        fake_record = _make_monthly_record(target, "AUTO_DEVICE_ID")
+
+        with patch("app.services.performance_providers.find_device_by_plate", mock_find), patch(
+            "app.services.performance_providers.get_authenticated_client",
+            return_value=mock_api,
+        ), patch(
+            "app.services.performance_providers._calculate_geotab_vehicle_record",
+            return_value=fake_record,
+        ) as mock_calculate:
+            result = provider.calculate_database_rows(
+                month="2026-01",
+                year=2026,
+                month_number=1,
+                previous_month="2025-12",
+                targets=[target],
+                previous_records=previous_records,
+                bindings=bindings,
+            )
+
+        mock_find.assert_called_once_with(mock_api, "TEST001", plate_prefix=None)
+        mock_calculate.assert_called_once()
+        assert mock_calculate.call_args.kwargs["device_id"] == "AUTO_DEVICE_ID"
+        assert result.records[0].provider_vehicle_id == "AUTO_DEVICE_ID"
+        assert result.binding_updates[0].provider_vehicle_id == "AUTO_DEVICE_ID"
+
 
 class TestUpsertBindingDoesNotClobberManual:
     def test_auto_value_does_not_overwrite_manual_binding(self):

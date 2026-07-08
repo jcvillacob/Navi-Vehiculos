@@ -622,10 +622,9 @@ class GeotabMonthlyPerformanceProvider:
                 if is_manual:
                     device_id = bound_id
                 else:
-                    device_id = bound_id
-                    if not device_id:
-                        device = find_device_by_plate(api, target.plate, plate_prefix=target.provider_config.get("plate_prefix"))
-                        device_id = str(device.get("id") or "").strip() if device else None
+                    device = find_device_by_plate(api, target.plate, plate_prefix=target.provider_config.get("plate_prefix"))
+                    resolved_id = str(device.get("id") or "").strip() if device else None
+                    device_id = resolved_id or bound_id
 
                 if not device_id:
                     binding_updates.append(

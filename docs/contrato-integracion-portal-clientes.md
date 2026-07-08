@@ -108,6 +108,8 @@ GET {NAVI_BASE_URL}/api/v1/integration/snapshot
       "technical_number": "D103005BX03",
       "motor_type": "ISD",
       "cpl": "4955",
+      "marketing_model_name": "L9 370",
+      "service_model_name": "L9 CM2450 L126B",
       "marca": "INTERNATIONAL",
       "linea": "PROSTAR",
       "ano_modelo": "2023",
@@ -131,6 +133,8 @@ Notas sobre los campos clave:
 | `rules[].category` | `operacion` (reglas de motor) o `habito_seguro`. `rule_id` es el id nativo de Geotab para consultar `ExceptionEvent` (`ruleSearch: {id: ...}`). |
 | `rules[].motor_type` | **Familia de motor** a la que aplica la regla (`engine_name` del motor; ej. `ISD`, `X15`). Solo las reglas `operacion` agrupadas traen valor; las `habito_seguro` y las `operacion` aún sin grupo traen `null`. Ver §2.3. |
 | `vehicles[].motor_type` | **Familia de motor** del vehículo (`engine_name` del motor cuyo `technical_number` coincide). `null` si el `technical_number` no está en el catálogo. Mismo vocabulario que `rules[].motor_type`, así que cruzan directo. Ver §2.3. |
+| `vehicles[].marketing_model_name` | **Marketing Model Name** devuelto por QuickServe/Cummins para el motor del vehículo. Puede venir `null` si aún no se consultó o QuickServe no lo entregó. |
+| `vehicles[].service_model_name` | **Service Model Name** devuelto por QuickServe/Cummins para el motor del vehículo. Puede venir `null` si aún no se consultó o QuickServe no lo entregó. |
 | `vehicles[].vocacional` | **Booleano** del tipo de uso del vehículo: `true` = uso vocacional, `false` = transporte/comercial. Nunca `null` (default `false`). |
 | `credentials[]` | Pool de credenciales de esa db. Portal Clientes debe **rotar** entre las activas (round-robin o LRU) para no saturar una sola sesión Geotab. |
 
@@ -261,6 +265,8 @@ CREATE TABLE vehicles (
     geotab_customer_status TEXT NOT NULL DEFAULT 'unknown',
     engine_number TEXT NULL,
     technical_number TEXT NULL,
+    marketing_model_name TEXT NULL,
+    service_model_name TEXT NULL,
     marca TEXT NULL,
     linea TEXT NULL,
     ano_modelo TEXT NULL,

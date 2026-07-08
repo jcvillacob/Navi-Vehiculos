@@ -91,8 +91,24 @@ def vehicle(geotab_db):
             cur.execute(
                 """
                 INSERT INTO vehicle_motor_assignments
-                    (plate, vin, technical_number, customer_id, customer_database_id)
-                VALUES ('ABC123', '3HSDJAPR1KN123456', 'TEC-1', %s, %s);
+                    (
+                        plate,
+                        vin,
+                        technical_number,
+                        marketing_model_name,
+                        service_model_name,
+                        customer_id,
+                        customer_database_id
+                    )
+                VALUES (
+                    'ABC123',
+                    '3HSDJAPR1KN123456',
+                    'TEC-1',
+                    'L9 370',
+                    'L9 CM2450 L126B',
+                    %s,
+                    %s
+                );
                 """,
                 (geotab_db["customer_id"], geotab_db["database_id"]),
             )
@@ -541,6 +557,8 @@ async def test_snapshot_shape_and_credential_masking(client, vehicle, monkeypatc
     assert vehicle_row["vin"] == "3HSDJAPR1KN123456"
     assert vehicle_row["customer_id"] == vehicle["customer_id"]
     assert "geotab_device_id" in vehicle_row
+    assert vehicle_row["marketing_model_name"] == "L9 370"
+    assert vehicle_row["service_model_name"] == "L9 CM2450 L126B"
     # vocacional siempre presente y booleano (default false).
     assert vehicle_row["vocacional"] is False
 
@@ -649,3 +667,5 @@ async def test_vehicles_pagination(client, vehicle, monkeypatch):
     payload = response.json()
     assert payload["count"] == 1
     assert payload["vehicles"][0]["plate"] == "ABC123"
+    assert payload["vehicles"][0]["marketing_model_name"] == "L9 370"
+    assert payload["vehicles"][0]["service_model_name"] == "L9 CM2450 L126B"

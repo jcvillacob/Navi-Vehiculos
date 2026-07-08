@@ -77,7 +77,12 @@ export function MultiSelectFilter({ label, options, selected, onChange, open, on
         <span className="th-multifilter-arrow">▼</span>
       </button>
       {open && (
-        <div className="th-multifilter-dropdown" role="listbox">
+        <div
+          className="th-multifilter-dropdown"
+          role="listbox"
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
           <div className="th-multifilter-dropdown-header">
             <div className="th-multifilter-search-wrap">
               <input

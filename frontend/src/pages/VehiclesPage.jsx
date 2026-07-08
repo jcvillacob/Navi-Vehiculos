@@ -19,6 +19,15 @@ import { assignVehicleDatabase, checkVehicleConnections, fetchConnectionStats, f
 import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../features/categories";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
+const VEHICLE_CATEGORY_FILTER_OPTIONS = ["Ninguna", ...CUSTOMER_CATEGORIES];
+const CONNECTION_FILTER_OPTIONS = [
+  { value: "connected", label: "Activos" },
+  { value: "disconnected", label: "Inactivos" },
+  { value: "not_found", label: "No encontrados" },
+  { value: "error", label: "Error" },
+  { value: "unchecked", label: "Sin revisar" },
+  { value: "not_applicable", label: "No aplica" },
+];
 
 // width fija por columna: la tabla usa table-layout fixed para que los anchos
 // no salten al filtrar (si dependen del contenido, cambian con cada filtro).
@@ -314,12 +323,8 @@ export default function VehiclesPage() {
     if (filterConnection.length) {
       result = result.filter((v) => {
         const eligible = v.database_connection_type === "geotab" || !v.customer_database_id;
-        const status = eligible ? connectionResults[v.plate]?.status : "not_applicable";
-        if (filterConnection.includes("active") && status === "connected") return true;
-        if (filterConnection.includes("inactive") && (status === "disconnected" || status === "not_found")) return true;
-        if (filterConnection.includes("unchecked") && eligible && !status) return true;
-        if (filterConnection.includes("not_applicable") && !eligible) return true;
-        return false;
+        const status = eligible ? connectionResults[v.plate]?.status || "unchecked" : "not_applicable";
+        return filterConnection.includes(status);
       });
     }
     return result;
@@ -939,7 +944,7 @@ export default function VehiclesPage() {
                         {col.key === "category" && (
                           <MultiSelectFilter
                             label={col.label}
-                            options={CUSTOMER_CATEGORIES}
+                            options={VEHICLE_CATEGORY_FILTER_OPTIONS}
                             selected={filterCategory}
                             onChange={handleFilterCategory}
                             open={openFilterKey === col.key}
@@ -969,12 +974,7 @@ export default function VehiclesPage() {
                         {col.key === "db_connection" && (
                           <MultiSelectFilter
                             label={col.label}
-                            options={[
-                              { value: "active", label: "Activos" },
-                              { value: "inactive", label: "Inactivos" },
-                              { value: "unchecked", label: "Sin revisar" },
-                              { value: "not_applicable", label: "No aplica" }
-                            ]}
+                            options={CONNECTION_FILTER_OPTIONS}
                             selected={filterConnection}
                             onChange={handleFilterConnection}
                             open={openFilterKey === col.key}
