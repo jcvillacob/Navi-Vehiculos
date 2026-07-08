@@ -167,19 +167,29 @@ def test_not_found_clears_device_id(vehicle, monkeypatch):
 
 
 def _insert_geotab_binding(
-    plate: str, database_id: int, provider_vehicle_id: str, *, is_manual: bool = False
+    plate: str,
+    database_id: int,
+    provider_vehicle_id: str,
+    *,
+    is_manual: bool = False,
+    updated_at: str | None = None,
 ) -> None:
     with _connect() as conn:
         rendimientos._ensure_performance_tables(conn)
         with conn.cursor() as cur:
+            updated_sql = "%s::timestamptz" if updated_at else "NOW()"
             cur.execute(
-                """
+                f"""
                 INSERT INTO vehicle_provider_bindings
                     (plate, customer_database_id, provider, provider_vehicle_id,
-                     binding_status, is_manual)
-                VALUES (%s, %s, 'geotab', %s, 'resolved', %s);
+                     binding_status, is_manual, updated_at)
+                VALUES (%s, %s, 'geotab', %s, 'resolved', %s, {updated_sql});
                 """,
-                (plate, database_id, provider_vehicle_id, is_manual),
+                (
+                    (plate, database_id, provider_vehicle_id, is_manual, updated_at)
+                    if updated_at
+                    else (plate, database_id, provider_vehicle_id, is_manual)
+                ),
             )
         conn.commit()
 
@@ -209,6 +219,32 @@ def test_snapshot_prefers_binding_over_validated_column(vehicle, monkeypatch):
 
     _insert_geotab_binding("ABC123", vehicle["database_id"], "BIND-DEV", is_manual=True)
     assert _exported_vehicle("ABC123")["geotab_device_id"] == "BIND-DEV"
+
+
+def test_incremental_vehicles_include_geotab_binding_updates(vehicle):
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE vehicle_motor_assignments
+                SET updated_at = '2026-01-01T00:00:00Z'
+                WHERE plate = 'ABC123';
+                """
+            )
+        conn.commit()
+
+    _insert_geotab_binding(
+        "ABC123",
+        vehicle["database_id"],
+        "BIND-NEW",
+        updated_at="2026-03-01T00:00:00Z",
+    )
+
+    payload = integration_export.export_vehicles(since="2026-02-01T00:00:00Z")
+    vehicle_row = next(v for v in payload["vehicles"] if v["plate"] == "ABC123")
+
+    assert vehicle_row["geotab_device_id"] == "BIND-NEW"
+    assert vehicle_row["updated_at"].startswith("2026-03-01T00:00:00")
 
 
 def _set_customer_category(customer_id: int, category: str) -> None:

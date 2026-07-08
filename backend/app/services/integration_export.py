@@ -256,8 +256,8 @@ def _export_vehicles(
     where_clause = ""
     params: list[Any] = []
     if since is not None:
-        where_clause = "WHERE a.updated_at > %s"
-        params.append(since)
+        where_clause = "WHERE a.updated_at > %s OR geotab_binding.updated_at > %s"
+        params.extend([since, since])
 
     pagination_clause = ""
     if limit is not None:
@@ -288,7 +288,10 @@ def _export_vehicles(
                 a.tipo_combustible,
                 a.nombre_vehiculo,
                 a.vocacional,
-                a.updated_at,
+                GREATEST(
+                    a.updated_at,
+                    COALESCE(geotab_binding.updated_at, a.updated_at)
+                ) AS updated_at,
                 -- Categoria EFECTIVA del vehiculo (override propio > cliente >
                 -- 'Ninguna'), mismo criterio que la lista de vehiculos. Portal
                 -- Clientes la usa para is_active: 'Ninguna' = inactivo, las
@@ -307,7 +310,7 @@ def _export_vehicles(
             LEFT JOIN customers c
                 ON c.id = a.customer_id
             LEFT JOIN LATERAL (
-                SELECT vpb.provider_vehicle_id
+                SELECT vpb.provider_vehicle_id, vpb.updated_at
                 FROM vehicle_provider_bindings vpb
                 WHERE vpb.plate = a.plate
                   AND vpb.customer_database_id = a.customer_database_id

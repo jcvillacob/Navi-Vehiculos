@@ -77,7 +77,7 @@ function filterRows(rows, filters, omit = "") {
   return rows.filter((row) => {
     if (omit !== "status" && filters.status && row.calculation_status !== filters.status) return false;
     if (omit !== "client" && filters.client && row.client_name !== filters.client) return false;
-    if (omit !== "database" && filters.database && row.database_name !== filters.database) return false;
+    if (omit !== "category" && filters.category && (row.category || "Ninguna") !== filters.category) return false;
     if (omit !== "motorGroup" && filters.motorGroup && (row.engine_name || "Sin catalogar") !== filters.motorGroup) {
       return false;
     }
@@ -284,7 +284,7 @@ export default function RendimientosPage() {
   const [filters, setFilters] = useState({
     status: "",
     client: "",
-    database: "",
+    category: "",
     motorGroup: "",
     plateSearch: ""
   });
@@ -619,9 +619,9 @@ export default function RendimientosPage() {
     return buildOptions(subset, (row) => row.client_name);
   }, [filters, payload.rows]);
 
-  const databaseOptions = useMemo(() => {
-    const subset = filterRows(payload.rows, filters, "database");
-    return buildOptions(subset, (row) => row.database_name);
+  const categoryOptions = useMemo(() => {
+    const subset = filterRows(payload.rows, filters, "category");
+    return buildOptions(subset, (row) => row.category || "Ninguna");
   }, [filters, payload.rows]);
 
   const motorGroupOptions = useMemo(() => {
@@ -636,10 +636,10 @@ export default function RendimientosPage() {
   }, [clientOptions, filters.client]);
 
   useEffect(() => {
-    if (filters.database && !databaseOptions.includes(filters.database)) {
-      setFilters((current) => ({ ...current, database: "" }));
+    if (filters.category && !categoryOptions.includes(filters.category)) {
+      setFilters((current) => ({ ...current, category: "" }));
     }
-  }, [databaseOptions, filters.database]);
+  }, [categoryOptions, filters.category]);
 
   useEffect(() => {
     if (filters.motorGroup && !motorGroupOptions.includes(filters.motorGroup)) {
@@ -712,14 +712,14 @@ export default function RendimientosPage() {
   };
 
   const handleClear = () => {
-    setFilters({ status: "", client: "", database: "", motorGroup: "", plateSearch: "" });
+    setFilters({ status: "", client: "", category: "", motorGroup: "", plateSearch: "" });
   };
 
   const activeFilterCount = useMemo(() => {
     return [
       filters.status,
       filters.client,
-      filters.database,
+      filters.category,
       filters.motorGroup,
       filters.plateSearch,
     ].filter(Boolean).length;
@@ -936,7 +936,7 @@ export default function RendimientosPage() {
         { Filtro: "Hasta", Valor: monthTo || "Todos" },
         { Filtro: "Estado", Valor: filters.status ? getStatusLabel(filters.status) : "Todos" },
         { Filtro: "Cliente", Valor: filters.client || "Todos" },
-        { Filtro: "Database", Valor: filters.database || "Todas" },
+        { Filtro: "Categoria", Valor: filters.category || "Todas" },
         { Filtro: "Grupo de motor", Valor: filters.motorGroup || "Todos" },
         { Filtro: "Placa", Valor: filters.plateSearch || "Todas" }
       ];
@@ -1224,12 +1224,12 @@ export default function RendimientosPage() {
           </div>
 
           <div className="form-field">
-            <label>Database</label>
+            <label>Categoria</label>
             <SingleSelectFilter
-              label="Database"
-              options={databaseOptions}
-              value={filters.database}
-              onChange={(value) => setFilters((current) => ({ ...current, database: value }))}
+              label="Categoria"
+              options={categoryOptions}
+              value={filters.category}
+              onChange={(value) => setFilters((current) => ({ ...current, category: value }))}
               placeholder="Todas"
             />
           </div>

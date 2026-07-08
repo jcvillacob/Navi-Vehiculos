@@ -653,6 +653,10 @@ class MonthlyPerformanceRecord(BaseModel):
     )
     technical_number: str | None = Field(default=None, description="TEC# del motor")
     engine_name: str | None = Field(default=None, description="Nombre del motor")
+    category: str | None = Field(
+        default=None,
+        description="Categoria del vehiculo (Flota Administrada, Experiencia Superior, Ninguna)",
+    )
     period_month: str = Field(..., description="Mes del corte en formato YYYY-MM")
     odo_start: float | None = Field(default=None, description="Odometro inicial")
     odo_end: float | None = Field(default=None, description="Odometro final")

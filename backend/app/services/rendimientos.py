@@ -268,6 +268,7 @@ def _build_record(row: dict[str, Any]) -> MonthlyPerformanceRecord:
         provider_vehicle_id=row.get("provider_vehicle_id"),
         technical_number=row.get("technical_number"),
         engine_name=row.get("engine_name"),
+        category=row.get("category") or "Ninguna",
         period_month=str(row["period_month"]),
         odo_start=row.get("odo_start"),
         odo_end=row.get("odo_end"),
@@ -887,7 +888,8 @@ def list_monthly_performance(
                         a.linea,
                         a.ano_modelo,
                         a.tipo_combustible,
-                        a.nombre_vehiculo
+                        a.nombre_vehiculo,
+                        COALESCE(a.category, c.category, 'Ninguna') AS category
                     FROM monthly_vehicle_performance mp
                     LEFT JOIN customers c
                         ON c.id = mp.customer_id
@@ -943,7 +945,8 @@ def list_monthly_performance(
                         a.linea,
                         a.ano_modelo,
                         a.tipo_combustible,
-                        a.nombre_vehiculo
+                        a.nombre_vehiculo,
+                        COALESCE(a.category, c.category, 'Ninguna') AS category
                     FROM monthly_vehicle_performance mp
                     LEFT JOIN customers c
                         ON c.id = mp.customer_id
@@ -954,7 +957,8 @@ def list_monthly_performance(
                     WHERE {" AND ".join(where_clauses)}
                     GROUP BY mp.customer_id, mp.customer_database_id, c.name, cd.database_name,
                              mp.plate, mp.technical_number, mp.engine_name,
-                             a.vin, a.cpl, a.marca, a.linea, a.ano_modelo, a.tipo_combustible, a.nombre_vehiculo
+                             a.vin, a.cpl, a.marca, a.linea, a.ano_modelo, a.tipo_combustible, a.nombre_vehiculo,
+                             a.category, c.category
                     ORDER BY c.name ASC NULLS LAST, cd.database_name ASC NULLS LAST, mp.plate ASC;
                     """,
                     params,
