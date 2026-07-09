@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.routes.audit import router as audit_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.cpk_cph import router as cpk_cph_router
 from app.api.routes.customer import router as customer_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.disponibilidad import router as disponibilidad_router
@@ -20,6 +21,7 @@ api_router.include_router(auth_router)
 api_router.include_router(users_router)
 api_router.include_router(roles_router)
 api_router.include_router(audit_router)
+api_router.include_router(cpk_cph_router)
 api_router.include_router(customer_router)
 api_router.include_router(dashboard_router)
 api_router.include_router(disponibilidad_router)

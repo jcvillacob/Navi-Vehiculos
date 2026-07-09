@@ -2,6 +2,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 
 from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
+    CpkCutoffPreviewRequest,
+    CpkCutoffPreviewResponse,
     MonthlyPerformanceCalculateRequest,
     MonthlyPerformanceResponse,
     MonthlyVehicleAvailabilityResponse,
@@ -10,7 +12,7 @@ from app.schemas.vehicle import (
     PerformanceJobListResponse,
 )
 from app.services.availability_store import list_monthly_availability
-from app.services.rendimientos import list_adhoc_filter_options, list_monthly_performance
+from app.services.rendimientos import list_adhoc_filter_options, list_monthly_performance, preview_cpk_cutoffs
 from app.services.rendimientos_jobs import (
     JobAlreadyRunning,
     JobNotFound,
@@ -98,6 +100,17 @@ def get_adhoc_filter_options(
     Retorna las opciones de filtro disponibles para vehiculos sin cliente asignado.
     """
     return list_adhoc_filter_options()
+
+
+@router.post("/cpk-cutoffs/preview", response_model=CpkCutoffPreviewResponse)
+def preview_cpk_cutoffs_route(
+    payload: CpkCutoffPreviewRequest,
+    _user: dict = Depends(require_permission("rendimientos.view")),
+) -> CpkCutoffPreviewResponse:
+    try:
+        return preview_cpk_cutoffs(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/jobs", response_model=PerformanceJobListResponse)

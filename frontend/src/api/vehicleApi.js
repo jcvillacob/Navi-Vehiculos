@@ -235,6 +235,15 @@ export async function fetchAdhocFilterOptions() {
   return parseJsonOrThrow(response, "Error cargando filtros ad-hoc");
 }
 
+export async function previewCpkCutoffs(payload) {
+  const response = await fetchWithAuth(buildUrl("/api/v1/rendimientos/cpk-cutoffs/preview"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error previsualizando cortes por tanqueo");
+}
+
 export async function fetchPerformanceJob(jobId) {
   const response = await fetchWithAuth(buildUrl(`/api/v1/rendimientos/jobs/${jobId}`));
   return parseJsonOrThrow(response, "Error consultando el job de rendimientos");
@@ -265,6 +274,63 @@ export async function fetchMonthlyAvailability({ month_from, month_to }) {
   const response = await fetchWithAuth(buildUrl(`/api/v1/rendimientos/availability?${query.toString()}`));
   const data = await parseJsonOrThrow(response, "Error cargando disponibilidad mensual");
   return Array.isArray(data?.rows) ? data.rows : [];
+}
+
+// ── CPK/CPH ─────────────────────────────────────────────────────────────────
+
+export async function listCpkCphReports({ month = "", customer_id = null } = {}) {
+  const query = new URLSearchParams();
+  if (month) query.set("month", month);
+  if (customer_id) query.set("customer_id", String(customer_id));
+  const response = await fetchWithAuth(buildUrl(`/api/v1/cpk-cph/reports?${query.toString()}`));
+  const data = await parseJsonOrThrow(response, "Error cargando reportes CPK/CPH");
+  return Array.isArray(data?.reports) ? data.reports : [];
+}
+
+export async function previewCpkCphReport(payload) {
+  const response = await fetchWithAuth(buildUrl("/api/v1/cpk-cph/reports/preview"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error previsualizando CPK/CPH");
+}
+
+export async function saveCpkCphReport(payload) {
+  const response = await fetchWithAuth(buildUrl("/api/v1/cpk-cph/reports"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error guardando CPK/CPH");
+}
+
+export async function fetchCpkCphReport(reportId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/cpk-cph/reports/${reportId}`));
+  return parseJsonOrThrow(response, "Error cargando CPK/CPH");
+}
+
+export async function patchCpkCphReportRow(reportId, rowId, payload) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/cpk-cph/reports/${reportId}/rows/${rowId}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error actualizando fila CPK/CPH");
+}
+
+export async function approveCpkCphReport(reportId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/cpk-cph/reports/${reportId}/approve`), {
+    method: "POST",
+  });
+  return parseJsonOrThrow(response, "Error aprobando CPK/CPH");
+}
+
+export async function reopenCpkCphReport(reportId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/cpk-cph/reports/${reportId}/reopen`), {
+    method: "POST",
+  });
+  return parseJsonOrThrow(response, "Error reabriendo CPK/CPH");
 }
 
 // ── Disponibilidad (dashboard) ────────────────────────────────────────────────

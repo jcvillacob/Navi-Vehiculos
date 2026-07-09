@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import re
 from typing import Any, Callable
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.clients.geotab_client import find_device_by_plate, get_authenticated_client
 from app.schemas.vehicle import (
+    CpkCutoffPreviewRequest,
+    CpkCutoffPreviewResponse,
+    CpkCutoffPreviewRow,
     MonthlyPerformanceCalculateRequest,
     MonthlyPerformanceRecord,
     MonthlyPerformanceResponse,
@@ -16,7 +21,7 @@ from app.schemas.vehicle import (
 )
 from app.core.config import load_geotab_config
 from app.services.motor_catalog import _database_dsn, _ensure_motor_tables
-from app.services.performance_providers import get_monthly_performance_provider
+from app.services.performance_providers import _calculate_geotab_vehicle_record, get_monthly_performance_provider
 from app.services.performance_types import BindingSnapshot, PerformanceTarget
 from app.services.provider_registry import infer_provider_key, supports_monthly_performance
 
@@ -372,6 +377,299 @@ def _fetch_targets(
             )
         )
     return targets
+
+
+_BOGOTA_TZ = timezone(timedelta(hours=-5), name="America/Bogota")
+
+
+def _normalize_cpk_plate(value: str | None) -> str:
+    return "".join(char for char in str(value or "").strip().upper() if char.isalnum())
+
+
+def _normalize_cpk_datetime_text(value: str) -> str:
+    normalized = (
+        str(value or "")
+        .replace("\u00a0", " ")
+        .replace("\u202f", " ")
+        .strip()
+    )
+    normalized = " ".join(normalized.split())
+    normalized = normalized.replace("/", "-")
+    normalized = re.sub(r"\ba\s*\.?\s*m\.?\b", "AM", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bp\s*\.?\s*m\.?\b", "PM", normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def _parse_cpk_cutoff_datetime(value: str) -> datetime:
+    normalized = _normalize_cpk_datetime_text(value)
+    if not normalized:
+        raise ValueError("Fecha vacia")
+
+    candidate = normalized
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+
+    parsed: datetime | None = None
+    parse_formats = (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %I:%M:%S %p",
+        "%Y-%m-%d %I:%M %p",
+        "%Y-%m-%d",
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%d-%m-%Y %I:%M:%S %p",
+        "%d-%m-%Y %I:%M %p",
+        "%d-%m-%Y",
+    )
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        for fmt in parse_formats:
+            try:
+                parsed = datetime.strptime(candidate, fmt)
+                break
+            except ValueError:
+                continue
+
+    if parsed is None:
+        raise ValueError("Fecha invalida")
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_BOGOTA_TZ)
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_geotab_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _fetch_cpk_targets_by_plate(
+    conn: psycopg.Connection,
+    *,
+    plates: list[str],
+) -> dict[str, PerformanceTarget]:
+    if not plates:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                a.customer_id,
+                a.customer_database_id,
+                c.name AS client_name,
+                cd.database_name,
+                a.plate,
+                a.technical_number,
+                mc.engine_name,
+                cd.username,
+                cd.password,
+                cd.connection_type,
+                cd.access_url,
+                cd.provider_config
+            FROM vehicle_motor_assignments a
+            LEFT JOIN customer_databases cd
+                ON cd.id = a.customer_database_id
+            LEFT JOIN customers c
+                ON c.id = a.customer_id
+            LEFT JOIN motor_catalog mc
+                ON mc.technical_number = a.technical_number
+            WHERE UPPER(a.plate) = ANY(%s);
+            """,
+            (plates,),
+        )
+        rows = cur.fetchall()
+
+    targets: dict[str, PerformanceTarget] = {}
+    for row in rows:
+        plate = _normalize_cpk_plate(row.get("plate"))
+        provider_key = infer_provider_key(
+            connection_type=row.get("connection_type"),
+            database_name=row.get("database_name"),
+            access_url=row.get("access_url"),
+            provider_config=row.get("provider_config"),
+        )
+        targets[plate] = PerformanceTarget(
+            provider_key=provider_key,
+            customer_id=row.get("customer_id"),
+            customer_database_id=int(row["customer_database_id"]) if row.get("customer_database_id") is not None else 0,
+            client_name=row.get("client_name"),
+            database_name=row.get("database_name"),
+            plate=plate,
+            technical_number=row.get("technical_number"),
+            engine_name=row.get("engine_name"),
+            username=str(row.get("username") or "").strip(),
+            password=str(row.get("password") or "").strip(),
+            provider_config=row.get("provider_config") if isinstance(row.get("provider_config"), dict) else {},
+        )
+    return targets
+
+
+def preview_cpk_cutoffs(payload: CpkCutoffPreviewRequest) -> CpkCutoffPreviewResponse:
+    """
+    Calcula una previsualizacion de cortes CPK/CPH por tanqueo sin persistir
+    registros mensuales. Las fechas sin zona horaria se interpretan en Colombia.
+    """
+    selected_clients = {str(name).strip() for name in payload.client_names if str(name).strip()}
+    normalized_rows = [
+        (
+            _normalize_cpk_plate(row.plate),
+            row.cutoff_start_at,
+            row.cutoff_end_at,
+        )
+        for row in payload.rows
+    ]
+    plates = sorted({plate for plate, _, _ in normalized_rows if plate})
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_performance_tables(conn)
+        targets_by_plate = _fetch_cpk_targets_by_plate(conn, plates=plates)
+        bindings = _load_binding_map(conn, [target for target in targets_by_plate.values() if target.customer_database_id])
+
+    api_cache: dict[tuple[str, str, str], Any] = {}
+    response_rows: list[CpkCutoffPreviewRow] = []
+
+    for plate, raw_start, raw_end in normalized_rows:
+        base = {
+            "plate": plate,
+            "cutoff_start_at": raw_start,
+            "cutoff_end_at": raw_end,
+        }
+
+        try:
+            start_dt = _parse_cpk_cutoff_datetime(raw_start)
+            end_dt = _parse_cpk_cutoff_datetime(raw_end)
+        except ValueError as exc:
+            response_rows.append(
+                CpkCutoffPreviewRow(**base, status="invalid_date", warnings=[str(exc)])
+            )
+            continue
+
+        start_utc = _format_geotab_utc(start_dt)
+        end_utc = _format_geotab_utc(end_dt)
+        base["cutoff_start_utc"] = start_utc
+        base["cutoff_end_utc"] = end_utc
+
+        if end_dt <= start_dt:
+            response_rows.append(
+                CpkCutoffPreviewRow(
+                    **base,
+                    status="invalid_range",
+                    warnings=["La fecha de tanqueo actual debe ser posterior al tanqueo anterior."],
+                )
+            )
+            continue
+
+        target = targets_by_plate.get(plate)
+        if target is None or not target.customer_database_id:
+            response_rows.append(
+                CpkCutoffPreviewRow(**base, status="not_found", warnings=["Placa no encontrada con cliente/database asignado."])
+            )
+            continue
+
+        target_info = {
+            "client_name": target.client_name,
+            "database_name": target.database_name,
+            "source_provider": target.provider_key,
+        }
+        if selected_clients and (target.client_name or "Sin cliente") not in selected_clients:
+            response_rows.append(
+                CpkCutoffPreviewRow(
+                    **base,
+                    **target_info,
+                    status="client_not_selected",
+                    warnings=["La placa pertenece a un cliente no seleccionado para el export."],
+                )
+            )
+            continue
+
+        if target.provider_key != "geotab":
+            response_rows.append(
+                CpkCutoffPreviewRow(
+                    **base,
+                    **target_info,
+                    status="not_geotab",
+                    warnings=["El corte por tanqueo solo esta disponible para databases Geotab."],
+                )
+            )
+            continue
+
+        if not target.username or not target.password or not target.database_name:
+            response_rows.append(
+                CpkCutoffPreviewRow(
+                    **base,
+                    **target_info,
+                    status="error",
+                    warnings=["La database Geotab no tiene credenciales completas."],
+                )
+            )
+            continue
+
+        try:
+            api_key = (target.username, target.password, target.database_name)
+            api = api_cache.get(api_key)
+            if api is None:
+                api = get_authenticated_client(target.username, target.password, target.database_name)
+                api_cache[api_key] = api
+
+            binding = bindings.get((target.provider_key, target.customer_database_id, target.plate))
+            device_id = binding.provider_vehicle_id if binding and binding.is_manual else None
+            if not device_id:
+                device = find_device_by_plate(api, target.plate, plate_prefix=target.provider_config.get("plate_prefix"))
+                device_id = str(device.get("id") or "").strip() if device else None
+            if not device_id:
+                response_rows.append(
+                    CpkCutoffPreviewRow(
+                        **base,
+                        **target_info,
+                        status="not_found",
+                        warnings=["No fue posible resolver el dispositivo en Geotab para esta placa."],
+                    )
+                )
+                continue
+
+            record = _calculate_geotab_vehicle_record(
+                target=target,
+                month=payload.month,
+                device_id=device_id,
+                api=api,
+                from_date=start_utc,
+                to_date=end_utc,
+                previous_record=None,
+            )
+            status = "valid" if record.calculation_status in {"calculated", "partial"} else "error"
+            warnings = list(record.warnings or [])
+            if record.calculation_status not in {"calculated", "partial"}:
+                warnings.append(f"Geotab retorno estado {record.calculation_status}.")
+            response_rows.append(
+                CpkCutoffPreviewRow(
+                    **base,
+                    **target_info,
+                    provider_vehicle_id=device_id,
+                    status=status,
+                    warnings=warnings,
+                    odo_start=record.odo_start,
+                    odo_end=record.odo_end,
+                    horo_start=record.horo_start,
+                    horo_end=record.horo_end,
+                    kms_ecm=record.kms_ecm,
+                    kms_gps=record.kms_gps,
+                    hours_ecm=record.hours_ecm,
+                    hours_gps=record.hours_gps,
+                    fuel_gallons=record.fuel_gallons,
+                )
+            )
+        except Exception as exc:
+            response_rows.append(
+                CpkCutoffPreviewRow(
+                    **base,
+                    **target_info,
+                    status="error",
+                    warnings=[f"Error consultando Geotab: {exc}"],
+                )
+            )
+
+    return CpkCutoffPreviewResponse(month=payload.month, rows=response_rows)
 
 
 def _load_existing_records(

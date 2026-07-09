@@ -728,6 +728,46 @@ class MonthlyVehicleAvailabilityResponse(BaseModel):
     rows: list[MonthlyVehicleAvailabilityRow] = Field(default_factory=list)
 
 
+class CpkCutoffInputRow(BaseModel):
+    plate: str = Field(..., min_length=1, max_length=32, description="Placa del vehiculo")
+    cutoff_start_at: str = Field(..., min_length=1, description="Fecha/hora del ultimo tanqueo anterior")
+    cutoff_end_at: str = Field(..., min_length=1, description="Fecha/hora del ultimo tanqueo actual")
+
+
+class CpkCutoffPreviewRequest(BaseModel):
+    month: str = Field(..., pattern=r"^\d{4}-\d{2}$", description="Mes del reporte CPK/CPH")
+    client_names: list[str] = Field(default_factory=list, description="Clientes seleccionados para el export")
+    rows: list[CpkCutoffInputRow] = Field(default_factory=list, description="Filas pegadas desde Excel/Sheets")
+
+
+class CpkCutoffPreviewRow(BaseModel):
+    plate: str = Field(..., description="Placa normalizada")
+    cutoff_start_at: str = Field(..., description="Fecha/hora de inicio original")
+    cutoff_end_at: str = Field(..., description="Fecha/hora de fin original")
+    cutoff_start_utc: str | None = Field(default=None, description="Inicio convertido a UTC para Geotab")
+    cutoff_end_utc: str | None = Field(default=None, description="Fin convertido a UTC para Geotab")
+    client_name: str | None = Field(default=None, description="Cliente resuelto")
+    database_name: str | None = Field(default=None, description="Database resuelta")
+    source_provider: str | None = Field(default=None, description="Proveedor resuelto")
+    provider_vehicle_id: str | None = Field(default=None, description="ID del vehiculo en el proveedor")
+    status: str = Field(..., description="valid | invalid_date | invalid_range | not_found | client_not_selected | not_geotab | error")
+    warnings: list[str] = Field(default_factory=list)
+    odo_start: float | None = None
+    odo_end: float | None = None
+    horo_start: float | None = None
+    horo_end: float | None = None
+    kms_ecm: float | None = None
+    kms_gps: float | None = None
+    hours_ecm: float | None = None
+    hours_gps: float | None = None
+    fuel_gallons: float | None = None
+
+
+class CpkCutoffPreviewResponse(BaseModel):
+    month: str = Field(..., description="Mes del reporte CPK/CPH")
+    rows: list[CpkCutoffPreviewRow] = Field(default_factory=list)
+
+
 # ── Dashboard de Disponibilidad (agregaciones por flota/cliente) ──────────────
 
 

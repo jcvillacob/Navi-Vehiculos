@@ -36,6 +36,12 @@ MODULES: list[dict] = [
         "levels": ["lectura", "escritura"],
     },
     {
+        "key": "cpk_cph",
+        "label": "CPK/CPH",
+        "description": "Cierres aprobados de CPK/CPH por cliente y mes.",
+        "levels": ["lectura", "escritura"],
+    },
+    {
         "key": "vehiculos",
         "label": "Vehículos",
         "description": "Listado, edición y reproceso de placas asociadas.",
@@ -93,6 +99,11 @@ MODULE_CODENAMES: dict[tuple[str, str], tuple[str, ...]] = {
         "rendimientos.view",
         "rendimientos.refresh",
     ),
+    ("cpk_cph", "lectura"): ("cpk_cph.view",),
+    ("cpk_cph", "escritura"): (
+        "cpk_cph.view",
+        "cpk_cph.manage",
+    ),
     ("vehiculos", "lectura"): ("vehicles.list",),
     ("vehiculos", "escritura"): (
         "vehicles.list",
@@ -142,6 +153,8 @@ PERMISSION_DESCRIPTIONS: dict[str, str] = {
     "customers.edit": "Editar cliente y databases",
     "rendimientos.view": "Ver rendimientos",
     "rendimientos.refresh": "Refrescar rendimientos",
+    "cpk_cph.view": "Ver CPK/CPH",
+    "cpk_cph.manage": "Gestionar cierres CPK/CPH",
     "users.list": "Listar usuarios",
     "users.create": "Crear usuario",
     "users.edit": "Editar usuario",

@@ -13,6 +13,7 @@ import AuditPage from "./pages/AuditPage";
 import UsersPage from "./pages/UsersPage";
 import RolesPage from "./pages/RolesPage";
 import HomePage from "./pages/HomePage";
+import CpkCphPage from "./pages/CpkCphPage";
 import RendimientosPage from "./pages/RendimientosPage";
 import DisponibilidadPage from "./pages/DisponibilidadPage";
 import MapaPage from "./pages/MapaPage";
@@ -170,6 +171,12 @@ function AppShell() {
                 <span>Rendimientos</span>
                 <small>Kms, horas y consumo</small>
               </NavLink>
+              <Can permission={["cpk_cph.view", "rendimientos.view"]}>
+                <NavLink to="/cpk-cph">
+                  <span>CPK/CPH</span>
+                  <small>Cierres aprobados</small>
+                </NavLink>
+              </Can>
               <NavLink to="/disponibilidad">
                 <span>Disponibilidad</span>
                 <small>Panel de flotas</small>
@@ -296,6 +303,14 @@ function AppShell() {
               <Route path="/clientes" element={<CustomersPage />} />
               <Route path="/vehiculos" element={<VehiclesPage />} />
               <Route path="/rendimientos" element={<RendimientosPage />} />
+              <Route
+                path="/cpk-cph"
+                element={
+                  <ProtectedRoute permissions={["cpk_cph.view", "rendimientos.view"]}>
+                    <CpkCphPage />
+                  </ProtectedRoute>
+                }
+              />
               <Route path="/disponibilidad" element={<DisponibilidadPage />} />
               <Route path="/mapa" element={<MapaPage />} />
               {import.meta.env.DEV ? (
