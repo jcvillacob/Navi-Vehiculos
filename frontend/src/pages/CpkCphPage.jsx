@@ -454,38 +454,195 @@ export default function CpkCphPage() {
       return;
     }
     try {
-      const XLSX = await import("xlsx");
+      const XLSXmod = await import("xlsx-js-style");
+      const XLSX = XLSXmod.default || XLSXmod;
       const wb = XLSX.utils.book_new();
       const customerName = selectedCustomer?.name || activeReport?.customer_name || "cliente";
-      const summary = [
-        { Campo: "Mes", Valor: month },
-        { Campo: "Cliente", Valor: customerName },
-        { Campo: "Estado", Valor: statusLabel(activeReport?.status || "saved") },
-        { Campo: "Filas", Valor: visibleRows.length }
-      ];
-      const rows = visibleRows.map((rawRow) => {
-        const row = computeRowDiff(rawRow);
-        return {
-          Placa: row.plate,
-          Tipo: row.vocacional ? "Vocacional" : "Comercial",
-          Mes: month,
-          "Odometro Inicio": row.odo_start,
-          "Odometro Fin": row.odo_end,
-          "Kms ECM": row.kms_ecm_geotab,
-          "Kms Referencia": row.km_client !== null ? row.km_client : row.kms_gps,
-          "Horas Inicio": row.horo_start,
-          "Horas Final": row.horo_end,
-          "Horas ECM": row.hours_ecm,
-          "Horas Referencia": row.hours_gps,
-          "Ajuste": row.vocacional ? row.hour_adjustment : row.km_adjustment,
-          "Diferencia %": row.display_diff_pct,
-          Estado: statusLabel(row.calculation_status),
-          Nota: row.correction_note || "",
-          Warnings: Array.isArray(row.warnings) ? row.warnings.join(" ") : ""
-        };
-      });
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), "Resumen");
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "CPK CPH");
+
+      const BRAND_RED = "EE2E2F";
+      const BRAND_BLACK = "363534";
+      const BRAND_GRAY = "5A6275";
+      const BAND_GRAY = "F4F5F7";
+      const BORDER_GRAY = "C3CAC8";
+
+      const titleStyle = {
+        font: { bold: true, color: { rgb: "FFFFFF" }, sz: 14, name: "Calibri" },
+        fill: { fgColor: { rgb: BRAND_BLACK } },
+        alignment: { horizontal: "left", vertical: "center" }
+      };
+      const sectionHeaderStyle = {
+        font: { bold: true, color: { rgb: "FFFFFF" }, sz: 12, name: "Calibri" },
+        fill: { fgColor: { rgb: BRAND_RED } },
+        alignment: { horizontal: "left", vertical: "center" },
+        border: {
+          top: { style: "thin", color: { rgb: BORDER_GRAY } },
+          bottom: { style: "thin", color: { rgb: BORDER_GRAY } },
+          left: { style: "thin", color: { rgb: BORDER_GRAY } },
+          right: { style: "thin", color: { rgb: BORDER_GRAY } }
+        }
+      };
+      const headerStyle = {
+        font: { bold: true, color: { rgb: "FFFFFF" }, sz: 11, name: "Calibri" },
+        fill: { fgColor: { rgb: BRAND_RED } },
+        alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        border: {
+          top: { style: "thin", color: { rgb: BORDER_GRAY } },
+          bottom: { style: "thin", color: { rgb: BORDER_GRAY } },
+          left: { style: "thin", color: { rgb: BORDER_GRAY } },
+          right: { style: "thin", color: { rgb: BORDER_GRAY } }
+        }
+      };
+      const labelStyle = {
+        font: { bold: true, color: { rgb: BRAND_BLACK }, sz: 11, name: "Calibri" },
+        fill: { fgColor: { rgb: BAND_GRAY } },
+        alignment: { horizontal: "left", vertical: "center" },
+        border: {
+          top: { style: "thin", color: { rgb: BORDER_GRAY } },
+          bottom: { style: "thin", color: { rgb: BORDER_GRAY } },
+          left: { style: "thin", color: { rgb: BORDER_GRAY } },
+          right: { style: "thin", color: { rgb: BORDER_GRAY } }
+        }
+      };
+      const valueStyle = {
+        font: { color: { rgb: BRAND_GRAY }, sz: 11, name: "Calibri" },
+        alignment: { horizontal: "left", vertical: "center" },
+        border: {
+          top: { style: "thin", color: { rgb: BORDER_GRAY } },
+          bottom: { style: "thin", color: { rgb: BORDER_GRAY } },
+          left: { style: "thin", color: { rgb: BORDER_GRAY } },
+          right: { style: "thin", color: { rgb: BORDER_GRAY } }
+        }
+      };
+      const cellBase = {
+        font: { color: { rgb: BRAND_BLACK }, sz: 11, name: "Calibri" },
+        alignment: { horizontal: "center", vertical: "center" },
+        border: {
+          top: { style: "thin", color: { rgb: BORDER_GRAY } },
+          bottom: { style: "thin", color: { rgb: BORDER_GRAY } },
+          left: { style: "thin", color: { rgb: BORDER_GRAY } },
+          right: { style: "thin", color: { rgb: BORDER_GRAY } }
+        }
+      };
+      const cellStyleBand = {
+        ...cellBase,
+        fill: { fgColor: { rgb: BAND_GRAY } }
+      };
+      const diffAlertStyle = {
+        ...cellBase,
+        font: { bold: true, color: { rgb: BRAND_RED }, sz: 11, name: "Calibri" },
+        fill: { fgColor: { rgb: "FCEBEC" } }
+      };
+      const diffAlertBandStyle = {
+        ...cellStyleBand,
+        font: { bold: true, color: { rgb: BRAND_RED }, sz: 11, name: "Calibri" }
+      };
+
+      const buildSummarySheet = () => {
+        const titleRow = [{ A: "Reporte CPK / CPH" }];
+        const summary = [
+          { Campo: "Mes", Valor: month },
+          { Campo: "Cliente", Valor: customerName },
+          { Campo: "Estado", Valor: statusLabel(activeReport?.status || "saved") },
+          { Campo: "Filas", Valor: visibleRows.length },
+          { Campo: "Generado", Valor: new Date().toLocaleString("es-CO") }
+        ];
+        const sheet = {};
+        sheet["A1"] = { v: "Reporte CPK / CPH", t: "s", s: titleStyle };
+        sheet["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 6, c: 1 } });
+        sheet["!cols"] = [{ wch: 22 }, { wch: 38 }];
+        sheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }];
+        sheet["A3"] = { v: "Campo", t: "s", s: sectionHeaderStyle };
+        sheet["B3"] = { v: "Valor", t: "s", s: sectionHeaderStyle };
+        summary.forEach((item, idx) => {
+          const row = 4 + idx;
+          sheet[`A${row}`] = { v: item.Campo, t: "s", s: labelStyle };
+          sheet[`B${row}`] = { v: item.Valor, t: typeof item.Valor === "number" ? "n" : "s", s: valueStyle };
+        });
+        sheet["!rows"] = [{ hpt: 26 }, { hpt: 18 }, { hpt: 22 }];
+        return sheet;
+      };
+
+      const buildDataSheet = () => {
+        const headers = [
+          "Placa",
+          "Tipo",
+          "Mes",
+          "Odometro Inicio",
+          "Odometro Fin",
+          "Kms ECM",
+          "Kms Referencia",
+          "Horas Inicio",
+          "Horas Final",
+          "Horas ECM",
+          "Horas Referencia",
+          "Ajuste",
+          "Diferencia %",
+          "Tanqueo anterior",
+          "Tanqueo actual",
+          "Estado",
+          "Nota",
+          "Warnings"
+        ];
+        const data = visibleRows.map((rawRow) => {
+          const row = computeRowDiff(rawRow);
+          return {
+            Placa: row.plate,
+            Tipo: row.vocacional ? "Vocacional" : "Comercial",
+            Mes: month,
+            "Odometro Inicio": row.odo_start,
+            "Odometro Fin": row.odo_end,
+            "Kms ECM": row.kms_ecm_geotab,
+            "Kms Referencia": row.km_client !== null ? row.km_client : row.kms_gps,
+            "Horas Inicio": row.horo_start,
+            "Horas Final": row.horo_end,
+            "Horas ECM": row.hours_ecm,
+            "Horas Referencia": row.hours_gps,
+            Ajuste: row.vocacional ? row.hour_adjustment : row.km_adjustment,
+            "Diferencia %": row.display_diff_pct,
+            "Tanqueo anterior": row.cutoff_start_at || "",
+            "Tanqueo actual": row.cutoff_end_at || "",
+            Estado: statusLabel(row.calculation_status),
+            Nota: row.correction_note || "",
+            Warnings: Array.isArray(row.warnings) ? row.warnings.join(" ") : ""
+          };
+        });
+
+        const aoa = [headers, ...data.map((r) => headers.map((h) => r[h] ?? ""))];
+        const sheet = XLSX.utils.aoa_to_sheet(aoa);
+
+        const colWidths = [12, 14, 10, 14, 14, 12, 16, 12, 12, 12, 16, 10, 14, 20, 20, 16, 28, 32];
+        sheet["!cols"] = colWidths.map((w) => ({ wch: w }));
+        sheet["!freeze"] = { xSplit: 0, ySplit: 1 };
+        sheet["!rows"] = [{ hpt: 28 }];
+
+        headers.forEach((_, c) => {
+          const addr = XLSX.utils.encode_cell({ r: 0, c });
+          if (sheet[addr]) sheet[addr].s = headerStyle;
+        });
+
+        data.forEach((row, rIdx) => {
+          const excelRow = rIdx + 1;
+          const band = excelRow % 2 === 0;
+          const isAlert = Math.abs(Number(row["Diferencia %"] || 0)) > 5;
+          headers.forEach((_, c) => {
+            const addr = XLSX.utils.encode_cell({ r: excelRow, c });
+            const cell = sheet[addr];
+            if (!cell) return;
+            if (isAlert) {
+              cell.s = band ? diffAlertBandStyle : diffAlertStyle;
+            } else {
+              cell.s = band ? cellStyleBand : cellBase;
+            }
+          });
+        });
+
+        return sheet;
+      };
+
+      const summarySheet = buildSummarySheet();
+      const dataSheet = buildDataSheet();
+      XLSX.utils.book_append_sheet(wb, summarySheet, "Resumen");
+      XLSX.utils.book_append_sheet(wb, dataSheet, "CPK CPH");
       XLSX.writeFile(wb, `cpk_cph_${sanitizeFileName(customerName)}_${month}.xlsx`);
       pushToast("success", "Excel CPK/CPH exportado.");
     } catch (err) {
@@ -619,11 +776,16 @@ export default function CpkCphPage() {
                           <td>{formatNumber(row.kms_ecm_geotab, 0)}</td>
                           <td>
                             {hasCutoff ? (
-                              <EditableCell
-                                type="number"
-                                value={row.km_client ?? ""}
-                                onChange={(value) => updateLocalRow(index, { km_client: value })}
-                              />
+                              <>
+                                <EditableCell
+                                  type="number"
+                                  value={row.km_client ?? ""}
+                                  onChange={(value) => updateLocalRow(index, { km_client: value })}
+                                />
+                                <small className="cpk-cph-cutoff-dates" title="Ventana de tanqueo usada">
+                                  {row.cutoff_start_at} → {row.cutoff_end_at}
+                                </small>
+                              </>
                             ) : formatNumber(row.kms_gps, 0)}
                           </td>
                           <td>{formatNumber(row.horo_start, 1)}</td>
@@ -654,12 +816,17 @@ export default function CpkCphPage() {
                           </td>
                           <td>{formatNumber(row.display_diff_pct, 2)}</td>
                           <td>
-                            <span className={`cpk-cph-status cpk-cph-status--${row.calculation_status}`}>
-                              {statusLabel(row.calculation_status)}
-                            </span>
-                            {Array.isArray(row.warnings) && row.warnings.length ? (
-                              <small>{row.warnings.join(" ")}</small>
-                            ) : null}
+                            <div className="cpk-cph-status-cell">
+                              <span
+                                className={`cpk-cph-status cpk-cph-status--${row.calculation_status}${Array.isArray(row.warnings) && row.warnings.length ? " has-warning" : ""}`}
+                                title={Array.isArray(row.warnings) && row.warnings.length ? row.warnings.join(" ") : undefined}
+                              >
+                                {statusLabel(row.calculation_status)}
+                                {Array.isArray(row.warnings) && row.warnings.length ? (
+                                  <span className="cpk-cph-status-alert" aria-label="Advertencia">!</span>
+                                ) : null}
+                              </span>
+                            </div>
                           </td>
                           <td>
                             <EditableCell

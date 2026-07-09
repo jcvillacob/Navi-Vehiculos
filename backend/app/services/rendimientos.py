@@ -637,6 +637,7 @@ def preview_cpk_cutoffs(payload: CpkCutoffPreviewRequest) -> CpkCutoffPreviewRes
                 from_date=start_utc,
                 to_date=end_utc,
                 previous_record=None,
+                cutoff_mode=True,
             )
             status = "valid" if record.calculation_status in {"calculated", "partial"} else "error"
             warnings = list(record.warnings or [])

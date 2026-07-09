@@ -486,6 +486,7 @@ def _calculate_geotab_vehicle_record(
     from_date: str,
     to_date: str,
     previous_record: MonthlyPerformanceRecord | None,
+    cutoff_mode: bool = False,
 ) -> MonthlyPerformanceRecord:
     warnings: list[str] = []
 
@@ -513,7 +514,11 @@ def _calculate_geotab_vehicle_record(
         odo_start_raw = _geotab_first_value(odo_readings)
         odo_start = odo_start_raw / 1000.0 if odo_start_raw is not None else None
         if odo_start is not None:
-            warnings.append("Odometro inicial tomado de la primera lectura del mes (sin registro previo).")
+            warnings.append(
+                "Odometro inicial tomado de la lectura en el tanqueo anterior (punto exacto del corte)."
+                if cutoff_mode
+                else "Odometro inicial tomado de la primera lectura del mes (sin registro previo)."
+            )
 
     kms_ecm = max(0.0, odo_end - odo_start) if odo_start is not None and odo_end is not None else None
 
@@ -527,7 +532,11 @@ def _calculate_geotab_vehicle_record(
         horo_start_raw = _geotab_first_value(hours_readings)
         horo_start = horo_start_raw / 3600.0 if horo_start_raw is not None else None
         if horo_start is not None:
-            warnings.append("Horometro inicial tomado de la primera lectura del mes (sin registro previo).")
+            warnings.append(
+                "Horometro inicial tomado de la lectura en el tanqueo anterior (punto exacto del corte)."
+                if cutoff_mode
+                else "Horometro inicial tomado de la primera lectura del mes (sin registro previo)."
+            )
 
     hours_ecm = max(0.0, horo_end - horo_start) if horo_start is not None and horo_end is not None else None
 

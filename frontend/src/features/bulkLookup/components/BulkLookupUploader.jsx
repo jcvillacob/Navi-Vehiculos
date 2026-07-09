@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from "react";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 
 function normalizeHeader(value) {
   return String(value || "").trim().toLowerCase();

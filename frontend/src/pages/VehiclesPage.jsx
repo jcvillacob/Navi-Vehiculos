@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 
 import Can from "../components/Can";
 import ColumnSelectorDrawer from "../components/ColumnSelectorDrawer";

@@ -903,7 +903,8 @@ export default function RendimientosPage() {
     }
 
     try {
-      const XLSX = await import("xlsx");
+      const XLSXmod = await import("xlsx-js-style");
+      const XLSX = XLSXmod.default || XLSXmod;
       const ctx = { connStats, availabilityByPlate };
 
       const headers = activeColumns.map((col) => col.label);
