@@ -1,25 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import Can from "../components/Can";
+import CpkCalcModal from "../components/CpkCalcModal";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import {
-  approveCpkCphReport,
+  deleteCpkCphReport,
   fetchMonthlyPerformance,
   fetchCpkCphReport,
   listCpkCphReports,
   listCustomers,
   patchCpkCphReportRow,
   previewCpkCphReport,
-  reopenCpkCphReport,
   saveCpkCphReport
 } from "../api/vehicleApi";
-import { getPreviousMonth, sanitizeFileName } from "../utils/rendimientosExport";
+import { formatMonthLabel, getPreviousMonth, sanitizeFileName } from "../utils/rendimientosExport";
+
+const SYSTEM_CUSTOMER = "__navitrans_system__";
 
 function normalizeHeader(value) {
   return String(value || "")
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .trim()
     .toLowerCase()
     .replace(/[_-]+/g, " ")
@@ -87,9 +89,7 @@ function formatNumber(value, digits = 0) {
 }
 
 function statusLabel(status) {
-  if (status === "draft") return "Borrador";
-  if (status === "approved") return "Aprobado";
-  if (status === "reopened") return "Reabierto";
+  if (status === "saved") return "Guardado";
   if (status === "valid") return "Valida";
   if (status === "duplicate") return "Duplicada";
   if (status === "invalid_date") return "Fecha invalida";
@@ -101,11 +101,8 @@ function statusLabel(status) {
   return status || "Pendiente";
 }
 
-function rowsForApi(rows) {
-  return rows.map(computeRowDiff);
-}
-
 function computeRowDiff(row) {
+  const vocacional = Boolean(row.vocacional);
   const kmClient = parseNumber(row.km_client);
   const kmAdjustment = parseNumber(row.km_adjustment) ?? 0;
   const hourAdjustment = parseNumber(row.hour_adjustment) ?? 0;
@@ -116,10 +113,15 @@ function computeRowDiff(row) {
   const kmsApproved = explicitKmsApproved ?? (kmsRaw !== null ? kmsRaw + kmAdjustment : null);
   const hoursApproved = explicitHoursApproved ?? (hoursRaw !== null ? hoursRaw + hourAdjustment : null);
   const kmsGps = parseNumber(row.kms_gps);
-  const comparisonKm = kmClient !== null ? kmClient : kmsGps;
-  const diff = kmsApproved !== null && comparisonKm !== null ? kmsApproved - comparisonKm : null;
+  const hoursGps = parseNumber(row.hours_gps);
+  const kmReference = kmClient !== null ? kmClient : kmsGps;
+  const kmDiff = kmsApproved !== null && kmReference !== null ? kmsApproved - kmReference : null;
+  const hourDiff = hoursApproved !== null && hoursGps !== null ? hoursApproved - hoursGps : null;
+  const kmDiffPct = kmDiff !== null && kmReference ? (kmDiff / kmReference) * 100 : null;
+  const hourDiffPct = hourDiff !== null && hoursGps ? (hourDiff / hoursGps) * 100 : null;
   return {
     ...row,
+    vocacional,
     km_client: kmClient,
     km_adjustment: kmAdjustment,
     hour_adjustment: hourAdjustment,
@@ -128,11 +130,18 @@ function computeRowDiff(row) {
     kms_ecm_geotab: kmsRaw,
     kms_gps: kmsGps,
     hours_ecm: hoursRaw,
-    hours_gps: parseNumber(row.hours_gps),
+    hours_gps: hoursGps,
     fuel_gallons: parseNumber(row.fuel_gallons),
-    km_difference: diff,
-    km_difference_pct: diff !== null && comparisonKm ? diff / comparisonKm * 100 : null,
+    km_difference: kmDiff,
+    km_difference_pct: kmDiffPct,
+    hour_difference: hourDiff,
+    hour_difference_pct: hourDiffPct,
+    display_diff_pct: vocacional ? hourDiffPct : kmDiffPct
   };
+}
+
+function rowsForApi(rows) {
+  return rows.map(computeRowDiff);
 }
 
 function mapMonthlyRowToCpkRow(row, index) {
@@ -148,6 +157,7 @@ function mapMonthlyRowToCpkRow(row, index) {
     database_name: row.database_name,
     source_provider: row.source_provider,
     provider_vehicle_id: row.provider_vehicle_id,
+    vocacional: Boolean(row.vocacional),
     km_client: null,
     odo_start: parseNumber(row.odo_start),
     odo_end: parseNumber(row.odo_end),
@@ -183,11 +193,11 @@ function mergeRowsByPlate(baseRows, overrideRows) {
       merged[existingIndex] = computeRowDiff({
         ...existingRow,
         ...overrideRow,
-        id: existingRow.id,
+        vocacional: existingRow.vocacional,
         km_adjustment: kmAdjustment,
         hour_adjustment: hourAdjustment,
         kms_ecm_approved: overrideKms !== null ? overrideKms + kmAdjustment : overrideRow.kms_ecm_approved,
-        hours_ecm_approved: overrideHours !== null ? overrideHours + hourAdjustment : overrideRow.hours_ecm_approved,
+        hours_ecm_approved: overrideHours !== null ? overrideHours + hourAdjustment : overrideRow.hours_ecm_approved
       });
     } else if (!byPlate.has(plate)) {
       merged.push(computeRowDiff(overrideRow));
@@ -215,21 +225,23 @@ export default function CpkCphPage() {
   const [customerId, setCustomerId] = useState("");
   const [reports, setReports] = useState([]);
   const [activeReport, setActiveReport] = useState(null);
-  const [pasteText, setPasteText] = useState("");
-  const [previewRows, setPreviewRows] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [calculatingBase, setCalculatingBase] = useState(false);
-  const [useCutoffs, setUseCutoffs] = useState(false);
-  const [confirmOverwrite, setConfirmOverwrite] = useState(null);
+  const [calculating, setCalculating] = useState(false);
+  const [confirmCalc, setConfirmCalc] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [calcModalOpen, setCalcModalOpen] = useState(false);
+  const [calcClients, setCalcClients] = useState([]);
+  const [monthRows, setMonthRows] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
     listCustomers()
       .then((rows) => {
         if (cancelled) return;
-        const sorted = [...rows].sort((a, b) => String(a.name).localeCompare(String(b.name), "es"));
+        const sorted = [...rows]
+          .filter((customer) => String(customer.name) !== SYSTEM_CUSTOMER)
+          .sort((a, b) => String(a.name).localeCompare(String(b.name), "es"));
         setCustomers(sorted);
         if (!customerId && sorted.length) setCustomerId(String(sorted[0].id));
       })
@@ -242,39 +254,24 @@ export default function CpkCphPage() {
     [customers, customerId]
   );
 
-  const reloadReports = useCallback(async () => {
-    if (!month) return;
-    setLoading(true);
-    try {
-      const rows = await listCpkCphReports({ month, customer_id: customerId || null });
-      setReports(rows);
-    } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : "No fue posible cargar CPK/CPH");
-    } finally {
-      setLoading(false);
-    }
-  }, [customerId, month, pushToast]);
+  const loadReports = useCallback(async () => {
+    if (!month) return [];
+    const rows = await listCpkCphReports({ month, customer_id: null });
+    setReports(rows);
+    return rows;
+  }, [month]);
 
   useEffect(() => {
-    reloadReports().catch(() => {});
-  }, [reloadReports]);
+    loadReports().catch((err) => pushToast("error", err instanceof Error ? err.message : "No fue posible cargar CPK/CPH"));
+  }, [loadReports, pushToast]);
 
-  const visibleRows = activeReport?.rows || previewRows;
-  const isPersistedDraft = activeReport && activeReport.status !== "approved";
-  const canApprove = Boolean(
-    activeReport &&
-    activeReport.status !== "approved" &&
-    visibleRows.length > 0 &&
-    visibleRows.every((row) => row.calculation_status === "valid")
-  );
+  const visibleRows = activeReport?.rows || [];
 
-  const handleReportSelect = async (reportId) => {
+  const openReport = useCallback(async (reportId) => {
     setLoading(true);
     try {
       const detail = await fetchCpkCphReport(reportId);
       setActiveReport(detail);
-      setPreviewRows([]);
-      setPasteText("");
       setCustomerId(String(detail.customer_id));
       setMonth(detail.period_month);
     } catch (err) {
@@ -282,111 +279,110 @@ export default function CpkCphPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [pushToast]);
 
-  const loadMonthlyBaseRows = useCallback(async () => {
-    if (!customerId || !month) {
-      pushToast("error", "Selecciona mes y cliente.");
-      return [];
-    }
-    const response = await fetchMonthlyPerformance({
-      month_from: month,
-      month_to: month,
-      customer_id: Number(customerId)
-    });
-    const allRows = Array.isArray(response?.rows) ? response.rows : [];
-    const flotaRows = allRows.filter((row) => (row.category || "").trim() === "Flota Administrada");
-    const rows = flotaRows.length ? flotaRows : allRows;
-    return rows.map(mapMonthlyRowToCpkRow);
-  }, [customerId, month, pushToast]);
-
-  const buildCpkRows = async () => {
-    const baseRows = await loadMonthlyBaseRows();
-    if (!useCutoffs || !pasteText.trim()) return baseRows;
-    const parsed = parseClipboard(pasteText).filter((row) => row.plate);
-    if (!parsed.length) return baseRows;
-    const response = await previewCpkCphReport({
-      month,
-      customer_id: Number(customerId),
-      rows: parsed
-    });
-    return mergeRowsByPlate(baseRows, response.rows || []);
-  };
-
-  const runCpkCalculation = async () => {
-    setCalculatingBase(true);
+  const openCalcModal = useCallback(async (currentReports) => {
+    setLoading(true);
     try {
-      const rows = await buildCpkRows();
-      setActiveReport(null);
-      setPreviewRows(rows);
-      if (rows.length) {
-        pushToast("success", `CPK/CPH calculado: ${rows.length} fila(s).`);
+      const response = await fetchMonthlyPerformance({ month_from: month, month_to: month });
+      const allRows = Array.isArray(response?.rows) ? response.rows : [];
+      setMonthRows(allRows);
+      const reportedIds = new Set((currentReports || reports).map((report) => report.customer_id));
+      const byCustomer = new Map();
+      for (const row of allRows) {
+        if (!row || row.customer_id == null) continue;
+        if (String(row.client_name) === SYSTEM_CUSTOMER) continue;
+        if (reportedIds.has(row.customer_id)) continue;
+        const entry = byCustomer.get(row.customer_id) || {
+          customer_id: row.customer_id,
+          name: row.client_name || "Sin cliente",
+          vehicles: 0
+        };
+        entry.vehicles += 1;
+        byCustomer.set(row.customer_id, entry);
+      }
+      const clients = [...byCustomer.values()];
+      if (!clients.length) {
+        pushToast("error", "No hay rendimientos pendientes de CPK/CPH para este mes.");
+        return;
+      }
+      setCalcClients(clients);
+      setCalcModalOpen(true);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "No fue posible cargar los rendimientos del mes");
+    } finally {
+      setLoading(false);
+    }
+  }, [month, reports, pushToast]);
+
+  const handleSearch = async () => {
+    setLoading(true);
+    try {
+      const rows = await loadReports();
+      const existing = rows.find((report) => String(report.customer_id) === String(customerId));
+      if (existing) {
+        await openReport(existing.id);
       } else {
-        pushToast("error", "No hay rendimientos mensuales para ese cliente y mes.");
+        setActiveReport(null);
+        setConfirmCalc(true);
       }
     } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : "No fue posible calcular desde rendimientos");
+      pushToast("error", err instanceof Error ? err.message : "No fue posible buscar reportes");
     } finally {
-      setCalculatingBase(false);
+      setLoading(false);
     }
   };
 
-  const handleCalculateCpkCph = () => {
-    const existing = reports.find((report) => String(report.customer_id) === String(customerId) && report.period_month === month);
-    if (existing) {
-      setConfirmOverwrite(existing);
-      return;
-    }
-    runCpkCalculation();
+  const handleConfirmCalc = async () => {
+    setConfirmCalc(false);
+    await openCalcModal(reports);
   };
 
-  const handlePreview = async () => {
-    const parsed = parseClipboard(pasteText).filter((row) => row.plate);
-    if (!customerId) {
-      pushToast("error", "Selecciona un cliente.");
-      return;
-    }
-    if (!parsed.length) {
-      pushToast("error", "Pega al menos una fila con placa, fechas y km cliente.");
-      return;
-    }
-    setPreviewing(true);
+  const handleCalculate = async ({ selectedCustomerIds, cutoffText, cutoffCustomerIds }) => {
+    if (!selectedCustomerIds.length) return;
+    setCalculating(true);
+    const cutoffSet = new Set(cutoffCustomerIds);
+    const parsedCutoffs = cutoffText ? parseClipboard(cutoffText).filter((row) => row.plate) : [];
+    let calculatedForSelected = null;
     try {
-      const response = await previewCpkCphReport({
-        month,
-        customer_id: Number(customerId),
-        rows: parsed
-      });
-      const overrideRows = response.rows || [];
-      const baseRows = visibleRows.length ? visibleRows : await loadMonthlyBaseRows();
-      const mergedRows = mergeRowsByPlate(baseRows, overrideRows);
-      setPreviewRows(mergedRows);
-      setActiveReport(null);
-      pushToast("success", `Tanqueos aplicados: ${overrideRows.length} fila(s). Total reporte: ${mergedRows.length}.`);
+      for (const id of selectedCustomerIds) {
+        const baseRows = monthRows
+          .filter((row) => row.customer_id === id)
+          .map(mapMonthlyRowToCpkRow);
+        let rows = baseRows;
+        if (cutoffSet.has(id) && parsedCutoffs.length) {
+          const response = await previewCpkCphReport({ month, customer_id: Number(id), rows: parsedCutoffs });
+          rows = mergeRowsByPlate(baseRows, response.rows || []);
+        }
+        if (!rows.length) continue;
+        const detail = await saveCpkCphReport({ month, customer_id: Number(id), rows: rowsForApi(rows) });
+        if (String(id) === String(customerId)) calculatedForSelected = detail;
+      }
+      const refreshed = await loadReports();
+      setCalcModalOpen(false);
+      pushToast("success", `CPK/CPH calculado para ${selectedCustomerIds.length} cliente(s).`);
+      if (calculatedForSelected) {
+        setActiveReport(calculatedForSelected);
+      } else {
+        const first = refreshed.find((report) => selectedCustomerIds.includes(report.customer_id));
+        if (first) await openReport(first.id);
+      }
     } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : "No fue posible previsualizar");
+      pushToast("error", err instanceof Error ? err.message : "No fue posible calcular CPK/CPH");
     } finally {
-      setPreviewing(false);
+      setCalculating(false);
     }
   };
 
   const updateLocalRow = (index, patch) => {
-    if (activeReport) {
-      setActiveReport((current) => ({
-        ...current,
-        rows: current.rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row)
-      }));
-    } else {
-      setPreviewRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
-    }
+    setActiveReport((current) => ({
+      ...current,
+      rows: current.rows.map((row, rowIndex) => rowIndex === index ? computeRowDiff({ ...row, ...patch }) : row)
+    }));
   };
 
-  const handleSaveDraft = async () => {
-    if (!customerId || !month) {
-      pushToast("error", "Selecciona mes y cliente.");
-      return;
-    }
-    if (!visibleRows.length) {
+  const handleSaveAll = async () => {
+    if (!activeReport || !visibleRows.length) {
       pushToast("error", "No hay filas para guardar.");
       return;
     }
@@ -400,14 +396,13 @@ export default function CpkCphPage() {
     setSaving(true);
     try {
       const detail = await saveCpkCphReport({
-        month,
-        customer_id: Number(customerId),
+        month: activeReport.period_month,
+        customer_id: activeReport.customer_id,
         rows: rowsForApi(visibleRows)
       });
       setActiveReport(detail);
-      setPreviewRows([]);
-      await reloadReports();
-      pushToast("success", "Borrador CPK/CPH guardado.");
+      await loadReports();
+      pushToast("success", "CPK/CPH guardado.");
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message : "No fue posible guardar");
     } finally {
@@ -433,34 +428,23 @@ export default function CpkCphPage() {
       }
       const detail = await patchCpkCphReportRow(activeReport.id, row.id, payload);
       setActiveReport(detail);
-      await reloadReports();
+      await loadReports();
       pushToast("success", "Fila actualizada.");
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message : "No fue posible actualizar la fila");
     }
   };
 
-  const handleApprove = async () => {
+  const handleDelete = async () => {
     if (!activeReport) return;
+    setConfirmDelete(false);
     try {
-      const detail = await approveCpkCphReport(activeReport.id);
-      setActiveReport(detail);
-      await reloadReports();
-      pushToast("success", `CPK/CPH aprobado como version ${detail.current_version}.`);
+      await deleteCpkCphReport(activeReport.id);
+      setActiveReport(null);
+      await loadReports();
+      pushToast("success", "Reporte CPK/CPH borrado.");
     } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : "No fue posible aprobar");
-    }
-  };
-
-  const handleReopen = async () => {
-    if (!activeReport) return;
-    try {
-      const detail = await reopenCpkCphReport(activeReport.id);
-      setActiveReport(detail);
-      await reloadReports();
-      pushToast("success", "Reporte reabierto para correccion.");
-    } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : "No fue posible reabrir");
+      pushToast("error", err instanceof Error ? err.message : "No fue posible borrar el reporte");
     }
   };
 
@@ -472,44 +456,37 @@ export default function CpkCphPage() {
     try {
       const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
-      const reportStatus = activeReport?.status || "borrador";
+      const customerName = selectedCustomer?.name || activeReport?.customer_name || "cliente";
       const summary = [
         { Campo: "Mes", Valor: month },
-        { Campo: "Cliente", Valor: selectedCustomer?.name || activeReport?.customer_name || "" },
-        { Campo: "Estado", Valor: statusLabel(reportStatus) },
-        { Campo: "Version", Valor: activeReport?.current_version || 0 },
-        { Campo: "Aprobado por", Valor: activeReport?.approved_by_username || "" },
-        { Campo: "Aprobado en", Valor: activeReport?.approved_at || "" }
+        { Campo: "Cliente", Valor: customerName },
+        { Campo: "Estado", Valor: statusLabel(activeReport?.status || "saved") },
+        { Campo: "Filas", Valor: visibleRows.length }
       ];
       const rows = visibleRows.map((rawRow) => {
         const row = computeRowDiff(rawRow);
         return {
           Placa: row.plate,
-          "Origen calculo": row.cutoff_start_at && row.cutoff_end_at ? "Tanqueo" : "Mensual",
-          "Km cliente": row.km_client,
-          "Kms ECM Geotab": row.kms_ecm_geotab,
-          "Ajuste km": row.km_adjustment,
-          "Kms ECM aprobado": row.kms_ecm_approved,
-          "Diferencia km": row.km_difference,
-          "Diferencia %": row.km_difference_pct,
-          "Kms GPS": row.kms_gps,
-          "Horas ECM Geotab": row.hours_ecm,
-          "Ajuste horas": row.hour_adjustment,
-          "Horas ECM aprobadas": row.hours_ecm_approved,
-          "Horas GPS": row.hours_gps,
-          Galones: row.fuel_gallons,
-          "Tanqueo anterior": row.cutoff_start_at,
-          "Tanqueo actual": row.cutoff_end_at,
+          Tipo: row.vocacional ? "Vocacional" : "Comercial",
+          Mes: month,
+          "Odometro Inicio": row.odo_start,
+          "Odometro Fin": row.odo_end,
+          "Kms ECM": row.kms_ecm_geotab,
+          "Kms Referencia": row.km_client !== null ? row.km_client : row.kms_gps,
+          "Horas Inicio": row.horo_start,
+          "Horas Final": row.horo_end,
+          "Horas ECM": row.hours_ecm,
+          "Horas Referencia": row.hours_gps,
+          "Ajuste": row.vocacional ? row.hour_adjustment : row.km_adjustment,
+          "Diferencia %": row.display_diff_pct,
           Estado: statusLabel(row.calculation_status),
-          Notas: row.correction_note || "",
+          Nota: row.correction_note || "",
           Warnings: Array.isArray(row.warnings) ? row.warnings.join(" ") : ""
         };
       });
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), "Resumen");
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "CPK CPH");
-      const customerName = selectedCustomer?.name || activeReport?.customer_name || "cliente";
-      const suffix = reportStatus === "approved" ? `v${activeReport?.current_version || 1}` : "BORRADOR";
-      XLSX.writeFile(wb, `cpk_cph_${sanitizeFileName(customerName)}_${month}_${suffix}.xlsx`);
+      XLSX.writeFile(wb, `cpk_cph_${sanitizeFileName(customerName)}_${month}.xlsx`);
       pushToast("success", "Excel CPK/CPH exportado.");
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message : "No fue posible exportar");
@@ -528,11 +505,16 @@ export default function CpkCphPage() {
             Exportar Excel
           </button>
           <Can permission={["cpk_cph.manage", "rendimientos.refresh"]}>
-            {activeReport?.status === "approved" ? (
-              <button type="button" onClick={handleReopen}>Reabrir</button>
-            ) : (
-              <button type="button" onClick={handleApprove} disabled={!canApprove}>Aprobar cierre</button>
-            )}
+            {activeReport ? (
+              <>
+                <button type="button" className="button-secondary" onClick={() => setConfirmDelete(true)}>
+                  Borrar este reporte
+                </button>
+                <button type="button" onClick={handleSaveAll} disabled={saving || !visibleRows.length}>
+                  {saving ? "Guardando..." : "Guardar"}
+                </button>
+              </>
+            ) : null}
           </Can>
         </div>
       </header>
@@ -553,11 +535,8 @@ export default function CpkCphPage() {
               ))}
             </select>
           </div>
-          <button type="button" className="button-secondary" onClick={reloadReports} disabled={loading}>
-            {loading ? "Cargando..." : "Buscar reportes"}
-          </button>
-          <button type="button" onClick={handleCalculateCpkCph} disabled={calculatingBase || previewing || !customerId || !month}>
-            {calculatingBase ? "Calculando..." : "Calcular CPK/CPH"}
+          <button type="button" onClick={handleSearch} disabled={loading || !customerId || !month}>
+            {loading ? "Buscando..." : "Buscar reportes"}
           </button>
 
           <div className="cpk-cph-report-list">
@@ -568,10 +547,10 @@ export default function CpkCphPage() {
                 key={report.id}
                 type="button"
                 className={`cpk-cph-report-item${activeReport?.id === report.id ? " is-active" : ""}`}
-                onClick={() => handleReportSelect(report.id)}
+                onClick={() => openReport(report.id)}
               >
                 <strong>{report.customer_name}</strong>
-                <span>{report.period_month} · {statusLabel(report.status)} · v{report.current_version}</span>
+                <span>{report.period_month} · {statusLabel(report.status)}</span>
                 <small>{report.row_count} fila(s)</small>
               </button>
             ))}
@@ -579,209 +558,189 @@ export default function CpkCphPage() {
         </aside>
 
         <main className="cpk-cph-main">
-          <section className="card cpk-cph-paste">
-            <div className="section-heading">
-              <div>
-                <span className="eyebrow">Entrada masiva</span>
-                <h3>Tanqueos opcionales</h3>
-              </div>
-              <div className="actions-row">
-                <button type="button" className="button-secondary" onClick={handlePreview} disabled={previewing || !useCutoffs}>
-                  {previewing ? "Consultando..." : "Aplicar ajustes"}
-                </button>
-                <Can permission={["cpk_cph.manage", "rendimientos.refresh"]}>
-                  <button type="button" onClick={handleSaveDraft} disabled={saving || !visibleRows.length || activeReport?.status === "approved"}>
-                    {saving ? "Guardando..." : "Guardar borrador"}
-                  </button>
-                </Can>
-              </div>
-            </div>
-            <label className="cpk-cutoff-toggle">
-              <input
-                type="checkbox"
-                checked={useCutoffs}
-                onChange={(event) => setUseCutoffs(event.target.checked)}
-              />
-              <span>Este cliente entrego datos de tanqueo</span>
-            </label>
-            <textarea
-              className="cpk-cph-paste-area"
-              value={pasteText}
-              onChange={(event) => setPasteText(event.target.value)}
-              disabled={!useCutoffs}
-              placeholder={"placa\ttanqueo_anterior\ttanqueo_actual\tkm_cliente\nLQK264\t30/05/2026 10:43:00 a m\t30/06/2026 9:02:00 a m\t4120"}
-            />
-          </section>
-
           <section className="card cpk-cph-grid-card">
             <div className="section-heading">
               <div>
                 <span className="eyebrow">
-                  {activeReport ? `${statusLabel(activeReport.status)} · version ${activeReport.current_version}` : "Previsualizacion"}
+                  {activeReport ? `${statusLabel(activeReport.status)} · ${formatMonthLabel(activeReport.period_month)}` : "Sin reporte abierto"}
                 </span>
-                <h3>{selectedCustomer?.name || activeReport?.customer_name || "Cliente"}</h3>
+                <h3>{activeReport?.customer_name || selectedCustomer?.name || "Cliente"}</h3>
               </div>
               <span className="cpk-cph-count">{visibleRows.length} fila(s)</span>
             </div>
 
-            <div className="cpk-cph-table-shell">
-              <table className="cpk-cph-table">
-                <thead>
-                  <tr>
-                    <th>Placa</th>
-                    <th>Origen</th>
-                    <th>Km referencia</th>
-                    <th>Km ECM</th>
-                    <th>Ajuste km</th>
-                    <th>Km aprobado</th>
-                    <th>Dif km</th>
-                    <th>Dif %</th>
-                    <th>Horas ECM</th>
-                    <th>Ajuste horas</th>
-                    <th>Horas aprobadas</th>
-                    <th>Horas GPS</th>
-                    <th>Galones</th>
-                    <th>Estado</th>
-                    <th>Nota</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleRows.length === 0 ? (
+            {!activeReport ? (
+              <p className="support-copy cpk-cph-empty">
+                Elige mes y cliente y presiona "Buscar reportes". Si no existe, se te ofrecera calcularlo.
+              </p>
+            ) : (
+              <div className="cpk-cph-table-shell">
+                <table className="cpk-cph-table">
+                  <thead>
                     <tr>
-                      <td colSpan={16} className="cpk-cph-empty">Calcula CPK/CPH, pega tanqueos opcionales o abre un reporte existente.</td>
+                      <th>Placa</th>
+                      <th>Origen</th>
+                      <th>Odo. inicio</th>
+                      <th>Odo. fin</th>
+                      <th>Kms ECM</th>
+                      <th>Kms referencia</th>
+                      <th>Horas inicio</th>
+                      <th>Horas final</th>
+                      <th>Horas ECM</th>
+                      <th>Horas referencia</th>
+                      <th>Ajuste</th>
+                      <th>Dif %</th>
+                      <th>Estado</th>
+                      <th>Nota</th>
+                      <th></th>
                     </tr>
-                  ) : visibleRows.map((rawRow, index) => {
-                    const row = computeRowDiff(rawRow);
-                    const locked = activeReport?.status === "approved";
-                    const hasCutoff = Boolean(row.cutoff_start_at && row.cutoff_end_at);
-                    const needsReview = Math.abs(Number(row.km_difference_pct || 0)) > 5;
-                    return (
-                      <tr
-                        key={row.id || `${row.plate}-${index}`}
-                        className={[
-                          row.calculation_status === "valid" ? "" : "is-warning",
-                          needsReview ? "is-diff-alert" : ""
-                        ].filter(Boolean).join(" ")}
-                      >
-                        <td><strong>{row.plate}</strong></td>
-                        <td>
-                          <span className={`cpk-cph-origin ${hasCutoff ? "cpk-cph-origin--cutoff" : ""}`}>
-                            {hasCutoff ? "Tanqueo" : "Mensual"}
-                          </span>
-                        </td>
-                        <td>
-                          {hasCutoff && row.km_client !== null ? (
+                  </thead>
+                  <tbody>
+                    {visibleRows.map((rawRow, index) => {
+                      const row = computeRowDiff(rawRow);
+                      const hasCutoff = Boolean(row.cutoff_start_at && row.cutoff_end_at);
+                      const needsReview = Math.abs(Number(row.display_diff_pct || 0)) > 5;
+                      return (
+                        <tr
+                          key={row.id || `${row.plate}-${index}`}
+                          className={[
+                            row.calculation_status === "valid" ? "" : "is-warning",
+                            needsReview ? "is-diff-alert" : ""
+                          ].filter(Boolean).join(" ")}
+                        >
+                          <td><strong>{row.plate}</strong></td>
+                          <td>
+                            <span className={`cpk-cph-origin ${row.vocacional ? "cpk-cph-origin--cutoff" : ""}`}>
+                              {row.vocacional ? "Vocacional" : "Comercial"}
+                            </span>
+                          </td>
+                          <td>{formatNumber(row.odo_start, 0)}</td>
+                          <td>{formatNumber(row.odo_end, 0)}</td>
+                          <td>{formatNumber(row.kms_ecm_geotab, 0)}</td>
+                          <td>
+                            {hasCutoff ? (
+                              <EditableCell
+                                type="number"
+                                value={row.km_client ?? ""}
+                                onChange={(value) => updateLocalRow(index, { km_client: value })}
+                              />
+                            ) : formatNumber(row.kms_gps, 0)}
+                          </td>
+                          <td>{formatNumber(row.horo_start, 1)}</td>
+                          <td>{formatNumber(row.horo_end, 1)}</td>
+                          <td>{formatNumber(row.hours_ecm, 1)}</td>
+                          <td>{formatNumber(row.hours_gps, 1)}</td>
+                          <td>
                             <EditableCell
                               type="number"
-                              value={row.km_client ?? ""}
-                              disabled={locked}
-                              onChange={(value) => updateLocalRow(index, { km_client: value })}
+                              value={row.vocacional ? (row.hour_adjustment ?? 0) : (row.km_adjustment ?? 0)}
+                              onChange={(value) => {
+                                const adjustment = parseNumber(value) ?? 0;
+                                if (row.vocacional) {
+                                  const raw = parseNumber(row.hours_ecm);
+                                  updateLocalRow(index, {
+                                    hour_adjustment: value,
+                                    hours_ecm_approved: raw !== null ? raw + adjustment : row.hours_ecm_approved
+                                  });
+                                } else {
+                                  const raw = parseNumber(row.kms_ecm_geotab);
+                                  updateLocalRow(index, {
+                                    km_adjustment: value,
+                                    kms_ecm_approved: raw !== null ? raw + adjustment : row.kms_ecm_approved
+                                  });
+                                }
+                              }}
                             />
-                          ) : formatNumber(row.kms_gps, 0)}
-                        </td>
-                        <td>{formatNumber(row.kms_ecm_geotab, 0)}</td>
-                        <td>
-                          <EditableCell
-                            type="number"
-                            value={row.km_adjustment ?? 0}
-                            disabled={locked}
-                            onChange={(value) => {
-                              const adjustment = parseNumber(value) ?? 0;
-                              const raw = parseNumber(row.kms_ecm_geotab);
-                              updateLocalRow(index, {
-                                km_adjustment: value,
-                                kms_ecm_approved: raw !== null ? raw + adjustment : row.kms_ecm_approved
-                              });
-                            }}
-                          />
-                        </td>
-                        <td>{formatNumber(row.kms_ecm_approved, 0)}</td>
-                        <td>{formatNumber(row.km_difference, 0)}</td>
-                        <td>{formatNumber(row.km_difference_pct, 2)}</td>
-                        <td>{formatNumber(row.hours_ecm, 1)}</td>
-                        <td>
-                          <EditableCell
-                            type="number"
-                            value={row.hour_adjustment ?? 0}
-                            disabled={locked}
-                            onChange={(value) => {
-                              const adjustment = parseNumber(value) ?? 0;
-                              const raw = parseNumber(row.hours_ecm);
-                              updateLocalRow(index, {
-                                hour_adjustment: value,
-                                hours_ecm_approved: raw !== null ? raw + adjustment : row.hours_ecm_approved
-                              });
-                            }}
-                          />
-                        </td>
-                        <td>{formatNumber(row.hours_ecm_approved, 1)}</td>
-                        <td>{formatNumber(row.hours_gps, 1)}</td>
-                        <td>{formatNumber(row.fuel_gallons, 1)}</td>
-                        <td>
-                          <span className={`cpk-cph-status cpk-cph-status--${row.calculation_status}`}>
-                            {statusLabel(row.calculation_status)}
-                          </span>
-                          {Array.isArray(row.warnings) && row.warnings.length ? (
-                            <small>{row.warnings.join(" ")}</small>
-                          ) : null}
-                        </td>
-                        <td>
-                          <EditableCell
-                            value={row.correction_note || ""}
-                            disabled={locked}
-                            onChange={(value) => updateLocalRow(index, { correction_note: value })}
-                          />
-                        </td>
-                        <td>
-                          {isPersistedDraft && row.id ? (
-                            <Can permission={["cpk_cph.manage", "rendimientos.refresh"]}>
-                              <button type="button" className="button-secondary button-sm" onClick={() => handleSaveRow(row)}>
-                                Guardar
-                              </button>
-                            </Can>
-                          ) : null}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          </td>
+                          <td>{formatNumber(row.display_diff_pct, 2)}</td>
+                          <td>
+                            <span className={`cpk-cph-status cpk-cph-status--${row.calculation_status}`}>
+                              {statusLabel(row.calculation_status)}
+                            </span>
+                            {Array.isArray(row.warnings) && row.warnings.length ? (
+                              <small>{row.warnings.join(" ")}</small>
+                            ) : null}
+                          </td>
+                          <td>
+                            <EditableCell
+                              value={row.correction_note || ""}
+                              onChange={(value) => updateLocalRow(index, { correction_note: value })}
+                            />
+                          </td>
+                          <td>
+                            {row.id ? (
+                              <Can permission={["cpk_cph.manage", "rendimientos.refresh"]}>
+                                <button type="button" className="button-secondary button-sm" onClick={() => handleSaveRow(row)}>
+                                  Guardar
+                                </button>
+                              </Can>
+                            ) : null}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         </main>
       </section>
 
-      {confirmOverwrite ? (
+      <CpkCalcModal
+        open={calcModalOpen}
+        month={month}
+        clients={calcClients}
+        calculating={calculating}
+        onClose={() => setCalcModalOpen(false)}
+        onCalculate={handleCalculate}
+      />
+
+      {confirmCalc ? (
         <div className="modal-overlay" role="presentation" onClick={(event) => {
-          if (event.target === event.currentTarget) setConfirmOverwrite(null);
+          if (event.target === event.currentTarget) setConfirmCalc(false);
         }}>
-          <section className="card modal-card modal-card--popover" role="dialog" aria-modal="true" aria-label="Recalcular CPK/CPH">
+          <section className="card modal-card modal-card--popover" role="dialog" aria-modal="true" aria-label="Calcular CPK/CPH">
             <header className="modal-header">
               <div className="modal-heading">
-                <span className="eyebrow">Datos existentes</span>
-                <h3>Recalcular CPK/CPH</h3>
+                <span className="eyebrow">Sin datos</span>
+                <h3>Calcular CPK/CPH</h3>
               </div>
-              <button type="button" className="icon-button modal-close-button" onClick={() => setConfirmOverwrite(null)}>
+              <button type="button" className="icon-button modal-close-button" onClick={() => setConfirmCalc(false)}>
                 Cerrar
               </button>
             </header>
             <p className="support-copy">
-              Ya existe un CPK/CPH para {confirmOverwrite.customer_name} en {confirmOverwrite.period_month}. Si recalculas, la tabla activa de ese mes y cliente sera reemplazada por el nuevo calculo.
+              Aun no hay datos para el mes de {formatMonthLabel(month)}, ¿deseas calcular el reporte de CPK CPH?
             </p>
             <div className="actions-row modal-actions">
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmOverwrite(null);
-                  runCpkCalculation();
-                }}
-              >
-                Recalcular y reemplazar
+              <button type="button" onClick={handleConfirmCalc}>Si, calcular</button>
+              <button type="button" className="button-secondary" onClick={() => setConfirmCalc(false)}>Cancelar</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {confirmDelete && activeReport ? (
+        <div className="modal-overlay" role="presentation" onClick={(event) => {
+          if (event.target === event.currentTarget) setConfirmDelete(false);
+        }}>
+          <section className="card modal-card modal-card--popover" role="dialog" aria-modal="true" aria-label="Borrar CPK/CPH">
+            <header className="modal-header">
+              <div className="modal-heading">
+                <span className="eyebrow">Accion irreversible</span>
+                <h3>Borrar reporte</h3>
+              </div>
+              <button type="button" className="icon-button modal-close-button" onClick={() => setConfirmDelete(false)}>
+                Cerrar
               </button>
-              <button type="button" className="button-secondary" onClick={() => setConfirmOverwrite(null)}>
-                Cancelar
-              </button>
+            </header>
+            <p className="support-copy">
+              Se borrara el CPK/CPH de {activeReport.customer_name} para {formatMonthLabel(activeReport.period_month)}. Esta accion no se puede deshacer.
+            </p>
+            <div className="actions-row modal-actions">
+              <button type="button" onClick={handleDelete}>Borrar reporte</button>
+              <button type="button" className="button-secondary" onClick={() => setConfirmDelete(false)}>Cancelar</button>
             </div>
           </section>
         </div>

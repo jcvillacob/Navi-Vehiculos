@@ -284,6 +284,7 @@ def _build_record(row: dict[str, Any]) -> MonthlyPerformanceRecord:
         hours_ecm=row.get("hours_ecm"),
         hours_gps=row.get("hours_gps"),
         fuel_gallons=row.get("fuel_gallons"),
+        vocacional=bool(row.get("vocacional")),
         calculation_status=str(row["calculation_status"]),
         warnings=list(row.get("warnings") or []),
         calculated_at=row.get("calculated_at"),
@@ -1187,6 +1188,7 @@ def list_monthly_performance(
                         a.ano_modelo,
                         a.tipo_combustible,
                         a.nombre_vehiculo,
+                        a.vocacional,
                         COALESCE(a.category, c.category, 'Ninguna') AS category
                     FROM monthly_vehicle_performance mp
                     LEFT JOIN customers c

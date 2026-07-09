@@ -28,6 +28,7 @@ class CpkCphRowBase(BaseModel):
     database_name: str | None = None
     source_provider: str | None = None
     provider_vehicle_id: str | None = None
+    vocacional: bool = False
     km_client: float | None = None
     odo_start: float | None = None
     odo_end: float | None = None
@@ -44,6 +45,8 @@ class CpkCphRowBase(BaseModel):
     hours_ecm_approved: float | None = None
     km_difference: float | None = None
     km_difference_pct: float | None = None
+    hour_difference: float | None = None
+    hour_difference_pct: float | None = None
     calculation_status: str = "pending"
     warnings: list[str] = Field(default_factory=list)
     correction_note: str | None = None
@@ -62,7 +65,6 @@ class CpkCphPreviewResponse(BaseModel):
 class CpkCphReportRow(CpkCphRowBase):
     id: int | None = None
     report_id: int | None = None
-    version_number: int = 0
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -73,32 +75,13 @@ class CpkCphReportSummary(BaseModel):
     customer_name: str
     period_month: str
     status: str
-    current_version: int
     row_count: int = 0
-    approved_by: int | None = None
-    approved_by_username: str | None = None
-    approved_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
 
-class CpkCphReportVersion(BaseModel):
-    id: int
-    report_id: int
-    version_number: int
-    row_count: int = 0
-    created_by: int | None = None
-    created_by_username: str | None = None
-    approved_by: int | None = None
-    approved_by_username: str | None = None
-    approved_at: datetime | None = None
-    created_at: datetime
-
-
 class CpkCphReportDetail(CpkCphReportSummary):
-    visible_version: int = 0
     rows: list[CpkCphReportRow] = Field(default_factory=list)
-    versions: list[CpkCphReportVersion] = Field(default_factory=list)
 
 
 class CpkCphReportListResponse(BaseModel):

@@ -319,18 +319,14 @@ export async function patchCpkCphReportRow(reportId, rowId, payload) {
   return parseJsonOrThrow(response, "Error actualizando fila CPK/CPH");
 }
 
-export async function approveCpkCphReport(reportId) {
-  const response = await fetchWithAuth(buildUrl(`/api/v1/cpk-cph/reports/${reportId}/approve`), {
-    method: "POST",
+export async function deleteCpkCphReport(reportId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/cpk-cph/reports/${reportId}`), {
+    method: "DELETE",
   });
-  return parseJsonOrThrow(response, "Error aprobando CPK/CPH");
-}
-
-export async function reopenCpkCphReport(reportId) {
-  const response = await fetchWithAuth(buildUrl(`/api/v1/cpk-cph/reports/${reportId}/reopen`), {
-    method: "POST",
-  });
-  return parseJsonOrThrow(response, "Error reabriendo CPK/CPH");
+  if (!response.ok) {
+    await parseJsonOrThrow(response, "Error borrando CPK/CPH");
+  }
+  return true;
 }
 
 // ── Disponibilidad (dashboard) ────────────────────────────────────────────────

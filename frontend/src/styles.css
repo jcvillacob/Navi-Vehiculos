@@ -5729,6 +5729,18 @@ select.control-sm {
   cursor: pointer;
 }
 
+.cpk-cph-report-item,
+.cpk-cph-report-item:hover {
+  height: auto;
+  min-height: 0;
+  background-color: var(--bg-card, #fff);
+  color: var(--text);
+  box-shadow: none;
+  white-space: normal;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
 .cpk-cph-report-item:hover,
 .cpk-cph-report-item.is-active {
   border-color: var(--accent, #2563eb);

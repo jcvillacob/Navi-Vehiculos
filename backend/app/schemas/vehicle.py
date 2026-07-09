@@ -667,6 +667,7 @@ class MonthlyPerformanceRecord(BaseModel):
     hours_ecm: float | None = Field(default=None, description="Horas ECM")
     hours_gps: float | None = Field(default=None, description="Horas GPS")
     fuel_gallons: float | None = Field(default=None, description="Combustible consumido en galones")
+    vocacional: bool = Field(default=False, description="True si el vehiculo es de uso vocacional (se mide por horas)")
     calculation_status: str = Field(
         ...,
         description="Estado del calculo: calculated | partial | unbound | no_data | error",

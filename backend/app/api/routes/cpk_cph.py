@@ -14,11 +14,10 @@ from app.schemas.cpk_cph import (
 from app.services.cpk_cph import (
     CpkCphConflict,
     CpkCphNotFound,
-    approve_report,
+    delete_report,
     get_report,
     list_reports,
     preview_report,
-    reopen_report,
     save_report,
     update_row,
 )
@@ -90,23 +89,13 @@ def patch_cpk_cph_report_row(
         raise _handle_service_error(exc) from exc
 
 
-@router.post("/reports/{report_id}/approve", response_model=CpkCphReportDetail)
-def approve_cpk_cph_report(
+@router.delete("/reports/{report_id}")
+def delete_cpk_cph_report(
     report_id: int,
-    user: dict = Depends(require_permission("cpk_cph.manage", "rendimientos.refresh")),
-) -> CpkCphReportDetail:
+    _user: dict = Depends(require_permission("cpk_cph.manage", "rendimientos.refresh")),
+) -> dict:
     try:
-        return approve_report(report_id, user_id=user.get("id"))
+        delete_report(report_id)
     except Exception as exc:
         raise _handle_service_error(exc) from exc
-
-
-@router.post("/reports/{report_id}/reopen", response_model=CpkCphReportDetail)
-def reopen_cpk_cph_report(
-    report_id: int,
-    user: dict = Depends(require_permission("cpk_cph.manage", "rendimientos.refresh")),
-) -> CpkCphReportDetail:
-    try:
-        return reopen_report(report_id, user_id=user.get("id"))
-    except Exception as exc:
-        raise _handle_service_error(exc) from exc
+    return {"status": "deleted", "id": report_id}
