@@ -52,6 +52,23 @@ Desglose del job 120 (logs): fase rendimientos 23.5 min, fase disponibilidad **1
 0 error, 0 valores fuera de rango. Pendiente validar con negocio si 267 placas es la
 cobertura CloudFleet esperada (67 % not_in_cloudfleet).
 
+## 4b. Resultado Fase 1 (2026-07-11): instrumentación + Geotab MultiCall
+
+Instrumentación por provider/database + optimización Geotab (inventario de devices 1× por
+database vía `get_cached_devices` + `get_month_data_bundle` con `api.multi_call` — 5 Gets
+por vehículo en 1 round-trip, con fallback a llamadas individuales).
+
+Medición real Harina del Valle (43 placas, junio, mismo scope antes/después):
+
+| Componente | Antes | Después |
+|---|---|---|
+| Total | 134.3 s (3.12 s/placa) | **46.2 s (1.07 s/placa)** |
+| resolve_devices | 18.9 s | 0.6 s |
+| fetch_datos | 114.9 s | 45.1 s |
+| Summary (39 calc/3 partial/1 unbound) | — | idéntico |
+
+Proyección flota Geotab completa (287 placas): ~15 min → ~5 min.
+
 ## 5. Orden del plan según estos datos
 
 1. **Fase 0.5** — `availability_only` en el job: botón Recalcular 25 min → ~2 min. (en curso)

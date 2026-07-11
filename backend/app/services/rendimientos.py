@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import logging
 import re
+import time
 from typing import Any, Callable
 
 import psycopg
@@ -36,6 +38,9 @@ from app.services.performance_providers import (
 )
 from app.services.performance_types import BindingSnapshot, PerformanceTarget
 from app.services.provider_registry import infer_provider_key, supports_monthly_performance
+
+
+_logger = logging.getLogger(__name__)
 
 
 _PERF_TABLES_DDL_DONE = False
@@ -1085,6 +1090,7 @@ def calculate_monthly_performance(
 ) -> MonthlyPerformanceResponse:
     month, year, month_number = _normalize_month(payload.month)
     previous_month = _previous_month(month)
+    phase_start = time.perf_counter()
 
     def _emit_progress(processed: int, total: int) -> None:
         if progress_callback is None:
@@ -1184,17 +1190,30 @@ def calculate_monthly_performance(
                 in_flight_processed["value"] += 1
                 _emit_progress(processed_targets + in_flight_processed["value"], total_targets)
 
+            db_call_start = time.perf_counter()
             try:
-                provider_result = provider.calculate_database_rows(
-                    month=month,
-                    year=year,
-                    month_number=month_number,
-                    previous_month=previous_month,
-                    targets=database_targets,
-                    previous_records=previous_records,
-                    bindings=bindings,
-                    on_target_done=_bump_target_done,
-                )
+                try:
+                    provider_result = provider.calculate_database_rows(
+                        month=month,
+                        year=year,
+                        month_number=month_number,
+                        previous_month=previous_month,
+                        targets=database_targets,
+                        previous_records=previous_records,
+                        bindings=bindings,
+                        on_target_done=_bump_target_done,
+                    )
+                finally:
+                    db_call_elapsed = time.perf_counter() - db_call_start
+                    _logger.info(
+                        "Rendimientos %s: %s/%s -> %d placas en %.1fs (%.2fs/placa)",
+                        month,
+                        provider_key,
+                        sample_target.database_name or _database_id,
+                        len(database_targets),
+                        db_call_elapsed,
+                        db_call_elapsed / len(database_targets) if database_targets else 0.0,
+                    )
             except Exception as exc:
                 for target in database_targets:
                     saved = _upsert_monthly_record(
@@ -1248,6 +1267,13 @@ def calculate_monthly_performance(
         conn.commit()
 
     rows.sort(key=lambda row: ((row.client_name or "").lower(), (row.database_name or "").lower(), row.plate))
+    _logger.info(
+        "Rendimientos %s: fase completa en %.1fs (%d targets, %d grupos provider/database)",
+        month,
+        time.perf_counter() - phase_start,
+        total_targets,
+        len(grouped_targets),
+    )
     return MonthlyPerformanceResponse(month=month, summary=_build_summary(rows), rows=rows)
 
 

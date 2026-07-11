@@ -101,11 +101,11 @@ class TestGeotabManualBinding:
         bindings = {("geotab", 1, "TEST001"): BindingSnapshot("M1", "resolved", is_manual=True)}
         previous_records = {}
 
-        mock_find = MagicMock(return_value={"id": "AUTO_DEVICE_ID"})
+        mock_devices = MagicMock(return_value=[])
         mock_api = MagicMock()
         fake_record = _make_monthly_record(target, "M1")
 
-        with patch("app.services.performance_providers.find_device_by_plate", mock_find), patch(
+        with patch("app.services.performance_providers.get_cached_devices", mock_devices), patch(
             "app.services.performance_providers.get_authenticated_client",
             return_value=mock_api,
         ), patch(
@@ -122,7 +122,8 @@ class TestGeotabManualBinding:
                 bindings=bindings,
             )
 
-        assert mock_find.call_count == 0, "find_device_by_plate should not be called for manual binding"
+        # El inventario se descarga una vez por database; el matching local se salta para binding manual.
+        assert mock_devices.call_count == 1
         mock_calculate.assert_called_once()
         assert mock_calculate.call_args.kwargs["device_id"] == "M1"
         assert len(result.records) == 1
@@ -134,11 +135,11 @@ class TestGeotabManualBinding:
         bindings = {("geotab", 1, "TEST001"): BindingSnapshot("STALE_ID", "resolved", is_manual=False)}
         previous_records = {}
 
-        mock_find = MagicMock(return_value={"id": "AUTO_DEVICE_ID"})
+        mock_devices = MagicMock(return_value=[{"id": "AUTO_DEVICE_ID", "licensePlate": "TEST001"}])
         mock_api = MagicMock()
         fake_record = _make_monthly_record(target, "AUTO_DEVICE_ID")
 
-        with patch("app.services.performance_providers.find_device_by_plate", mock_find), patch(
+        with patch("app.services.performance_providers.get_cached_devices", mock_devices), patch(
             "app.services.performance_providers.get_authenticated_client",
             return_value=mock_api,
         ), patch(
@@ -155,7 +156,7 @@ class TestGeotabManualBinding:
                 bindings=bindings,
             )
 
-        mock_find.assert_called_once_with(mock_api, "TEST001", plate_prefix=None)
+        mock_devices.assert_called_once_with("user", "pass", "test_db")
         mock_calculate.assert_called_once()
         assert mock_calculate.call_args.kwargs["device_id"] == "AUTO_DEVICE_ID"
         assert result.records[0].provider_vehicle_id == "AUTO_DEVICE_ID"

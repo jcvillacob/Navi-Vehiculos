@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
 import re
 import threading
 import time as _time
@@ -9,6 +10,8 @@ from typing import Any
 import mygeotab
 
 from app.core.config import GeotabConfig
+
+_logger = logging.getLogger(__name__)
 
 _PLATE_PATTERN = re.compile(r"^[A-Z]{3}[0-9]{3}$")
 
@@ -638,6 +641,38 @@ def _api_call_with_retry(api: mygeotab.API, method: str, **kwargs) -> list[dict]
     raise last_exc  # type: ignore[misc]
 
 
+def multi_call_with_retry(api: mygeotab.API, calls: list[tuple[str, dict[str, Any]]]) -> list[list[dict]]:
+    """
+    Calls api.multi_call(calls) with retries on transient network errors
+    and a single transparent re-authentication if the cached session expired.
+    Normalizes each call result with ``or []``.
+    Other logic errors propagate immediately.
+    """
+    last_exc: Exception | None = None
+    auth_retry_used = False
+    for attempt in range(NET_MAX_RETRIES):
+        try:
+            results = api.multi_call(calls)
+            return [result or [] for result in results]
+        except Exception as exc:
+            if _is_auth_error(exc) and not auth_retry_used:
+                auth_retry_used = True
+                try:
+                    api.authenticate()
+                except Exception:
+                    key = _credentials_key(api)
+                    if key is not None:
+                        _invalidate_session(key[0], key[1])
+                    raise
+                continue
+            if _is_network_error(exc) and attempt < NET_MAX_RETRIES - 1:
+                last_exc = exc
+                _time.sleep(NET_RETRY_WAITS[attempt])
+                continue
+            raise
+    raise last_exc  # type: ignore[misc]
+
+
 # ==============================================================================
 # MONTH RANGE (Colombia UTC-5)
 # ==============================================================================
@@ -704,3 +739,75 @@ def get_trips_for_month(
             "toDate": to_date,
         },
     )
+
+
+def get_month_data_bundle(
+    api: mygeotab.API,
+    device_id: str,
+    from_date: str,
+    to_date: str,
+    *,
+    status_diagnostics: dict[str, str],
+    include_trips: bool = True,
+) -> dict[str, list[dict]]:
+    """
+    Fetches a bundle of StatusData diagnostics plus optional Trips for a device
+    in a single multi_call batch. StatusData results are sorted by dateTime;
+    trips are returned as-is.
+
+    Falls back to individual calls if the multi_call fails.
+    """
+    keys: list[str] = []
+    calls: list[tuple[str, dict[str, Any]]] = []
+    for key, diagnostic_id in status_diagnostics.items():
+        keys.append(key)
+        calls.append(
+            (
+                "Get",
+                {
+                    "typeName": "StatusData",
+                    "search": {
+                        "deviceSearch": {"id": device_id},
+                        "diagnosticSearch": {"id": diagnostic_id},
+                        "fromDate": from_date,
+                        "toDate": to_date,
+                    },
+                },
+            )
+        )
+
+    if include_trips:
+        keys.append("trips")
+        calls.append(
+            (
+                "Get",
+                {
+                    "typeName": "Trip",
+                    "search": {
+                        "deviceSearch": {"id": device_id},
+                        "fromDate": from_date,
+                        "toDate": to_date,
+                    },
+                },
+            )
+        )
+
+    try:
+        results = multi_call_with_retry(api, calls)
+    except Exception as exc:
+        _logger.warning("Geotab multi_call fallo (%s); usando llamadas individuales.", exc)
+        return {
+            **{
+                key: get_status_data_for_month(api, device_id, diagnostic_id, from_date, to_date)
+                for key, diagnostic_id in status_diagnostics.items()
+            },
+            "trips": get_trips_for_month(api, device_id, from_date, to_date) if include_trips else [],
+        }
+
+    bundle: dict[str, list[dict]] = {}
+    for key, result in zip(keys, results):
+        if key == "trips":
+            bundle[key] = result
+        else:
+            bundle[key] = sorted(result, key=lambda r: str(r.get("dateTime") or ""))
+    return bundle

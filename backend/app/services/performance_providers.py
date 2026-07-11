@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import time as dt_time, timedelta
@@ -37,11 +39,11 @@ from app.clients.frotcom_client import (
     list_vehicles as list_frotcom_vehicles,
 )
 from app.clients.geotab_client import (
-    find_device_by_plate,
+    _find_device_in_collection,
     get_authenticated_client,
+    get_cached_devices,
     get_geotab_month_range,
-    get_status_data_for_month,
-    get_trips_for_month,
+    get_month_data_bundle,
 )
 from app.clients.logitracs_triton_client import (
     LogitracsTritonAuthError,
@@ -59,6 +61,9 @@ from app.services.performance_types import (
     PerformanceTarget,
     ProviderCalculationResult,
 )
+
+
+_logger = logging.getLogger(__name__)
 
 
 class MonthlyPerformanceProvider(Protocol):
@@ -580,10 +585,20 @@ def _calculate_geotab_vehicle_record(
 ) -> MonthlyPerformanceRecord:
     warnings: list[str] = []
 
-    odo_readings = get_status_data_for_month(api, device_id, _DIAG_ODOMETER, from_date, to_date)
-    hours_readings = get_status_data_for_month(api, device_id, _DIAG_ENGINE_HOURS, from_date, to_date)
-    fuel_readings = get_status_data_for_month(api, device_id, _DIAG_TOTAL_FUEL, from_date, to_date)
-    trips = get_trips_for_month(api, device_id, from_date, to_date)
+    bundle = get_month_data_bundle(
+        api, device_id, from_date, to_date,
+        status_diagnostics={
+            "odometer": _DIAG_ODOMETER,
+            "engine_hours": _DIAG_ENGINE_HOURS,
+            "total_fuel": _DIAG_TOTAL_FUEL,
+            # Incluimos device_fuel siempre en el mismo batch; antes era un roundtrip condicional de fallback.
+            "device_fuel": _DIAG_DEVICE_FUEL,
+        },
+    )
+    odo_readings = bundle["odometer"]
+    hours_readings = bundle["engine_hours"]
+    fuel_readings = bundle["total_fuel"]
+    trips = bundle["trips"]
 
     if not odo_readings and not hours_readings:
         return _build_status_record(
@@ -671,7 +686,8 @@ def _calculate_geotab_vehicle_record(
     if fuel_first is not None and fuel_last is not None and (fuel_last - fuel_first) > 0:
         fuel_gallons = max(0.0, fuel_last - fuel_first) / _LITERS_PER_GALLON
     else:
-        device_fuel_readings = get_status_data_for_month(api, device_id, _DIAG_DEVICE_FUEL, from_date, to_date)
+        # device_fuel ya viene en el multicall; antes era un roundtrip condicional de fallback.
+        device_fuel_readings = bundle["device_fuel"]
         dv_first = _geotab_first_value(device_fuel_readings)
         dv_last = _geotab_last_value(device_fuel_readings)
         if dv_first is not None and dv_last is not None and (dv_last - dv_first) > 0:
@@ -751,21 +767,39 @@ class GeotabMonthlyPerformanceProvider:
                 f"La database {sample.database_name or sample.customer_database_id} no tiene credenciales Geotab completas."
             )
 
+        auth_start = time.perf_counter()
         api = get_authenticated_client(sample.username, sample.password, sample.database_name or "")
+        auth_s = time.perf_counter() - auth_start
         from_date, to_date = get_geotab_month_range(year, month_number)
 
         rows: list[MonthlyPerformanceRecord] = []
         binding_updates: list[BindingUpsert] = []
+        resolve_s = 0.0
+        fetch_s = 0.0
+        resolved_via_binding = 0
+        api_resolved_count = 0
+
+        # Descargamos el inventario UNA vez por database; el matching se hace localmente.
+        resolve_start = time.perf_counter()
+        devices = get_cached_devices(sample.username, sample.password, sample.database_name or "")
+        resolve_s += time.perf_counter() - resolve_start
 
         for target in targets:
             try:
                 bound_id, is_manual = _select_binding(bindings=bindings, target=target)
                 if is_manual:
                     device_id = bound_id
+                    resolved_via_binding += 1
                 else:
-                    device = find_device_by_plate(api, target.plate, plate_prefix=target.provider_config.get("plate_prefix"))
+                    device = _find_device_in_collection(
+                        devices,
+                        plate=target.plate,
+                        plate_prefix=target.provider_config.get("plate_prefix"),
+                    )
                     resolved_id = str(device.get("id") or "").strip() if device else None
                     device_id = resolved_id or bound_id
+                    if device is not None:
+                        api_resolved_count += 1
 
                 if not device_id:
                     binding_updates.append(
@@ -795,6 +829,7 @@ class GeotabMonthlyPerformanceProvider:
                     )
                 )
 
+                fetch_start = time.perf_counter()
                 try:
                     record = _calculate_geotab_vehicle_record(
                         target=target,
@@ -816,6 +851,8 @@ class GeotabMonthlyPerformanceProvider:
                             warnings=[f"Error calculando la placa en Geotab: {exc}"],
                         )
                     )
+                finally:
+                    fetch_s += time.perf_counter() - fetch_start
             finally:
                 if on_target_done is not None:
                     try:
@@ -823,6 +860,17 @@ class GeotabMonthlyPerformanceProvider:
                     except Exception:
                         pass
 
+        _logger.info(
+            "Geotab %s [%s]: %d placas | auth=%.1fs resolve_devices=%.1fs (%d por API, %d por binding) fetch_datos=%.1fs",
+            month,
+            sample.database_name or "",
+            len(targets),
+            auth_s,
+            resolve_s,
+            api_resolved_count,
+            resolved_via_binding,
+            fetch_s,
+        )
         return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 
 
