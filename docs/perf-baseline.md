@@ -69,6 +69,22 @@ Medición real Harina del Valle (43 placas, junio, mismo scope antes/después):
 
 Proyección flota Geotab completa (287 placas): ~15 min → ~5 min.
 
+## 4c. Resultado Fase 2 (2026-07-11): pool de conexiones psycopg_pool
+
+Nuevo `app/core/db.py` (`db_conn()` context manager, pool lazy singleton, cierre en
+lifespan). Migrados los caminos calientes: rendimientos_jobs completo (incluye
+`_update_progress`, que abría una conexión por placa), availability_store/dashboard,
+`list_monthly_performance`, `list_customers`, `list_vehicle_assignments`.
+
+| Servicio | Antes | Después |
+|---|---|---|
+| list_customers | 55 ms | 11 ms |
+| disponibilidad overview | 44 ms | 12 ms |
+| list_vehicle_assignments | 118 ms | 76 ms |
+
+Además, el cron diario (`rendimientos_cron`) ahora corre con `compute_availability=True`
+— la disponibilidad se refresca sola cada día a las 05:00 (antes solo por botón manual).
+
 ## 5. Orden del plan según estos datos
 
 1. **Fase 0.5** — `availability_only` en el job: botón Recalcular 25 min → ~2 min. (en curso)

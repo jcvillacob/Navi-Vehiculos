@@ -28,6 +28,7 @@ from app.schemas.vehicle import (
     MonthlyPerformanceSummary,
 )
 from app.core.config import load_geotab_config
+from app.core.db import db_conn
 from app.services.motor_catalog import _database_dsn, _ensure_motor_tables
 from app.services.performance_providers import (
     _DIAG_ENGINE_HOURS,
@@ -1320,7 +1321,7 @@ def list_monthly_performance(
         where_clauses.append("COALESCE(mp.engine_name, '') = %s")
         params.append(normalized_motor_group)
 
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         _ensure_performance_tables(conn)
         with conn.cursor() as cur:
             if not is_range:

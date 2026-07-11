@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.middleware.audit import AuditMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
+from app.core.db import close_pool
 from app.services.auth_service import cleanup_expired_refresh_tokens
 from app.services import scheduler
 
@@ -25,6 +26,7 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         scheduler.shutdown()
+        close_pool()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

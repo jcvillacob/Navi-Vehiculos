@@ -66,8 +66,9 @@ def _run() -> None:
     )
 
     for month in months_to_calculate:
-        logger.info("Calculating month %s ...", month)
-        payload = MonthlyPerformanceCalculateRequest(month=month, force_recalculate=True)
+        logger.info("Calculating month %s (con disponibilidad) ...", month)
+        # La fase de disponibilidad agrega ~2 min al job diario y mantiene fresco el dashboard de Disponibilidad.
+        payload = MonthlyPerformanceCalculateRequest(month=month, force_recalculate=True, compute_availability=True)
         try:
             job = create_job(payload, triggered_by="cron", user_id=None)
             logger.info("Job %s created for month %s — running ...", job.id, month)

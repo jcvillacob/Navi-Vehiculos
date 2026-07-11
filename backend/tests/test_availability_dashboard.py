@@ -287,8 +287,8 @@ def test_fetch_month_rows_query_excludes_system_customer(monkeypatch):
         lambda: None,
     )
     monkeypatch.setattr(
-        "app.services.availability_dashboard.psycopg.connect",
-        lambda *args, **kwargs: FakeConn(),
+        "app.services.availability_dashboard.db_conn",
+        lambda row_factory=None: FakeConn(),
     )
 
     dashboard._fetch_month_rows("2026-06")

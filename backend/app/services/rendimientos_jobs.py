@@ -29,7 +29,7 @@ from app.services.availability_store import (
     run_availability_phase,
 )
 from app.clients.cloudfleet_client import CloudFleetAuthError, CloudFleetUnavailableError
-from app.services.motor_catalog import _database_dsn
+from app.core.db import db_conn
 from app.services.rendimientos import calculate_monthly_performance
 
 _logger = logging.getLogger(__name__)
@@ -49,8 +49,7 @@ def _ensure_jobs_table(conn: psycopg.Connection | None = None) -> None:
     global _TABLE_BOOTSTRAPPED
     if _TABLE_BOOTSTRAPPED:
         return
-    own_conn = psycopg.connect(_database_dsn())
-    try:
+    with db_conn() as own_conn:
         with own_conn.cursor() as cur:
             cur.execute(
                 """
@@ -133,8 +132,6 @@ def _ensure_jobs_table(conn: psycopg.Connection | None = None) -> None:
                 """
             )
         own_conn.commit()
-    finally:
-        own_conn.close()
     _TABLE_BOOTSTRAPPED = True
 
 
@@ -248,7 +245,7 @@ def create_job(
     scope_key = _compute_scope_key(payload)
     customer_ids = sorted({int(c) for c in (payload.customer_ids or [])})
 
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         _ensure_jobs_table(conn)
         existing = _fetch_active_job_for_scope(conn, month=payload.month, scope_key=scope_key)
         if existing is not None:
@@ -305,7 +302,7 @@ def create_job(
 
 def _update_progress(job_id: int, processed: int, total: int) -> None:
     try:
-        with psycopg.connect(_database_dsn()) as conn:
+        with db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -323,7 +320,7 @@ def _update_progress(job_id: int, processed: int, total: int) -> None:
 
 
 def _mark_running(job_id: int) -> None:
-    with psycopg.connect(_database_dsn()) as conn:
+    with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -339,7 +336,7 @@ def _mark_running(job_id: int) -> None:
 
 
 def _mark_done(job_id: int, summary: MonthlyPerformanceSummary) -> None:
-    with psycopg.connect(_database_dsn()) as conn:
+    with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -357,7 +354,7 @@ def _mark_done(job_id: int, summary: MonthlyPerformanceSummary) -> None:
 
 
 def _mark_error(job_id: int, message: str) -> None:
-    with psycopg.connect(_database_dsn()) as conn:
+    with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -424,7 +421,7 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
     Diseñado para correr en thread aparte (FastAPI BackgroundTasks) o sincrono
     desde el cron CLI.
     """
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         job = _fetch_job(conn, job_id)
     if job is None:
         raise JobNotFound(f"Job {job_id} no existe")
@@ -438,7 +435,7 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
     adhoc_filters: dict[str, list[str]] = {}
     adhoc_only: bool = False
     availability_only: bool = False
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as _rc:
+    with db_conn(row_factory=dict_row) as _rc:
         with _rc.cursor() as _rcur:
             _rcur.execute(
                 "SELECT include_adhoc, adhoc_plates, adhoc_filters, adhoc_only, availability_only FROM performance_calculation_jobs WHERE id = %s;",
@@ -480,7 +477,7 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
         result_summary = MonthlyPerformanceSummary()
         availability_summary = _run_availability_for_job(job_id, payload, rendimientos_total=0)
         if availability_summary is None:
-            with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+            with db_conn(row_factory=dict_row) as conn:
                 return _fetch_job(conn, job_id) or job
         summary_with_availability = result_summary.model_copy(
             update={"availability": availability_summary}
@@ -494,7 +491,7 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
         except Exception as exc:
             _logger.exception("Job %s fallo en fase de rendimientos", job_id)
             _mark_error(job_id, f"{type(exc).__name__}: {exc}")
-            with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+            with db_conn(row_factory=dict_row) as conn:
                 return _fetch_job(conn, job_id) or job
 
         summary_with_availability = result.summary
@@ -505,7 +502,7 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
                 job_id, payload, rendimientos_total=rendimientos_total
             )
             if availability_summary is None:
-                with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+                with db_conn(row_factory=dict_row) as conn:
                     return _fetch_job(conn, job_id) or job
             summary_with_availability = result.summary.model_copy(
                 update={"availability": availability_summary}
@@ -530,7 +527,7 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
         avail_log,
     )
 
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         final = _fetch_job(conn, job_id)
     return final or job
 
@@ -540,7 +537,7 @@ def _bump_total(job_id: int, *, extra_total: int) -> None:
     if extra_total <= 0:
         return
     try:
-        with psycopg.connect(_database_dsn()) as conn:
+        with db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -570,7 +567,7 @@ def _count_availability_targets(payload: MonthlyPerformanceCalculateRequest) -> 
         where.append("a.customer_id = ANY(%s)")
         params.append(customer_ids)
     try:
-        with psycopg.connect(_database_dsn()) as conn:
+        with db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
@@ -590,7 +587,7 @@ def _count_availability_targets(payload: MonthlyPerformanceCalculateRequest) -> 
 
 def cancel_job(job_id: int) -> PerformanceCalculationJob:
     """Marca un job activo como cancelado (status='error')."""
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         _ensure_jobs_table(conn)
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
@@ -615,7 +612,7 @@ def cancel_job(job_id: int) -> PerformanceCalculationJob:
 
 
 def get_job(job_id: int) -> PerformanceCalculationJob:
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         _ensure_jobs_table(conn)
         job = _fetch_job(conn, job_id)
     if job is None:
@@ -639,7 +636,7 @@ def list_active_jobs(*, user_id: int | None = None) -> list[PerformanceCalculati
         WHERE {" AND ".join(where)}
         ORDER BY created_at DESC;
     """
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         _ensure_jobs_table(conn)
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
@@ -653,7 +650,7 @@ def list_recent_jobs(*, limit: int = 50) -> list[PerformanceCalculationJob]:
     Sirve como historial / "logs" del calculo (UI y cron).
     """
     limit = max(1, min(int(limit), 200))
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         _ensure_jobs_table(conn)
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(

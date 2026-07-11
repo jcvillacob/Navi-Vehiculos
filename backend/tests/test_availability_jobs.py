@@ -48,7 +48,7 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    """Conexion falsa para los `with psycopg.connect(...)` de run_job."""
+    """Conexion falsa para los `with db_conn(...)` de run_job."""
 
     def __init__(self, row: dict[str, Any] | None = None):
         self._row = row
@@ -154,7 +154,7 @@ def test_run_job_availability_only_skips_performance(monkeypatch):
         "adhoc_only": False,
         "availability_only": True,
     }
-    monkeypatch.setattr(jobs.psycopg, "connect", lambda *args, **kwargs: _FakeConn(adhoc_row))
+    monkeypatch.setattr(jobs, "db_conn", lambda row_factory=None: _FakeConn(adhoc_row))
 
     jobs.run_job(1)
 
@@ -199,7 +199,7 @@ def test_run_job_normal_calls_performance(monkeypatch):
         "adhoc_only": False,
         "availability_only": False,
     }
-    monkeypatch.setattr(jobs.psycopg, "connect", lambda *args, **kwargs: _FakeConn(adhoc_row))
+    monkeypatch.setattr(jobs, "db_conn", lambda row_factory=None: _FakeConn(adhoc_row))
 
     jobs.run_job(2)
 

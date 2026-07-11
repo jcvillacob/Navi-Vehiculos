@@ -28,7 +28,7 @@ from app.services.availability_store import (
     _ensure_availability_table,
     list_monthly_availability,
 )
-from app.services.motor_catalog import _database_dsn
+from app.core.db import db_conn
 
 _logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ def _fetch_month_rows(month: str, *, customer_id: int | None = None) -> list[dic
     if customer_id is not None:
         where.append("a.customer_id = %s")
         params.append(customer_id)
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 f"""
@@ -260,7 +260,7 @@ def get_availability_trend(
 
 
 def _plates_for_customer(customer_id: int) -> set[str]:
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 "SELECT plate FROM vehicle_motor_assignments WHERE customer_id = %s;",

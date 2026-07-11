@@ -13,6 +13,7 @@ from psycopg.types.json import Jsonb
 
 from app.clients.geotab_client import build_rule_inspection
 from app.core.config import GeotabConfig
+from app.core.db import db_conn
 from app.schemas.vehicle import (
     AssignedDatabaseSummary,
     CUSTOMER_CATEGORIES,
@@ -1669,10 +1670,11 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                 normalized_search,
                 normalized_search,
                 normalized_search,
+                normalized_search,
             ]
         )
 
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         with conn.cursor() as cur:
             cur.execute(
@@ -2240,7 +2242,7 @@ def get_vehicle_geotab_customer_status(plate: str | None) -> dict[str, Any]:
 
 
 def list_customers() -> list[CustomerRecord]:
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         with conn.cursor() as cur:
             cur.execute(

@@ -22,6 +22,7 @@ from app.clients.cloudfleet_client import (
     list_work_orders,
 )
 from app.core.config import load_cloudfleet_config
+from app.core.db import db_conn
 from app.services.availability import (
     AvailabilityResult,
     AvailabilityTarget,
@@ -29,7 +30,6 @@ from app.services.availability import (
     calculate_availability_for_targets,
     dedupe_work_orders,
 )
-from app.services.motor_catalog import _database_dsn
 
 _logger = logging.getLogger(__name__)
 
@@ -55,8 +55,7 @@ def _ensure_availability_table() -> None:
     global _TABLE_BOOTSTRAPPED
     if _TABLE_BOOTSTRAPPED:
         return
-    own_conn = psycopg.connect(_database_dsn())
-    try:
+    with db_conn() as own_conn:
         with own_conn.cursor() as cur:
             cur.execute(
                 """
@@ -90,8 +89,6 @@ def _ensure_availability_table() -> None:
                 """
             )
         own_conn.commit()
-    finally:
-        own_conn.close()
     _TABLE_BOOTSTRAPPED = True
 
 
@@ -149,7 +146,7 @@ def list_monthly_availability(
     if month_to < month_from:
         month_from, month_to = month_to, month_from
     _ensure_availability_table()
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
@@ -196,7 +193,7 @@ def _load_plates_for_customers(
         where.append("a.customer_id = ANY(%s)")
         params.append(sorted({int(c) for c in customer_ids}))
 
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 f"""
@@ -317,7 +314,7 @@ def run_availability_phase(
     )
 
     processed = 0
-    with psycopg.connect(_database_dsn()) as conn:
+    with db_conn() as conn:
         for result in results:
             _upsert_result(conn, period_month=month, result=result)
             processed += 1
