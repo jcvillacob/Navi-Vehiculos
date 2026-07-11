@@ -343,10 +343,14 @@ export async function fetchAvailabilityRanking({
   limit = 20,
   order = "worst",
   include_no_orders = false,
+  plate_search = null,
 }) {
   const query = new URLSearchParams({ month, limit: String(limit), order });
   if (customer_id) query.set("customer_id", String(customer_id));
   if (include_no_orders) query.set("include_no_orders", "true");
+  if (plate_search && plate_search.trim()) {
+    query.set("plate_search", plate_search.trim().toUpperCase());
+  }
   const response = await fetchWithAuth(buildUrl(`/api/v1/disponibilidad/ranking?${query.toString()}`));
   const data = await parseJsonOrThrow(response, "Error cargando el ranking de vehiculos");
   return Array.isArray(data?.items) ? data.items : [];

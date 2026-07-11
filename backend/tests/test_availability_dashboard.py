@@ -193,6 +193,35 @@ def test_ranking_include_no_orders(monkeypatch):
             assert r["orders_considered"] == 0
 
 
+def test_ranking_plate_search_filters_by_substring(monkeypatch):
+    """plate_search filtra placas por substring de forma case-insensitive."""
+    rows = [
+        _row("ABC123", 1, "Flota A", "calculated", 95.0, 720.0, 36.0),
+        _row("ABC456", 1, "Flota A", "calculated", 98.0, 720.0, 14.4),
+        _row("DEF123", 1, "Flota A", "calculated", 92.0, 720.0, 57.6),
+        _row("XYZ789", 1, "Flota A", "calculated", 99.0, 720.0, 7.2),
+    ]
+    monkeypatch.setattr(
+        "app.services.availability_dashboard._fetch_month_rows",
+        lambda month, customer_id=None: rows,
+    )
+
+    search = dashboard.get_vehicle_ranking("2026-06", plate_search="abc", limit=10)
+    assert [r["plate"] for r in search] == ["ABC123", "ABC456"]
+
+    search_upper = dashboard.get_vehicle_ranking("2026-06", plate_search="123", limit=10)
+    assert [r["plate"] for r in search_upper] == ["DEF123", "ABC123"]
+
+    empty_search = dashboard.get_vehicle_ranking("2026-06", plate_search="", limit=10)
+    assert [r["plate"] for r in empty_search] == ["DEF123", "ABC123", "ABC456", "XYZ789"]
+
+    none_search = dashboard.get_vehicle_ranking("2026-06", plate_search=None, limit=10)
+    assert [r["plate"] for r in none_search] == ["DEF123", "ABC123", "ABC456", "XYZ789"]
+
+    no_match = dashboard.get_vehicle_ranking("2026-06", plate_search="ZZZ", limit=10)
+    assert no_match == []
+
+
 # ── _add_months ──────────────────────────────────────────────────────────────
 
 

@@ -35,6 +35,7 @@ def get_ranking(
     limit: int = Query(default=20, ge=1, le=200),
     order: str = Query(default="worst", pattern=r"^(worst|best)$"),
     include_no_orders: bool = Query(default=False, description="Incluir placas sin ordenes (100%)"),
+    plate_search: str | None = Query(default=None, max_length=32, description="Filtra el ranking por placa (substring)"),
     _user: dict = Depends(require_permission("rendimientos.view")),
 ) -> AvailabilityRankingResponse:
     """Ranking de vehiculos por disponibilidad (peor o mejor estado)."""
@@ -44,6 +45,7 @@ def get_ranking(
         limit=limit,
         order=order,
         include_no_orders=include_no_orders,
+        plate_search=plate_search,
     )
     return AvailabilityRankingResponse(
         month=month,

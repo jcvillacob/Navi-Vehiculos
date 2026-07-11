@@ -91,6 +91,8 @@ export default function DisponibilidadPage() {
     setMonth,
     selectedCustomerId,
     setSelectedCustomerId,
+    plateSearch,
+    setPlateSearch,
     rankingOrder,
     setRankingOrder,
     includeNoOrders,
@@ -183,22 +185,13 @@ export default function DisponibilidadPage() {
             <span>Mes</span>
             <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
           </label>
-          <label className="disp-field">
-            <span>Flota</span>
-            <select
-              value={selectedCustomerId ?? ""}
-              onChange={(e) => setSelectedCustomerId(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">Todas las flotas</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
           <Can permission="rendimientos.refresh">
-            <button type="button" onClick={recalculate} disabled={isRecalculating}>
+            <button
+              type="button"
+              onClick={recalculate}
+              disabled={isRecalculating}
+              title="Reprocesa la disponibilidad de todo el mes desde CloudFleet"
+            >
               {isRecalculating
                 ? `Recalculando${jobProgress !== null ? ` ${jobProgress}%` : "..."}`
                 : "Recalcular"}
@@ -207,12 +200,49 @@ export default function DisponibilidadPage() {
         </div>
       </header>
 
+      <div className="disp-filters">
+        <label className="disp-field">
+          <span>Flota</span>
+          <select
+            value={selectedCustomerId ?? ""}
+            onChange={(e) => setSelectedCustomerId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">Todas las flotas</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="disp-field">
+          <span>Placa</span>
+          <input
+            type="text"
+            placeholder="Buscar placa…"
+            value={plateSearch}
+            onChange={(e) => setPlateSearch(e.target.value)}
+          />
+        </label>
+        {selectedCustomerId || plateSearch ? (
+          <button
+            type="button"
+            className="button-secondary button-sm"
+            onClick={() => {
+              setSelectedCustomerId(null);
+              setPlateSearch("");
+            }}
+          >
+            Limpiar filtros
+          </button>
+        ) : null}
+      </div>
+
       {error ? <div className="notice-banner notice-error">{error}</div> : null}
       {recalcError ? <div className="notice-banner notice-error">{recalcError}</div> : null}
       {isRecalculating ? (
         <div className="notice-banner notice-soft">
-          Recalculando disponibilidad{selectedFleet ? ` de ${selectedFleet.customer_name}` : ""} para{" "}
-          {monthLabel(month)}. El panel se actualizará al terminar.
+          Recalculando disponibilidad para {monthLabel(month)}. El panel se actualizará al terminar.
         </div>
       ) : null}
 

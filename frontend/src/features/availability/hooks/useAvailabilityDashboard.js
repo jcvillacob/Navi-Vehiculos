@@ -34,6 +34,7 @@ function isValidMonth(value) {
 export function useAvailabilityDashboard() {
   const [month, setMonth] = useState(currentMonth);
   const [selectedCustomerId, setSelectedCustomerId] = useState(null);
+  const [plateSearch, setPlateSearch] = useState("");
   const [rankingOrder, setRankingOrder] = useState("worst");
   const [includeNoOrders, setIncludeNoOrders] = useState(false);
 
@@ -96,6 +97,7 @@ export function useAvailabilityDashboard() {
           limit: RANKING_LIMIT,
           order: rankingOrder,
           include_no_orders: includeNoOrders,
+          plate_search: plateSearch,
         }),
         fetchAvailabilityTrend({
           month_to: month,
@@ -110,7 +112,7 @@ export function useAvailabilityDashboard() {
     } finally {
       setLoadingDetail(false);
     }
-  }, [month, selectedCustomerId, rankingOrder, includeNoOrders]);
+  }, [month, selectedCustomerId, plateSearch, rankingOrder, includeNoOrders]);
 
   useEffect(() => {
     loadOverview();
@@ -140,9 +142,10 @@ export function useAvailabilityDashboard() {
       return;
     }
     setRecalcError("");
+    // Recalcular reprocesa el mes completo; los filtros de flota/placa solo afectan la vista.
     const payload = {
       month,
-      customer_ids: selectedCustomerId ? [selectedCustomerId] : [],
+      customer_ids: [],
       compute_availability: true,
       availability_only: true,
       force_recalculate: false,
@@ -168,7 +171,7 @@ export function useAvailabilityDashboard() {
     } catch (err) {
       setRecalcError(err.message || "No fue posible iniciar el recalculo");
     }
-  }, [month, selectedCustomerId, stopPolling, refreshAll]);
+  }, [month, stopPolling, refreshAll]);
 
   const isRecalculating = Boolean(job && ACTIVE_JOB_STATUSES.has(job.status));
 
@@ -178,6 +181,8 @@ export function useAvailabilityDashboard() {
     setMonth,
     selectedCustomerId,
     setSelectedCustomerId,
+    plateSearch,
+    setPlateSearch,
     rankingOrder,
     setRankingOrder,
     includeNoOrders,

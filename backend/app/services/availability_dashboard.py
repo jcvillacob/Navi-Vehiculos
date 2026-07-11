@@ -216,6 +216,7 @@ def get_vehicle_ranking(
     limit: int = 20,
     order: str = "worst",
     include_no_orders: bool = False,
+    plate_search: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Ranking de vehiculos por disponibilidad.
@@ -226,6 +227,9 @@ def get_vehicle_ranking(
     Si `include_no_orders=True`, tambien se incluyen las placas con estado
     'no_orders' (100% de disponibilidad almacenado), ubicandose al final del
     orden 'best' o al inicio del orden 'worst'.
+
+    Si `plate_search` tiene texto, filtra las placas cuyo valor contenga ese
+    substring (case-insensitive). Vacio o None no aplica filtro de placa.
     """
     allowed_statuses = {"calculated"}
     if include_no_orders:
@@ -237,6 +241,10 @@ def get_vehicle_ranking(
         if row.get("calculation_status") in allowed_statuses
         and row.get("project_availability_pct") is not None
     ]
+
+    normalized_search = (plate_search or "").strip().upper()
+    if normalized_search:
+        rows = [row for row in rows if normalized_search in str(row.get("plate", "")).upper()]
 
     def _rank(row: dict[str, Any]) -> tuple[int, float]:
         pct = float(row["project_availability_pct"])
