@@ -196,8 +196,51 @@ def test_status_indicator_pending_closure_takes_precedence():
     ]
     result = build_active_orders(orders, {}, now=_dt_local("2026-07-11T12:00:00"))
     assert result["orders"][0]["status_indicator"] == "pending_closure"
+    assert result["orders"][0]["pending_closure_days"] == 2
     assert result["summary"]["pending_closure"] == 1
     assert result["summary"]["overdue"] == 0
+
+
+def test_pending_closure_days_exact_when_technical_completion_without_final():
+    _reset_order_seq()
+    orders = [
+        _order(
+            number="O1",
+            status="onTechnicalCompletion",
+            technicalCompletionDate=_dt_utc("2026-07-01T12:00:00"),
+            finalCompletionDate=None,
+        )
+    ]
+    result = build_active_orders(orders, {}, now=_dt_local("2026-07-11T12:00:00"))
+    assert result["orders"][0]["pending_closure_days"] == 10
+
+
+def test_pending_closure_days_none_when_final_completion_present():
+    _reset_order_seq()
+    orders = [
+        _order(
+            number="O1",
+            status="onTechnicalCompletion",
+            technicalCompletionDate=_dt_utc("2026-07-01T12:00:00"),
+            finalCompletionDate=_dt_utc("2026-07-05T12:00:00"),
+        )
+    ]
+    result = build_active_orders(orders, {}, now=_dt_local("2026-07-11T12:00:00"))
+    assert result["orders"][0]["pending_closure_days"] is None
+
+
+def test_pending_closure_days_none_without_technical_completion():
+    _reset_order_seq()
+    orders = [
+        _order(
+            number="O1",
+            status="opened",
+            technicalCompletionDate=None,
+            finalCompletionDate=None,
+        )
+    ]
+    result = build_active_orders(orders, {}, now=_dt_local("2026-07-11T12:00:00"))
+    assert result["orders"][0]["pending_closure_days"] is None
 
 
 def test_no_estimated_finish_date_is_on_time():
@@ -262,7 +305,36 @@ def test_summary_counts():
     assert summary["about_to_expire"] == 1
     assert summary["overdue"] == 1
     assert summary["pending_closure"] == 1
+    assert summary["pending_closure_7d"] == 0
+    assert summary["pending_closure_30d"] == 0
     assert summary["con_etiquetas"] == 1
+
+
+def test_summary_pending_closure_aging_counters():
+    _reset_order_seq()
+    now = _dt_local("2026-07-11T12:00:00")
+    orders = [
+        _order(
+            number="O1",
+            technicalCompletionDate=_dt_utc("2026-07-01T12:00:00"),
+            finalCompletionDate=None,
+        ),
+        _order(
+            number="O2",
+            technicalCompletionDate=_dt_utc("2026-06-01T12:00:00"),
+            finalCompletionDate=None,
+        ),
+        _order(
+            number="O3",
+            technicalCompletionDate=_dt_utc("2026-07-10T12:00:00"),
+            finalCompletionDate=None,
+        ),
+    ]
+    result = build_active_orders(orders, {}, now=now)
+    summary = result["summary"]
+    assert summary["pending_closure"] == 3
+    assert summary["pending_closure_7d"] == 2
+    assert summary["pending_closure_30d"] == 1
 
 
 def test_reason_none_when_empty():
@@ -297,6 +369,7 @@ def test_returns_generated_at_and_orders_shape():
         "status",
         "reason",
         "days_elapsed",
+        "pending_closure_days",
         "status_indicator",
         "time_status_text",
         "maintenance_labels",

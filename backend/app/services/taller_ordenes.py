@@ -109,6 +109,12 @@ def build_active_orders(
         )
         final_completion_local = _parse_utc_to_local(order.get("finalCompletionDate"))
 
+        # Aging de cierre administrativo pendiente.
+        if technical_completion_local is not None and final_completion_local is None:
+            pending_closure_days = (now - technical_completion_local).days
+        else:
+            pending_closure_days = None
+
         # Indicador temporal (doc seccion 13 / 17).
         if technical_completion_local is not None and final_completion_local is None:
             status_indicator = "pending_closure"
@@ -142,6 +148,7 @@ def build_active_orders(
                 "status": order.get("status"),
                 "reason": reason,
                 "days_elapsed": days_elapsed,
+                "pending_closure_days": pending_closure_days,
                 "status_indicator": status_indicator,
                 "time_status_text": _indicator_label(status_indicator),
                 "maintenance_labels": maintenance_labels,
@@ -175,12 +182,20 @@ def build_active_orders(
         "about_to_expire": 0,
         "overdue": 0,
         "pending_closure": 0,
+        "pending_closure_7d": 0,
+        "pending_closure_30d": 0,
         "con_etiquetas": 0,
     }
     for order in active_orders:
         indicator = order["status_indicator"]
         if indicator in summary:
             summary[indicator] += 1
+        pcd = order.get("pending_closure_days")
+        if isinstance(pcd, int):
+            if pcd > 7:
+                summary["pending_closure_7d"] += 1
+            if pcd > 30:
+                summary["pending_closure_30d"] += 1
         if order.get("has_labels"):
             summary["con_etiquetas"] += 1
 

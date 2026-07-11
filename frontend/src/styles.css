@@ -4810,6 +4810,11 @@ select.control-sm {
   background: rgba(197, 43, 43, 0.08);
 }
 
+.taller-chip-critical {
+  color: #c52b2b;
+  font-weight: 700;
+}
+
 .conn-pct-alert {
   position: relative;
 }

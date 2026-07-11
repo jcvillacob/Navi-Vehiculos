@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { fetchActiveTallerOrders } from "../api/vehicleApi";
+import { exportTallerOrdenesExcel } from "../utils/tallerOrdenesExport";
 
 const INDICATOR_OPTIONS = [
   { value: "", label: "Todos los indicadores" },
@@ -76,6 +77,7 @@ export default function OrdenesTallerPage() {
   const [indicatorFilter, setIndicatorFilter] = useState("");
   const [fleetFilter, setFleetFilter] = useState("");
   const [plateFilter, setPlateFilter] = useState("");
+  const [exporting, setExporting] = useState(false);
 
   const orders = data?.orders ?? [];
   const summary = data?.summary ?? {};
@@ -109,6 +111,20 @@ export default function OrdenesTallerPage() {
     load({ forceRefresh: true });
   };
 
+  const handleExport = async () => {
+    if (!data || filteredOrders.length === 0) return;
+    setExporting(true);
+    try {
+      await exportTallerOrdenesExcel({
+        generatedAt: data.generated_at,
+        summary,
+        orders: filteredOrders,
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const isFirstLoad = loading && data == null;
 
   return (
@@ -123,6 +139,14 @@ export default function OrdenesTallerPage() {
           {data?.generated_at ? (
             <span className="disp-hint">Datos {formatMinutesAgo(data.generated_at)}</span>
           ) : null}
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={handleExport}
+            disabled={loading || exporting || !data || filteredOrders.length === 0}
+          >
+            {exporting ? "Exportando…" : "Exportar"}
+          </button>
           <button
             type="button"
             className="button-secondary"
@@ -195,6 +219,20 @@ export default function OrdenesTallerPage() {
             <strong>{summary[key] ?? 0}</strong> {label}
           </span>
         ))}
+        <span
+          className={`disp-breakdown-chip ${
+            summary.pending_closure_7d > 0 ? "taller-chip-critical" : ""
+          }`}
+        >
+          <strong>{summary.pending_closure_7d ?? 0}</strong> Cierre &gt;7d
+        </span>
+        <span
+          className={`disp-breakdown-chip ${
+            summary.pending_closure_30d > 0 ? "taller-chip-critical" : ""
+          }`}
+        >
+          <strong>{summary.pending_closure_30d ?? 0}</strong> Cierre &gt;30d
+        </span>
       </div>
 
       <article className="card disp-ranking-card">
@@ -217,6 +255,7 @@ export default function OrdenesTallerPage() {
                 <th>Tipo</th>
                 <th>Estado</th>
                 <th>Indicador</th>
+                <th>Cierre pendiente</th>
                 <th>Días</th>
                 <th>Etiquetas</th>
               </tr>
@@ -224,13 +263,13 @@ export default function OrdenesTallerPage() {
             <tbody>
               {loading && data == null ? (
                 <tr>
-                  <td className="table-empty-row" colSpan={8}>
+                  <td className="table-empty-row" colSpan={9}>
                     Cargando…
                   </td>
                 </tr>
               ) : filteredOrders.length === 0 ? (
                 <tr>
-                  <td className="table-empty-row" colSpan={8}>
+                  <td className="table-empty-row" colSpan={9}>
                     {orders.length === 0
                       ? "No hay ordenes de taller activas."
                       : "Ninguna orden coincide con los filtros seleccionados."}
@@ -254,6 +293,20 @@ export default function OrdenesTallerPage() {
                       >
                         {INDICATOR_LABEL[order.status_indicator] || order.status_indicator}
                       </span>
+                    </td>
+                    <td>
+                      {order.pending_closure_days !== null &&
+                      order.pending_closure_days !== undefined ? (
+                        order.pending_closure_days > 7 ? (
+                          <span className="availability-badge availability-bad">
+                            {order.pending_closure_days} d
+                          </span>
+                        ) : (
+                          `${order.pending_closure_days} d`
+                        )
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td>
                       {order.days_elapsed !== null && order.days_elapsed !== undefined
