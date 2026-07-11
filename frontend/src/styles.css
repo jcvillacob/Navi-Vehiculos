@@ -7181,6 +7181,25 @@ select.control-sm {
   }
 }
 
+/* Monitor de ordenes de taller activas (CloudFleet) */
+.taller-orders-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  border: 2px solid var(--border);
+  border-top-color: var(--red);
+  border-radius: 50%;
+  animation: taller-orders-spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes taller-orders-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ─────────────────────────────
    MAPA — Geocercas (Leaflet via CDN)
 ───────────────────────────── */

@@ -16,6 +16,7 @@ import HomePage from "./pages/HomePage";
 import CpkCphPage from "./pages/CpkCphPage";
 import RendimientosPage from "./pages/RendimientosPage";
 import DisponibilidadPage from "./pages/DisponibilidadPage";
+import OrdenesTallerPage from "./pages/OrdenesTallerPage";
 import MapaPage from "./pages/MapaPage";
 import CustomersPage from "./pages/CustomersPage";
 import EngineLookupPage from "./pages/EngineLookupPage";
@@ -181,6 +182,10 @@ function AppShell() {
                 <span>Disponibilidad</span>
                 <small>Panel de flotas</small>
               </NavLink>
+              <NavLink to="/ordenes-taller">
+                <span>Órdenes taller</span>
+                <small>Monitor CloudFleet</small>
+              </NavLink>
               <NavLink to="/mapa">
                 <span>Mapa</span>
                 <small>Geocercas y vehiculos</small>
@@ -312,6 +317,7 @@ function AppShell() {
                 }
               />
               <Route path="/disponibilidad" element={<DisponibilidadPage />} />
+              <Route path="/ordenes-taller" element={<OrdenesTallerPage />} />
               <Route path="/mapa" element={<MapaPage />} />
               {import.meta.env.DEV ? (
                 <Route path="/style-lab" element={<StyleLabPage />} />

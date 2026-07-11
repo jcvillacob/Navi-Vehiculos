@@ -12,6 +12,7 @@ from app.api.routes.integration import router as integration_router
 from app.api.routes.motor import router as motor_router
 from app.api.routes.rendimientos import router as rendimientos_router
 from app.api.routes.roles import router as roles_router
+from app.api.routes.taller_ordenes import router as taller_ordenes_router
 from app.api.routes.user_preferences import router as user_preferences_router
 from app.api.routes.users import router as users_router
 from app.api.routes.vehicle import router as vehicle_router
@@ -30,5 +31,6 @@ api_router.include_router(health_router)
 api_router.include_router(integration_router)
 api_router.include_router(motor_router)
 api_router.include_router(rendimientos_router)
+api_router.include_router(taller_ordenes_router)
 api_router.include_router(vehicle_router)
 api_router.include_router(user_preferences_router)

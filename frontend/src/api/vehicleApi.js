@@ -369,6 +369,13 @@ export async function fetchAvailabilityCoverage({ month }) {
   return parseJsonOrThrow(response, "Error cargando la cobertura CloudFleet");
 }
 
+export async function fetchActiveTallerOrders({ forceRefresh = false } = {}) {
+  const query = new URLSearchParams();
+  if (forceRefresh) query.set("force_refresh", "true");
+  const response = await fetchWithAuth(buildUrl(`/api/v1/taller-ordenes/active?${query.toString()}`));
+  return parseJsonOrThrow(response, "Error cargando las ordenes de taller activas");
+}
+
 // ── Vehicle ───────────────────────────────────────────────────────────────────
 
 export async function lookupVehicle(identifier, { force = false } = {}) {
