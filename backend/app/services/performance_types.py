@@ -19,6 +19,7 @@ class PerformanceTarget:
     username: str
     password: str
     provider_config: dict[str, Any]
+    vocacional: bool = False
 
 
 @dataclass(frozen=True)

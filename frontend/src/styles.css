@@ -5843,7 +5843,7 @@ select.control-sm {
 
 .cpk-cph-table {
   width: 100%;
-  min-width: 1560px;
+  min-width: 1820px;
   border-collapse: collapse;
   font-size: 0.84rem;
 }
@@ -5872,6 +5872,10 @@ select.control-sm {
 
 .cpk-cph-table tr.is-diff-alert td {
   background: rgba(250, 204, 21, 0.16);
+}
+
+.cpk-cph-table tr.is-geotab-regression td {
+  background: rgba(238, 46, 47, 0.14);
 }
 
 .cpk-cph-origin {

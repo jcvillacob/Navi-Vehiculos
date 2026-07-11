@@ -108,6 +108,13 @@ function computeRowDiff(row) {
   const hourAdjustment = parseNumber(row.hour_adjustment) ?? 0;
   const kmsRaw = parseNumber(row.kms_ecm_geotab);
   const hoursRaw = parseNumber(row.hours_ecm);
+  const regressionCount = Math.max(0, parseNumber(row.geotab_regression_count) ?? 0);
+  const regressionTotalKm = Math.max(0, parseNumber(row.geotab_regression_total_km) ?? 0);
+  const regressionTotalHours = Math.max(0, parseNumber(row.geotab_regression_total_hours) ?? 0);
+  const suggestedAdjustment = Math.max(
+    0,
+    parseNumber(row.suggested_adjustment) ?? (vocacional ? regressionTotalHours : regressionTotalKm)
+  );
   const explicitKmsApproved = parseNumber(row.kms_ecm_approved);
   const explicitHoursApproved = parseNumber(row.hours_ecm_approved);
   const kmsApproved = explicitKmsApproved ?? (kmsRaw !== null ? kmsRaw + kmAdjustment : null);
@@ -132,6 +139,10 @@ function computeRowDiff(row) {
     hours_ecm: hoursRaw,
     hours_gps: hoursGps,
     fuel_gallons: parseNumber(row.fuel_gallons),
+    geotab_regression_count: regressionCount,
+    geotab_regression_total_km: regressionTotalKm,
+    geotab_regression_total_hours: regressionTotalHours,
+    suggested_adjustment: suggestedAdjustment,
     km_difference: kmDiff,
     km_difference_pct: kmDiffPct,
     hour_difference: hourDiff,
@@ -140,12 +151,54 @@ function computeRowDiff(row) {
   };
 }
 
+function getGeotabValidation(row) {
+  const isGeotab = String(row.source_provider || "").trim().toLowerCase() === "geotab";
+  const relevantDifferencePct = row.vocacional ? row.hour_difference_pct : row.km_difference_pct;
+  const needsReview = isGeotab && Math.abs(Number(relevantDifferencePct || 0)) > 5;
+  if (!needsReview) return { needsReview: false, blocksSave: false, messages: [] };
+
+  const kmRegression = row.odo_start !== null
+    && row.odo_start !== undefined
+    && row.odo_end !== null
+    && row.odo_end !== undefined
+    && Number(row.odo_end) < Number(row.odo_start);
+  const hourRegression = row.horo_start !== null
+    && row.horo_start !== undefined
+    && row.horo_end !== null
+    && row.horo_end !== undefined
+    && Number(row.horo_end) < Number(row.horo_start);
+  const sequenceRegressions = (Array.isArray(row.warnings) ? row.warnings : [])
+    .filter((warning) => String(warning).startsWith("Retroceso Geotab detectado") && String(warning).includes("[acumulado]"));
+  const messages = ["Revisión Geotab: la diferencia relevante supera 5%; se validaron los acumulados de km y horas."];
+  const endpointRegressions = [];
+  if (kmRegression) endpointRegressions.push(`odómetro retrocede de ${formatNumber(row.odo_start)} a ${formatNumber(row.odo_end)} km`);
+  if (hourRegression) endpointRegressions.push(`horómetro retrocede de ${formatNumber(row.horo_start, 1)} a ${formatNumber(row.horo_end, 1)} h`);
+  const appliedAdjustment = Math.abs(Number(row.vocacional ? row.hour_adjustment : row.km_adjustment) || 0);
+  const sequenceAdjustmentMissing = sequenceRegressions.length > 0
+    && (!(row.suggested_adjustment > 0) || appliedAdjustment + 0.0001 < row.suggested_adjustment);
+  const regressions = sequenceRegressions.length && !sequenceAdjustmentMissing ? [] : endpointRegressions;
+  if (sequenceAdjustmentMissing) regressions.push("retrocesos Geotab sin cubrir por el ajuste sugerido");
+  if (sequenceRegressions.length && !sequenceAdjustmentMissing) {
+    messages.push("El ajuste sugerido cubre los retrocesos Geotab detectados.");
+  }
+  if (regressions.length) messages.push(`Inconsistencia Geotab: ${regressions.join("; ")}. No se permite guardar el ajuste.`);
+  return { needsReview: true, blocksSave: regressions.length > 0, messages };
+}
+
 function rowsForApi(rows) {
   return rows.map(computeRowDiff);
 }
 
 function mapMonthlyRowToCpkRow(row, index) {
-  const kmsApproved = parseNumber(row.kms_ecm);
+  const vocacional = Boolean(row.vocacional);
+  const kmsRaw = parseNumber(row.kms_ecm);
+  const hoursRaw = parseNumber(row.hours_ecm);
+  const regressionCount = Math.max(0, parseNumber(row.geotab_regression_count) ?? 0);
+  const regressionTotalKm = Math.max(0, parseNumber(row.geotab_regression_total_km) ?? 0);
+  const regressionTotalHours = Math.max(0, parseNumber(row.geotab_regression_total_hours) ?? 0);
+  const suggestedAdjustment = vocacional ? regressionTotalHours : regressionTotalKm;
+  const kmAdjustment = vocacional ? 0 : suggestedAdjustment;
+  const hourAdjustment = vocacional ? suggestedAdjustment : 0;
   return computeRowDiff({
     row_number: index + 1,
     plate: normalizePlate(row.plate),
@@ -157,24 +210,30 @@ function mapMonthlyRowToCpkRow(row, index) {
     database_name: row.database_name,
     source_provider: row.source_provider,
     provider_vehicle_id: row.provider_vehicle_id,
-    vocacional: Boolean(row.vocacional),
+    vocacional,
     km_client: null,
     odo_start: parseNumber(row.odo_start),
     odo_end: parseNumber(row.odo_end),
     horo_start: parseNumber(row.horo_start),
     horo_end: parseNumber(row.horo_end),
-    kms_ecm_geotab: kmsApproved,
+    kms_ecm_geotab: kmsRaw,
     kms_gps: parseNumber(row.kms_gps),
-    hours_ecm: parseNumber(row.hours_ecm),
+    hours_ecm: hoursRaw,
     hours_gps: parseNumber(row.hours_gps),
     fuel_gallons: parseNumber(row.fuel_gallons),
-    km_adjustment: 0,
-    hour_adjustment: 0,
-    kms_ecm_approved: kmsApproved,
-    hours_ecm_approved: parseNumber(row.hours_ecm),
+    geotab_regression_count: regressionCount,
+    geotab_regression_total_km: regressionTotalKm,
+    geotab_regression_total_hours: regressionTotalHours,
+    suggested_adjustment: suggestedAdjustment,
+    km_adjustment: kmAdjustment,
+    hour_adjustment: hourAdjustment,
+    kms_ecm_approved: kmsRaw !== null ? kmsRaw + kmAdjustment : null,
+    hours_ecm_approved: hoursRaw !== null ? hoursRaw + hourAdjustment : null,
     calculation_status: ["calculated", "partial"].includes(row.calculation_status) ? "valid" : (row.calculation_status || "pending"),
     warnings: Array.isArray(row.warnings) ? row.warnings : [],
-    correction_note: ""
+    correction_note: suggestedAdjustment > 0
+      ? `Ajuste sugerido automáticamente por ${regressionCount} retroceso(s) Geotab detectado(s).`
+      : ""
   });
 }
 
@@ -186,8 +245,11 @@ function mergeRowsByPlate(baseRows, overrideRows) {
     const existingIndex = merged.findIndex((row) => normalizePlate(row.plate) === plate);
     if (existingIndex >= 0) {
       const existingRow = merged[existingIndex];
-      const kmAdjustment = parseNumber(existingRow.km_adjustment) ?? 0;
-      const hourAdjustment = parseNumber(existingRow.hour_adjustment) ?? 0;
+      const overrideSuggested = parseNumber(overrideRow.suggested_adjustment) ?? 0;
+      const existingKmAdjustment = parseNumber(existingRow.km_adjustment) ?? 0;
+      const existingHourAdjustment = parseNumber(existingRow.hour_adjustment) ?? 0;
+      const kmAdjustment = existingKmAdjustment || (!existingRow.vocacional ? overrideSuggested : 0);
+      const hourAdjustment = existingHourAdjustment || (existingRow.vocacional ? overrideSuggested : 0);
       const overrideKms = parseNumber(overrideRow.kms_ecm_geotab);
       const overrideHours = parseNumber(overrideRow.hours_ecm);
       merged[existingIndex] = computeRowDiff({
@@ -196,6 +258,7 @@ function mergeRowsByPlate(baseRows, overrideRows) {
         vocacional: existingRow.vocacional,
         km_adjustment: kmAdjustment,
         hour_adjustment: hourAdjustment,
+        correction_note: existingRow.correction_note || overrideRow.correction_note || "",
         kms_ecm_approved: overrideKms !== null ? overrideKms + kmAdjustment : overrideRow.kms_ecm_approved,
         hours_ecm_approved: overrideHours !== null ? overrideHours + hourAdjustment : overrideRow.hours_ecm_approved
       });
@@ -241,6 +304,7 @@ export default function CpkCphPage() {
         if (cancelled) return;
         const sorted = [...rows]
           .filter((customer) => String(customer.name) !== SYSTEM_CUSTOMER)
+          .filter((customer) => customer.category === "Flota Administrada")
           .sort((a, b) => String(a.name).localeCompare(String(b.name), "es"));
         setCustomers(sorted);
         if (!customerId && sorted.length) setCustomerId(String(sorted[0].id));
@@ -288,10 +352,12 @@ export default function CpkCphPage() {
       const allRows = Array.isArray(response?.rows) ? response.rows : [];
       setMonthRows(allRows);
       const reportedIds = new Set((currentReports || reports).map((report) => report.customer_id));
+      const managedFleetIds = new Set(customers.map((customer) => customer.id));
       const byCustomer = new Map();
       for (const row of allRows) {
         if (!row || row.customer_id == null) continue;
         if (String(row.client_name) === SYSTEM_CUSTOMER) continue;
+        if (!managedFleetIds.has(row.customer_id)) continue;
         if (reportedIds.has(row.customer_id)) continue;
         const entry = byCustomer.get(row.customer_id) || {
           customer_id: row.customer_id,
@@ -313,7 +379,7 @@ export default function CpkCphPage() {
     } finally {
       setLoading(false);
     }
-  }, [month, reports, pushToast]);
+  }, [month, reports, customers, pushToast]);
 
   const handleSearch = async () => {
     setLoading(true);
@@ -393,6 +459,13 @@ export default function CpkCphPage() {
       pushToast("error", "Cada ajuste de km u horas debe tener una nota.");
       return;
     }
+    const blockedRows = visibleRows
+      .map(computeRowDiff)
+      .filter((row) => getGeotabValidation(row).blocksSave);
+    if (blockedRows.length) {
+      pushToast("error", "No se puede guardar: hay retrocesos de km u horas reportados por Geotab. Verifica las lecturas inicial y final.");
+      return;
+    }
     setSaving(true);
     try {
       const detail = await saveCpkCphReport({
@@ -412,6 +485,10 @@ export default function CpkCphPage() {
 
   const handleSaveRow = async (row) => {
     if (!activeReport || !row.id) return;
+    if (getGeotabValidation(computeRowDiff(row)).blocksSave) {
+      pushToast("error", "No se puede guardar: Geotab reporta un retroceso de km u horas en esta fila.");
+      return;
+    }
     try {
       const hasCutoff = Boolean(row.cutoff_start_at && row.cutoff_end_at);
       const payload = {
@@ -575,6 +652,9 @@ export default function CpkCphPage() {
           "Horas Final",
           "Horas ECM",
           "Horas Referencia",
+          "Retrocesos detectados",
+          "Total retroceso",
+          "Ajuste sugerido",
           "Ajuste",
           "Diferencia %",
           "Tanqueo anterior",
@@ -585,6 +665,7 @@ export default function CpkCphPage() {
         ];
         const data = visibleRows.map((rawRow) => {
           const row = computeRowDiff(rawRow);
+          const geotabValidation = getGeotabValidation(row);
           return {
             Placa: row.plate,
             Tipo: row.vocacional ? "Vocacional" : "Comercial",
@@ -597,20 +678,23 @@ export default function CpkCphPage() {
             "Horas Final": row.horo_end,
             "Horas ECM": row.hours_ecm,
             "Horas Referencia": row.hours_gps,
+            "Retrocesos detectados": row.geotab_regression_count,
+            "Total retroceso": row.vocacional ? row.geotab_regression_total_hours : row.geotab_regression_total_km,
+            "Ajuste sugerido": row.suggested_adjustment,
             Ajuste: row.vocacional ? row.hour_adjustment : row.km_adjustment,
             "Diferencia %": row.display_diff_pct,
             "Tanqueo anterior": row.cutoff_start_at || "",
             "Tanqueo actual": row.cutoff_end_at || "",
             Estado: statusLabel(row.calculation_status),
             Nota: row.correction_note || "",
-            Warnings: Array.isArray(row.warnings) ? row.warnings.join(" ") : ""
+            Warnings: [...new Set([...(Array.isArray(row.warnings) ? row.warnings : []), ...geotabValidation.messages])].join(" ")
           };
         });
 
         const aoa = [headers, ...data.map((r) => headers.map((h) => r[h] ?? ""))];
         const sheet = XLSX.utils.aoa_to_sheet(aoa);
 
-        const colWidths = [12, 14, 10, 14, 14, 12, 16, 12, 12, 12, 16, 10, 14, 20, 20, 16, 28, 32];
+        const colWidths = [12, 14, 10, 14, 14, 12, 16, 12, 12, 12, 16, 14, 16, 16, 10, 14, 20, 20, 16, 28, 32];
         sheet["!cols"] = colWidths.map((w) => ({ wch: w }));
         sheet["!freeze"] = { xSplit: 0, ySplit: 1 };
         sheet["!rows"] = [{ hpt: 28 }];
@@ -623,7 +707,7 @@ export default function CpkCphPage() {
         data.forEach((row, rIdx) => {
           const excelRow = rIdx + 1;
           const band = excelRow % 2 === 0;
-          const isAlert = Math.abs(Number(row["Diferencia %"] || 0)) > 5;
+          const isAlert = getGeotabValidation(computeRowDiff(visibleRows[rIdx])).needsReview;
           headers.forEach((_, c) => {
             const addr = XLSX.utils.encode_cell({ r: excelRow, c });
             const cell = sheet[addr];
@@ -745,6 +829,9 @@ export default function CpkCphPage() {
                       <th>Horas final</th>
                       <th>Horas ECM</th>
                       <th>Horas referencia</th>
+                      <th title="Cantidad de caídas entre lecturas consecutivas de Geotab">Retrocesos</th>
+                      <th title="Suma de todos los retrocesos Geotab">Total retroceso</th>
+                      <th title="Valor propuesto automáticamente para corregir todos los retrocesos">Ajuste sugerido</th>
                       <th>Ajuste</th>
                       <th>Dif %</th>
                       <th>Estado</th>
@@ -756,13 +843,15 @@ export default function CpkCphPage() {
                     {visibleRows.map((rawRow, index) => {
                       const row = computeRowDiff(rawRow);
                       const hasCutoff = Boolean(row.cutoff_start_at && row.cutoff_end_at);
-                      const needsReview = Math.abs(Number(row.display_diff_pct || 0)) > 5;
+                      const geotabValidation = getGeotabValidation(row);
+                      const rowWarnings = [...new Set([...(Array.isArray(row.warnings) ? row.warnings : []), ...geotabValidation.messages])];
                       return (
                         <tr
                           key={row.id || `${row.plate}-${index}`}
                           className={[
                             row.calculation_status === "valid" ? "" : "is-warning",
-                            needsReview ? "is-diff-alert" : ""
+                            geotabValidation.needsReview ? "is-diff-alert" : "",
+                            geotabValidation.blocksSave ? "is-geotab-regression" : ""
                           ].filter(Boolean).join(" ")}
                         >
                           <td><strong>{row.plate}</strong></td>
@@ -792,6 +881,15 @@ export default function CpkCphPage() {
                           <td>{formatNumber(row.horo_end, 1)}</td>
                           <td>{formatNumber(row.hours_ecm, 1)}</td>
                           <td>{formatNumber(row.hours_gps, 1)}</td>
+                          <td>{formatNumber(row.geotab_regression_count, 0)}</td>
+                          <td>
+                            {formatNumber(row.vocacional ? row.geotab_regression_total_hours : row.geotab_regression_total_km, row.vocacional ? 1 : 0)}
+                            <small>{row.vocacional ? "h" : "km"}</small>
+                          </td>
+                          <td>
+                            {formatNumber(row.suggested_adjustment, row.vocacional ? 1 : 0)}
+                            <small>{row.vocacional ? "h" : "km"}</small>
+                          </td>
                           <td>
                             <EditableCell
                               type="number"
@@ -818,11 +916,11 @@ export default function CpkCphPage() {
                           <td>
                             <div className="cpk-cph-status-cell">
                               <span
-                                className={`cpk-cph-status cpk-cph-status--${row.calculation_status}${Array.isArray(row.warnings) && row.warnings.length ? " has-warning" : ""}`}
-                                title={Array.isArray(row.warnings) && row.warnings.length ? row.warnings.join(" ") : undefined}
+                                className={`cpk-cph-status cpk-cph-status--${row.calculation_status}${rowWarnings.length ? " has-warning" : ""}`}
+                                title={rowWarnings.length ? rowWarnings.join(" ") : undefined}
                               >
                                 {statusLabel(row.calculation_status)}
-                                {Array.isArray(row.warnings) && row.warnings.length ? (
+                                {rowWarnings.length ? (
                                   <span className="cpk-cph-status-alert" aria-label="Advertencia">!</span>
                                 ) : null}
                               </span>

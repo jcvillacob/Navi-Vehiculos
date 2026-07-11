@@ -1539,6 +1539,7 @@ def list_vehicle_assignment_summaries(search: str | None = None) -> list[Vehicle
                 f"""
                 SELECT
                     a.plate,
+                    a.customer_id,
                     a.customer_database_id,
                     a.vin,
                     a.technical_number,
@@ -1604,6 +1605,7 @@ def list_vehicle_assignment_summaries(search: str | None = None) -> list[Vehicle
         summaries.append(
             VehicleAssignmentSummary(
                 plate=row["plate"],
+                customer_id=row.get("customer_id"),
                 customer_database_id=row.get("customer_database_id"),
                 vin=row.get("vin"),
                 technical_number=str(row["technical_number"]),

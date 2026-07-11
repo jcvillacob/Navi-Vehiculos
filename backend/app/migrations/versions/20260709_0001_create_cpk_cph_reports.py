@@ -29,8 +29,15 @@ def upgrade() -> None:
         ON CONFLICT (role, permission) DO NOTHING;
         """
     )
+    # customers solo existe via DDL runtime (_ensure_motor_tables); en una base
+    # recien migrada (tests) estas tablas las crea _ensure_cpk_tables al vuelo.
     op.execute(
         """
+        DO $$
+        BEGIN
+        IF to_regclass('public.customers') IS NULL THEN
+            RETURN;
+        END IF;
         CREATE TABLE IF NOT EXISTS cpk_cph_reports (
             id BIGSERIAL PRIMARY KEY,
             customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
@@ -46,10 +53,6 @@ def upgrade() -> None:
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (customer_id, period_month)
         );
-        """
-    )
-    op.execute(
-        """
         CREATE TABLE IF NOT EXISTS cpk_cph_report_versions (
             id BIGSERIAL PRIMARY KEY,
             report_id BIGINT NOT NULL REFERENCES cpk_cph_reports(id) ON DELETE CASCADE,
@@ -61,10 +64,6 @@ def upgrade() -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (report_id, version_number)
         );
-        """
-    )
-    op.execute(
-        """
         CREATE TABLE IF NOT EXISTS cpk_cph_report_rows (
             id BIGSERIAL PRIMARY KEY,
             report_id BIGINT NOT NULL REFERENCES cpk_cph_reports(id) ON DELETE CASCADE,
@@ -103,18 +102,11 @@ def upgrade() -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
-        """
-    )
-    op.execute(
-        """
         CREATE INDEX IF NOT EXISTS idx_cpk_cph_report_rows_report_version
         ON cpk_cph_report_rows (report_id, version_number);
-        """
-    )
-    op.execute(
-        """
         CREATE INDEX IF NOT EXISTS idx_cpk_cph_reports_month_customer
         ON cpk_cph_reports (period_month, customer_id);
+        END $$;
         """
     )
 

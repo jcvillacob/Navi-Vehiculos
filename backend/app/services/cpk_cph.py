@@ -19,7 +19,7 @@ from app.schemas.cpk_cph import (
 )
 from app.schemas.vehicle import CpkCutoffInputRow, CpkCutoffPreviewRequest
 from app.services.motor_catalog import _database_dsn
-from app.services.rendimientos import preview_cpk_cutoffs
+from app.services.rendimientos import lookup_geotab_granular_regressions, preview_cpk_cutoffs
 
 
 class CpkCphError(Exception):
@@ -35,6 +35,11 @@ class CpkCphConflict(CpkCphError):
 
 
 _CPK_TABLES_DONE = False
+_MANAGED_FLEET_CATEGORY = "Flota Administrada"
+_GEOTAB_REVIEW_THRESHOLD_PCT = 5.0
+_GEOTAB_REGRESSION_WARNING_PREFIX = "Retroceso Geotab detectado"
+_GEOTAB_ACCUMULATED_REGRESSION_MARKER = "[acumulado]"
+_GEOTAB_GRANULAR_CHECK_PREFIX = "Verificación granular Geotab"
 
 
 def _ensure_cpk_tables(conn: psycopg.Connection) -> None:
@@ -87,6 +92,10 @@ def _ensure_cpk_tables(conn: psycopg.Connection) -> None:
                 hours_ecm DOUBLE PRECISION NULL,
                 hours_gps DOUBLE PRECISION NULL,
                 fuel_gallons DOUBLE PRECISION NULL,
+                geotab_regression_count INTEGER NOT NULL DEFAULT 0,
+                geotab_regression_total_km DOUBLE PRECISION NOT NULL DEFAULT 0,
+                geotab_regression_total_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
+                suggested_adjustment DOUBLE PRECISION NOT NULL DEFAULT 0,
                 km_adjustment DOUBLE PRECISION NULL DEFAULT 0,
                 hour_adjustment DOUBLE PRECISION NULL DEFAULT 0,
                 kms_ecm_approved DOUBLE PRECISION NULL,
@@ -104,6 +113,10 @@ def _ensure_cpk_tables(conn: psycopg.Connection) -> None:
             """
         )
         cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS vocacional BOOLEAN NOT NULL DEFAULT FALSE;")
+        cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS geotab_regression_count INTEGER NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS geotab_regression_total_km DOUBLE PRECISION NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS geotab_regression_total_hours DOUBLE PRECISION NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS suggested_adjustment DOUBLE PRECISION NOT NULL DEFAULT 0;")
         cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS km_adjustment DOUBLE PRECISION NULL DEFAULT 0;")
         cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS hour_adjustment DOUBLE PRECISION NULL DEFAULT 0;")
         cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS kms_ecm_approved DOUBLE PRECISION NULL;")
@@ -131,11 +144,17 @@ def _normalize_plate(value: str | None) -> str:
 
 
 def _customer_name(conn: psycopg.Connection, customer_id: int) -> str:
+    """Resuelve el nombre del cliente y exige categoría Flota Administrada:
+    CPK/CPH solo aplica a esas flotas."""
     with conn.cursor() as cur:
-        cur.execute("SELECT name FROM customers WHERE id = %s", (customer_id,))
+        cur.execute("SELECT name, category FROM customers WHERE id = %s", (customer_id,))
         row = cur.fetchone()
     if not row:
         raise CpkCphNotFound("Cliente no encontrado.")
+    if str(row.get("category") or "") != _MANAGED_FLEET_CATEGORY:
+        raise CpkCphConflict(
+            "CPK/CPH solo aplica a clientes de categoría Flota Administrada."
+        )
     return str(row["name"])
 
 
@@ -160,8 +179,226 @@ def _km_reference(km_client: float | None, kms_gps: float | None) -> float | Non
     return km_client if km_client is not None else kms_gps
 
 
+def _is_geotab_row(row: dict[str, Any]) -> bool:
+    """Las reglas de consistencia de acumulados aplican exclusivamente a Geotab."""
+    return str(row.get("source_provider") or "").strip().lower() == "geotab"
+
+
+def _geotab_adjustment_validation(row: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Devuelve si una fila Geotab debe bloquearse y sus advertencias.
+
+    La revisión se activa con la misma diferencia que se muestra en CPK/CPH:
+    kilómetros para vehículos comerciales y horas para los vocacionales. Solo en
+    ese caso se inspeccionan los acumulados crudos; un odómetro u horómetro no
+    puede terminar por debajo de su lectura inicial.
+    """
+    if not _is_geotab_row(row):
+        return False, []
+
+    relevant_difference_pct = (
+        _num(row.get("hour_difference_pct"))
+        if bool(row.get("vocacional"))
+        else _num(row.get("km_difference_pct"))
+    )
+    if relevant_difference_pct is None or abs(relevant_difference_pct) <= _GEOTAB_REVIEW_THRESHOLD_PCT:
+        return False, []
+
+    warnings = [
+        "Revisión Geotab: la diferencia relevante supera 5%; se validaron los acumulados de km y horas."
+    ]
+    endpoint_regressions: list[str] = []
+    odo_start, odo_end = _num(row.get("odo_start")), _num(row.get("odo_end"))
+    if odo_start is not None and odo_end is not None and odo_end < odo_start:
+        endpoint_regressions.append(
+            f"odómetro retrocede de {odo_start:g} a {odo_end:g} km"
+        )
+
+    horo_start, horo_end = _num(row.get("horo_start")), _num(row.get("horo_end"))
+    if horo_start is not None and horo_end is not None and horo_end < horo_start:
+        endpoint_regressions.append(
+            f"horómetro retrocede de {horo_start:g} a {horo_end:g} h"
+        )
+
+    sequence_regressions = [
+        str(warning)
+        for warning in row.get("warnings") or []
+        if str(warning).startswith(_GEOTAB_REGRESSION_WARNING_PREFIX)
+        and _GEOTAB_ACCUMULATED_REGRESSION_MARKER in str(warning)
+    ]
+    suggested_adjustment = max(0.0, _num(row.get("suggested_adjustment")) or 0.0)
+    applied_adjustment = abs(
+        (_num(row.get("hour_adjustment")) or 0.0)
+        if bool(row.get("vocacional"))
+        else (_num(row.get("km_adjustment")) or 0.0)
+    )
+    sequence_adjustment_missing = bool(sequence_regressions) and (
+        suggested_adjustment <= 0 or applied_adjustment + 0.0001 < suggested_adjustment
+    )
+    adjustment_covers_sequence = bool(sequence_regressions) and not sequence_adjustment_missing
+    regressions = [] if adjustment_covers_sequence else endpoint_regressions
+    if sequence_adjustment_missing:
+        regressions.append(
+            "hay retrocesos Geotab sin cubrir por el ajuste sugerido"
+        )
+
+    if regressions:
+        warnings.append(
+            "Inconsistencia Geotab: "
+            + "; ".join(regressions)
+            + ". No se permite guardar el ajuste."
+        )
+    return bool(regressions), warnings
+
+
+def _append_geotab_validation_warnings(row: dict[str, Any]) -> dict[str, Any]:
+    """Añade advertencias deterministas sin duplicarlas en guardados sucesivos."""
+    _, validation_warnings = _geotab_adjustment_validation(row)
+    warnings = list(row.get("warnings") or [])
+    for warning in validation_warnings:
+        if warning not in warnings:
+            warnings.append(warning)
+    row["warnings"] = warnings
+    return row
+
+
+def _has_regression_metrics(row: dict[str, Any]) -> bool:
+    return bool(
+        int(_num(row.get("geotab_regression_count")) or 0)
+        or (_num(row.get("geotab_regression_total_km")) or 0.0) > 0
+        or (_num(row.get("geotab_regression_total_hours")) or 0.0) > 0
+    )
+
+
+def _needs_granular_lookup(row: dict[str, Any]) -> bool:
+    """Una fila Geotab con diferencia relevante >5% y sin métricas de retroceso
+    exige consultar los registros granulares: los rendimientos mensuales
+    calculados antes de la métrica traen ceros que no distinguen "sin
+    retrocesos" de "nunca analizado"."""
+    if not _is_geotab_row(row):
+        return False
+    relevant_difference_pct = (
+        _num(row.get("hour_difference_pct"))
+        if bool(row.get("vocacional"))
+        else _num(row.get("km_difference_pct"))
+    )
+    if relevant_difference_pct is None or abs(relevant_difference_pct) <= _GEOTAB_REVIEW_THRESHOLD_PCT:
+        return False
+    if _has_regression_metrics(row):
+        return False
+    warnings = [str(warning) for warning in row.get("warnings") or []]
+    if any(
+        warning.startswith(_GEOTAB_REGRESSION_WARNING_PREFIX)
+        and _GEOTAB_ACCUMULATED_REGRESSION_MARKER in warning
+        for warning in warnings
+    ):
+        return False
+    if any(warning.startswith(_GEOTAB_GRANULAR_CHECK_PREFIX) for warning in warnings):
+        return False
+    return True
+
+
+def _enrich_geotab_granular(
+    row: dict[str, Any],
+    *,
+    month: str,
+    api_cache: dict[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Busca retrocesos en el registro granular de Geotab y los plasma en la fila.
+
+    Actualiza métricas, ajuste sugerido y advertencias; si la fila no tenía
+    ajuste aplicado, adopta el sugerido y recalcula aprobados y diferencias.
+    Un fallo de consulta no bloquea: deja advertencia y conserva la fila.
+    """
+    if not _needs_granular_lookup(row):
+        return row
+    warnings = list(row.get("warnings") or [])
+    try:
+        result = lookup_geotab_granular_regressions(
+            plate=str(row.get("plate") or ""),
+            month=month,
+            cutoff_start_utc=row.get("cutoff_start_utc"),
+            cutoff_end_utc=row.get("cutoff_end_utc"),
+            provider_vehicle_id=row.get("provider_vehicle_id"),
+            odo_start=_num(row.get("odo_start")),
+            horo_start=_num(row.get("horo_start")),
+            api_cache=api_cache,
+        )
+    except Exception as exc:
+        message = f"No fue posible verificar retrocesos granulares en Geotab: {exc}"
+        if message not in warnings:
+            warnings.append(message)
+        row["warnings"] = warnings
+        return row
+
+    vocacional = bool(row.get("vocacional"))
+    regression_count = result.hourmeter_count if vocacional else result.odometer_count
+    suggested_adjustment = max(
+        0.0,
+        result.hourmeter_total_hours if vocacional else result.odometer_total_km,
+    )
+    row["geotab_regression_count"] = regression_count
+    row["geotab_regression_total_km"] = max(0.0, result.odometer_total_km)
+    row["geotab_regression_total_hours"] = max(0.0, result.hourmeter_total_hours)
+    row["suggested_adjustment"] = suggested_adjustment
+    for warning in result.warnings:
+        if warning not in warnings:
+            warnings.append(warning)
+    summary = (
+        f"{_GEOTAB_GRANULAR_CHECK_PREFIX}: {regression_count} retroceso(s), "
+        f"total {suggested_adjustment:g} {'h' if vocacional else 'km'}."
+        if suggested_adjustment > 0
+        else f"{_GEOTAB_GRANULAR_CHECK_PREFIX}: sin retrocesos en el periodo."
+    )
+    if summary not in warnings:
+        warnings.append(summary)
+    row["warnings"] = warnings
+
+    if suggested_adjustment > 0:
+        if vocacional and not (_num(row.get("hour_adjustment")) or 0.0):
+            row["hour_adjustment"] = suggested_adjustment
+            hours_raw = _num(row.get("hours_ecm"))
+            if hours_raw is not None:
+                row["hours_ecm_approved"] = hours_raw + suggested_adjustment
+        elif not vocacional and not (_num(row.get("km_adjustment")) or 0.0):
+            row["km_adjustment"] = suggested_adjustment
+            kms_raw = _num(row.get("kms_ecm_geotab"))
+            if kms_raw is not None:
+                row["kms_ecm_approved"] = kms_raw + suggested_adjustment
+        if not str(row.get("correction_note") or "").strip():
+            row["correction_note"] = (
+                f"Ajuste sugerido automáticamente por {regression_count} "
+                "retroceso(s) Geotab detectado(s)."
+            )
+    km_diff, km_pct = _diff(
+        _num(row.get("kms_ecm_approved")),
+        _km_reference(_num(row.get("km_client")), _num(row.get("kms_gps"))),
+    )
+    hour_diff, hour_pct = _diff(_num(row.get("hours_ecm_approved")), _num(row.get("hours_gps")))
+    row["km_difference"] = km_diff
+    row["km_difference_pct"] = km_pct
+    row["hour_difference"] = hour_diff
+    row["hour_difference_pct"] = hour_pct
+    return row
+
+
+def _reject_geotab_regression(row: dict[str, Any]) -> None:
+    blocked, _ = _geotab_adjustment_validation(row)
+    if blocked:
+        raise CpkCphConflict(
+            "No se puede guardar el ajuste: Geotab reporta un retroceso en kilómetros u horas. "
+            "Verifique las lecturas inicial y final."
+        )
+
+
 def _row_from_preview(row: CpkCphPreviewRow | dict[str, Any]) -> dict[str, Any]:
     data = row.model_dump() if hasattr(row, "model_dump") else dict(row)
+    vocacional = bool(data.get("vocacional"))
+    regression_count = int(_num(data.get("geotab_regression_count")) or 0)
+    regression_total_km = max(0.0, _num(data.get("geotab_regression_total_km")) or 0.0)
+    regression_total_hours = max(0.0, _num(data.get("geotab_regression_total_hours")) or 0.0)
+    suggested_adjustment = _num(data.get("suggested_adjustment"))
+    if suggested_adjustment is None:
+        suggested_adjustment = regression_total_hours if vocacional else regression_total_km
     km_adjustment = _num(data.get("km_adjustment")) or 0.0
     hour_adjustment = _num(data.get("hour_adjustment")) or 0.0
     kms_approved = _num(data.get("kms_ecm_approved"))
@@ -177,7 +414,7 @@ def _row_from_preview(row: CpkCphPreviewRow | dict[str, Any]) -> dict[str, Any]:
     hours_gps = _num(data.get("hours_gps"))
     km_diff, km_pct = _diff(kms_approved, _km_reference(km_client, kms_gps))
     hour_diff, hour_pct = _diff(hours_approved, hours_gps)
-    return {
+    normalized_row = {
         "plate": _normalize_plate(data.get("plate")),
         "cutoff_start_at": str(data.get("cutoff_start_at") or ""),
         "cutoff_end_at": str(data.get("cutoff_end_at") or ""),
@@ -187,7 +424,7 @@ def _row_from_preview(row: CpkCphPreviewRow | dict[str, Any]) -> dict[str, Any]:
         "database_name": data.get("database_name"),
         "source_provider": data.get("source_provider"),
         "provider_vehicle_id": data.get("provider_vehicle_id"),
-        "vocacional": bool(data.get("vocacional")),
+        "vocacional": vocacional,
         "km_client": km_client,
         "odo_start": _num(data.get("odo_start")),
         "odo_end": _num(data.get("odo_end")),
@@ -198,6 +435,10 @@ def _row_from_preview(row: CpkCphPreviewRow | dict[str, Any]) -> dict[str, Any]:
         "hours_ecm": hours_ecm,
         "hours_gps": hours_gps,
         "fuel_gallons": _num(data.get("fuel_gallons")),
+        "geotab_regression_count": regression_count,
+        "geotab_regression_total_km": regression_total_km,
+        "geotab_regression_total_hours": regression_total_hours,
+        "suggested_adjustment": max(0.0, suggested_adjustment),
         "km_adjustment": km_adjustment,
         "hour_adjustment": hour_adjustment,
         "kms_ecm_approved": kms_approved,
@@ -210,6 +451,7 @@ def _row_from_preview(row: CpkCphPreviewRow | dict[str, Any]) -> dict[str, Any]:
         "warnings": list(data.get("warnings") or []),
         "correction_note": (str(data.get("correction_note")).strip() if data.get("correction_note") else None),
     }
+    return _append_geotab_validation_warnings(normalized_row)
 
 
 _ROW_COLUMNS = (
@@ -217,7 +459,9 @@ _ROW_COLUMNS = (
     "cutoff_start_utc, cutoff_end_utc, client_name, database_name, "
     "source_provider, provider_vehicle_id, vocacional, km_client, odo_start, odo_end, "
     "horo_start, horo_end, kms_ecm_geotab, kms_gps, hours_ecm, hours_gps, "
-    "fuel_gallons, km_adjustment, hour_adjustment, kms_ecm_approved, "
+    "fuel_gallons, geotab_regression_count, geotab_regression_total_km, "
+    "geotab_regression_total_hours, suggested_adjustment, km_adjustment, "
+    "hour_adjustment, kms_ecm_approved, "
     "hours_ecm_approved, km_difference, km_difference_pct, hour_difference, "
     "hour_difference_pct, calculation_status, warnings, correction_note"
 )
@@ -240,7 +484,9 @@ def _insert_rows(
                     %(cutoff_start_utc)s, %(cutoff_end_utc)s, %(client_name)s, %(database_name)s,
                     %(source_provider)s, %(provider_vehicle_id)s, %(vocacional)s, %(km_client)s, %(odo_start)s, %(odo_end)s,
                     %(horo_start)s, %(horo_end)s, %(kms_ecm_geotab)s, %(kms_gps)s, %(hours_ecm)s, %(hours_gps)s,
-                    %(fuel_gallons)s, %(km_adjustment)s, %(hour_adjustment)s, %(kms_ecm_approved)s,
+                    %(fuel_gallons)s, %(geotab_regression_count)s, %(geotab_regression_total_km)s,
+                    %(geotab_regression_total_hours)s, %(suggested_adjustment)s,
+                    %(km_adjustment)s, %(hour_adjustment)s, %(kms_ecm_approved)s,
                     %(hours_ecm_approved)s, %(km_difference)s, %(km_difference_pct)s, %(hour_difference)s,
                     %(hour_difference_pct)s, %(calculation_status)s, %(warnings)s::jsonb, %(correction_note)s
                 );
@@ -290,6 +536,10 @@ def _row_record(row: dict[str, Any]) -> CpkCphReportRow:
         hours_ecm=row.get("hours_ecm"),
         hours_gps=row.get("hours_gps"),
         fuel_gallons=row.get("fuel_gallons"),
+        geotab_regression_count=int(row.get("geotab_regression_count") or 0),
+        geotab_regression_total_km=row.get("geotab_regression_total_km") or 0,
+        geotab_regression_total_hours=row.get("geotab_regression_total_hours") or 0,
+        suggested_adjustment=row.get("suggested_adjustment") or 0,
         km_adjustment=row.get("km_adjustment") or 0,
         hour_adjustment=row.get("hour_adjustment") or 0,
         kms_ecm_approved=row.get("kms_ecm_approved"),
@@ -411,42 +661,64 @@ def preview_report(payload: CpkCphPreviewRequest) -> CpkCphPreviewResponse:
         valid_idx += 1
         km_client = input_row.km_client
         kms_geotab = base.kms_ecm
-        km_diff, km_pct = _diff(kms_geotab, _km_reference(km_client, base.kms_gps))
-        hour_diff, hour_pct = _diff(base.hours_ecm, base.hours_gps)
-        out.append(
-            CpkCphPreviewRow(
-                row_number=index,
-                plate=base.plate,
-                cutoff_start_at=base.cutoff_start_at,
-                cutoff_end_at=base.cutoff_end_at,
-                cutoff_start_utc=base.cutoff_start_utc,
-                cutoff_end_utc=base.cutoff_end_utc,
-                client_name=base.client_name,
-                database_name=base.database_name,
-                source_provider=base.source_provider,
-                provider_vehicle_id=base.provider_vehicle_id,
-                km_client=km_client,
-                odo_start=base.odo_start,
-                odo_end=base.odo_end,
-                horo_start=base.horo_start,
-                horo_end=base.horo_end,
-                kms_ecm_geotab=kms_geotab,
-                kms_gps=base.kms_gps,
-                hours_ecm=base.hours_ecm,
-                hours_gps=base.hours_gps,
-                fuel_gallons=base.fuel_gallons,
-                km_adjustment=0,
-                hour_adjustment=0,
-                kms_ecm_approved=kms_geotab,
-                hours_ecm_approved=base.hours_ecm,
-                km_difference=km_diff,
-                km_difference_pct=km_pct,
-                hour_difference=hour_diff,
-                hour_difference_pct=hour_pct,
-                calculation_status=base.status,
-                warnings=list(base.warnings or []),
-            )
+        vocacional = bool(base.vocacional)
+        suggested_adjustment = (
+            base.geotab_regression_total_hours
+            if vocacional
+            else base.geotab_regression_total_km
         )
+        km_adjustment = 0.0 if vocacional else suggested_adjustment
+        hour_adjustment = suggested_adjustment if vocacional else 0.0
+        kms_approved = kms_geotab + km_adjustment if kms_geotab is not None else None
+        hours_approved = base.hours_ecm + hour_adjustment if base.hours_ecm is not None else None
+        km_diff, km_pct = _diff(kms_approved, _km_reference(km_client, base.kms_gps))
+        hour_diff, hour_pct = _diff(hours_approved, base.hours_gps)
+        correction_note = (
+            f"Ajuste sugerido automáticamente por {base.geotab_regression_count} "
+            "retroceso(s) Geotab detectado(s)."
+            if suggested_adjustment > 0
+            else None
+        )
+        preview_row = CpkCphPreviewRow(
+            row_number=index,
+            plate=base.plate,
+            cutoff_start_at=base.cutoff_start_at,
+            cutoff_end_at=base.cutoff_end_at,
+            cutoff_start_utc=base.cutoff_start_utc,
+            cutoff_end_utc=base.cutoff_end_utc,
+            client_name=base.client_name,
+            database_name=base.database_name,
+            source_provider=base.source_provider,
+            provider_vehicle_id=base.provider_vehicle_id,
+            vocacional=vocacional,
+            km_client=km_client,
+            odo_start=base.odo_start,
+            odo_end=base.odo_end,
+            horo_start=base.horo_start,
+            horo_end=base.horo_end,
+            kms_ecm_geotab=kms_geotab,
+            kms_gps=base.kms_gps,
+            hours_ecm=base.hours_ecm,
+            hours_gps=base.hours_gps,
+            fuel_gallons=base.fuel_gallons,
+            geotab_regression_count=base.geotab_regression_count,
+            geotab_regression_total_km=base.geotab_regression_total_km,
+            geotab_regression_total_hours=base.geotab_regression_total_hours,
+            suggested_adjustment=suggested_adjustment,
+            km_adjustment=km_adjustment,
+            hour_adjustment=hour_adjustment,
+            kms_ecm_approved=kms_approved,
+            hours_ecm_approved=hours_approved,
+            km_difference=km_diff,
+            km_difference_pct=km_pct,
+            hour_difference=hour_diff,
+            hour_difference_pct=hour_pct,
+            calculation_status=base.status,
+            warnings=list(base.warnings or []),
+            correction_note=correction_note,
+        )
+        validated_row = _row_from_preview(preview_row)
+        out.append(CpkCphPreviewRow(row_number=index, **validated_row))
     return CpkCphPreviewResponse(month=payload.month, customer_id=payload.customer_id, rows=out)
 
 
@@ -454,11 +726,16 @@ def save_report(payload: CpkCphReportSaveRequest, *, user_id: int | None) -> Cpk
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_cpk_tables(conn)
         _customer_name(conn, payload.customer_id)
+        api_cache: dict[Any, Any] = {}
+        enriched_rows: list[dict[str, Any]] = []
         for raw_row in payload.rows:
             row = _row_from_preview(raw_row)
+            row = _enrich_geotab_granular(row, month=payload.month, api_cache=api_cache)
             has_adjustment = bool(row.get("km_adjustment") or row.get("hour_adjustment"))
             if has_adjustment and not row.get("correction_note"):
                 raise CpkCphConflict("Cada ajuste de CPK/CPH requiere nota.")
+            _reject_geotab_regression(row)
+            enriched_rows.append(row)
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -479,7 +756,7 @@ def save_report(payload: CpkCphReportSaveRequest, *, user_id: int | None) -> Cpk
                 "DELETE FROM cpk_cph_report_rows WHERE report_id = %s;",
                 (report_id,),
             )
-            _insert_rows(conn, report_id=report_id, rows=payload.rows)
+            _insert_rows(conn, report_id=report_id, rows=enriched_rows)
         conn.commit()
         return get_report(report_id, conn=conn)
 
@@ -612,6 +889,9 @@ def update_row(report_id: int, row_id: int, payload: CpkCphRowPatchRequest, *, u
         next_data["km_difference_pct"] = km_pct
         next_data["hour_difference"] = hour_diff
         next_data["hour_difference_pct"] = hour_pct
+        next_data = _enrich_geotab_granular(next_data, month=summary.period_month)
+        next_data = _append_geotab_validation_warnings(next_data)
+        _reject_geotab_regression(next_data)
 
         with conn.cursor() as cur:
             cur.execute(
@@ -636,6 +916,10 @@ def update_row(report_id: int, row_id: int, payload: CpkCphRowPatchRequest, *, u
                     hours_ecm = %(hours_ecm)s,
                     hours_gps = %(hours_gps)s,
                     fuel_gallons = %(fuel_gallons)s,
+                    geotab_regression_count = %(geotab_regression_count)s,
+                    geotab_regression_total_km = %(geotab_regression_total_km)s,
+                    geotab_regression_total_hours = %(geotab_regression_total_hours)s,
+                    suggested_adjustment = %(suggested_adjustment)s,
                     km_adjustment = %(km_adjustment)s,
                     hour_adjustment = %(hour_adjustment)s,
                     kms_ecm_approved = %(kms_ecm_approved)s,

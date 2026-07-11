@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import time as dt_time, timedelta
 from typing import Any, Callable, Protocol
 
@@ -21,11 +24,14 @@ from app.schemas.vehicle import MonthlyPerformanceRecord
 from app.clients.frotcom_client import (
     FrotcomAuthError,
     FrotcomConfig,
+    FrotcomTripOdometers,
     find_vehicle_id_by_plate as find_frotcom_vehicle_id_by_plate,
     find_first_reading as find_frotcom_first_reading,
     find_last_reading as find_frotcom_last_reading,
     get_frotcom_month_range,
+    get_frotcom_month_range_utc_bounds,
     get_mileage_and_time as get_frotcom_mileage_and_time,
+    get_trip_based_odometers as get_frotcom_trip_odometers,
     hours_from_seconds,
     liters_to_gallons,
     list_vehicles as list_frotcom_vehicles,
@@ -422,6 +428,90 @@ _DIAG_ENGINE_HOURS = "DiagnosticEngineHoursId"
 _DIAG_TOTAL_FUEL = "DiagnosticTotalFuelUsedId"
 _DIAG_DEVICE_FUEL = "DiagnosticDeviceTotalFuelId"
 _LITERS_PER_GALLON = 3.7854118
+_GEOTAB_REGRESSION_WARNING_PREFIX = "Retroceso Geotab detectado"
+_GEOTAB_ACCUMULATED_REGRESSION_MARKER = "[acumulado]"
+_MAX_GEOTAB_REGRESSION_WARNINGS = 5
+
+
+@dataclass(frozen=True)
+class _GeotabRegressionAnalysis:
+    count: int
+    total: float
+    warnings: list[str]
+
+
+def _analyze_geotab_regressions(
+    readings: list[dict],
+    *,
+    label: str,
+    divisor: float,
+    unit: str,
+    initial_value: float | None = None,
+    initial_timestamp: str | None = None,
+) -> _GeotabRegressionAnalysis:
+    """Detecta y acumula cada caída entre StatusData consecutivos de Geotab."""
+    parsed: list[tuple[float, str]] = []
+    if initial_value is not None:
+        parsed.append((initial_value, initial_timestamp or "registro anterior"))
+    for reading in sorted(readings, key=lambda item: str(item.get("dateTime") or "")):
+        try:
+            value = float(reading.get("data"))
+        except (TypeError, ValueError):
+            continue
+        parsed.append((value, str(reading.get("dateTime") or "fecha desconocida")))
+
+    regressions: list[tuple[float, float, str, str, bool]] = []
+    total = 0.0
+    for index in range(1, len(parsed)):
+        before, before_at = parsed[index - 1]
+        after, after_at = parsed[index]
+        if after >= before:
+            continue
+        drop = (before - after) / divisor
+        total += drop
+        regressions.append((before, after, before_at, after_at))
+
+    detailed = regressions[:_MAX_GEOTAB_REGRESSION_WARNINGS]
+    warnings = [
+        (
+            f"{_GEOTAB_REGRESSION_WARNING_PREFIX} "
+            f"{_GEOTAB_ACCUMULATED_REGRESSION_MARKER} ({label}): "
+            f"{before / divisor:g} → {after / divisor:g} {unit} "
+            f"(caída de {(before - after) / divisor:g} {unit}) entre {before_at} y {after_at}."
+        )
+        for before, after, before_at, after_at in detailed
+    ]
+    hidden = regressions[len(detailed):]
+    if hidden:
+        warnings.append(
+            f"{_GEOTAB_REGRESSION_WARNING_PREFIX} {_GEOTAB_ACCUMULATED_REGRESSION_MARKER}: "
+            f"{len(hidden)} retroceso(s) adicional(es) no detallado(s)."
+        )
+    return _GeotabRegressionAnalysis(
+        count=len(regressions),
+        total=total,
+        warnings=warnings,
+    )
+
+
+def _geotab_regression_warnings(
+    readings: list[dict],
+    *,
+    label: str,
+    divisor: float,
+    unit: str,
+    initial_value: float | None = None,
+    initial_timestamp: str | None = None,
+) -> list[str]:
+    """Compara cada StatusData Geotab con el registro cronológico anterior."""
+    return _analyze_geotab_regressions(
+        readings,
+        label=label,
+        divisor=divisor,
+        unit=unit,
+        initial_value=initial_value,
+        initial_timestamp=initial_timestamp,
+    ).warnings
 
 
 def _geotab_first_value(readings: list[dict]) -> float | None:
@@ -503,6 +593,40 @@ def _calculate_geotab_vehicle_record(
             warnings=["No se encontraron datos de odometro ni horas de motor en Geotab para el mes solicitado."],
             provider_vehicle_id=device_id,
         )
+
+    previous_odo_raw = (
+        previous_record.odo_end * 1000.0
+        if previous_record and previous_record.odo_end is not None
+        else None
+    )
+    previous_horo_raw = (
+        previous_record.horo_end * 3600.0
+        if previous_record and previous_record.horo_end is not None
+        else None
+    )
+    previous_period = (
+        f"cierre {previous_record.period_month}"
+        if previous_record
+        else None
+    )
+    odometer_regressions = _analyze_geotab_regressions(
+        odo_readings,
+        label="odómetro",
+        divisor=1000.0,
+        unit="km",
+        initial_value=previous_odo_raw,
+        initial_timestamp=previous_period,
+    )
+    hourmeter_regressions = _analyze_geotab_regressions(
+        hours_readings,
+        label="horómetro",
+        divisor=3600.0,
+        unit="h",
+        initial_value=previous_horo_raw,
+        initial_timestamp=previous_period,
+    )
+    warnings.extend(odometer_regressions.warnings)
+    warnings.extend(hourmeter_regressions.warnings)
 
     # Odometer (meters → km)
     odo_end_raw = _geotab_last_value(odo_readings)
@@ -590,6 +714,14 @@ def _calculate_geotab_vehicle_record(
         hours_ecm=hours_ecm,
         hours_gps=hours_gps,
         fuel_gallons=fuel_gallons,
+        vocacional=target.vocacional,
+        geotab_regression_count=(
+            hourmeter_regressions.count
+            if target.vocacional
+            else odometer_regressions.count
+        ),
+        geotab_regression_total_km=odometer_regressions.total,
+        geotab_regression_total_hours=hourmeter_regressions.total,
         calculation_status=status,
         warnings=warnings,
     )
@@ -709,32 +841,126 @@ def _calculate_frotcom_vehicle_record(
     dt_iso: str,
     month_start,
     month_end,
+    range_start_utc,
+    range_end_utc,
     previous_record: MonthlyPerformanceRecord | None,
 ) -> MonthlyPerformanceRecord:
     warnings: list[str] = []
 
     summary = get_frotcom_mileage_and_time(config, vehicle_id, df_iso, dt_iso) or {}
-    first_reading = find_frotcom_first_reading(config, vehicle_id, month_start, month_end)
-    last_reading = find_frotcom_last_reading(config, vehicle_id, month_start, month_end)
 
-    if not summary and first_reading is None and last_reading is None:
+    def _summary_float(field: str) -> float | None:
+        try:
+            value = summary.get(field) if isinstance(summary, dict) else None
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    summary_can_kms = _summary_float("mileageCanKms")
+    summary_fuel_liters = _summary_float("totalFuelUsed")
+
+    try:
+        trip_odos = get_frotcom_trip_odometers(config, vehicle_id, range_start_utc, range_end_utc)
+    except FrotcomAuthError:
+        raise
+    except Exception as exc:
+        trip_odos = FrotcomTripOdometers(
+            odo_start=None,
+            odo_end=None,
+            reconstructed_start=False,
+            reconstruction_incomplete=False,
+            trip_count=0,
+            warnings=[f"No fue posible obtener los viajes de Frotcom: {exc}"],
+        )
+    warnings.extend(trip_odos.warnings)
+
+    if previous_record and previous_record.odo_end is not None:
+        odo_start = previous_record.odo_end
+    elif trip_odos.odo_start is not None:
+        odo_start = trip_odos.odo_start
+    else:
+        odo_start = None
+
+    odo_end = trip_odos.odo_end
+    if odo_end is None and odo_start is not None and summary_can_kms is not None:
+        odo_end = odo_start + max(0.0, summary_can_kms)
+        warnings.append(
+            "Odometro final reconstruido con mileageCanKms de Frotcom (viajes sin odometro)."
+        )
+
+    # Frotcom expone el horometro acumulado CAN como engineHours en
+    # vehicleCanInfo. El resumen mensual solo trae tiempo de conduccion GPS,
+    # por lo que no se debe usar como sustituto de horas ECM.
+    horo_start = previous_record.horo_end if previous_record and previous_record.horo_end is not None else None
+    horo_end = None
+
+    # vehicleCanInfo no esta habilitado para todos los tenants. Se consulta para
+    # completar odometros, combustible y el horometro CAN (engineHours).
+    first_reading = None
+    last_reading = None
+    needs_can_fuel = summary_fuel_liters is None
+    needs_first_can = odo_start is None or horo_start is None or needs_can_fuel
+    needs_last_can = odo_end is None or horo_end is None or needs_can_fuel
+    can_available = True
+    can_daily_cache: dict[str, list[dict[str, Any]]] = {}
+    if needs_first_can:
+        try:
+            first_reading = find_frotcom_first_reading(
+                config, vehicle_id, month_start, month_end, can_daily_cache
+            )
+        except FrotcomAuthError:
+            raise
+        except Exception as exc:
+            can_available = False
+            warnings.append(f"Lecturas CAN de Frotcom no disponibles; se usaron los resumenes mensuales: {exc}")
+    if needs_last_can and can_available:
+        try:
+            last_reading = find_frotcom_last_reading(
+                config, vehicle_id, month_start, month_end, can_daily_cache
+            )
+        except FrotcomAuthError:
+            raise
+        except Exception as exc:
+            warnings.append(f"Lecturas CAN de Frotcom no disponibles; se usaron los resumenes mensuales: {exc}")
+
+    if odo_start is None and first_reading is not None:
+        odo_start = first_reading.odometer
+        if odo_start is not None:
+            warnings.append("Odometro inicial tomado de la primera lectura CAN (viajes sin odometro).")
+    if odo_end is None and last_reading is not None:
+        odo_end = last_reading.odometer
+        if odo_end is not None:
+            warnings.append("Odometro final tomado de la ultima lectura CAN (viajes sin odometro).")
+
+    if horo_start is None and first_reading is not None:
+        horo_start = first_reading.engine_hours
+        if horo_start is not None:
+            warnings.append("Horometro inicial tomado de la primera lectura CAN de Frotcom.")
+    if last_reading is not None:
+        horo_end = last_reading.engine_hours
+        if horo_end is not None:
+            warnings.append("Horometro final tomado de la ultima lectura CAN de Frotcom.")
+
+    if odo_end is None and odo_start is not None and summary_can_kms is not None:
+        odo_end = odo_start + max(0.0, summary_can_kms)
+        warnings.append(
+            "Odometro final reconstruido con mileageCanKms de Frotcom (CAN no disponible)."
+        )
+
+    if not summary and trip_odos.odo_start is None and trip_odos.odo_end is None and first_reading is None and last_reading is None:
         return _build_status_record(
             target=target,
             month=month,
             status="no_data",
-            warnings=["No se encontraron datos de Frotcom para el mes solicitado."],
+            warnings=[*warnings, "No se encontraron datos de Frotcom para el mes solicitado."],
             provider_vehicle_id=vehicle_id,
         )
 
-    if previous_record and previous_record.odo_end is not None:
-        odo_start = previous_record.odo_end
-    else:
-        odo_start = first_reading.odometer if first_reading else None
-        if odo_start is not None:
-            warnings.append("Odometro inicial tomado de la primera lectura CAN del mes (sin registro previo).")
-
-    odo_end = last_reading.odometer if last_reading else None
-    kms_ecm = max(0.0, odo_end - odo_start) if odo_start is not None and odo_end is not None else None
+    kms_ecm = (
+        max(0.0, odo_end - odo_start)
+        if odo_start is not None and odo_end is not None
+        else summary_can_kms
+    )
 
     kms_gps_raw = summary.get("mileageGpsKms") if isinstance(summary, dict) else None
     try:
@@ -743,18 +969,27 @@ def _calculate_frotcom_vehicle_record(
         kms_gps = None
 
     hours_gps = hours_from_seconds(summary.get("drivingTimeSeconds") if isinstance(summary, dict) else None)
+    hours_ecm = (
+        max(0.0, horo_end - horo_start)
+        if horo_start is not None and horo_end is not None
+        else None
+    )
+    if hours_ecm is None:
+        warnings.append("No se pudo determinar el horometro CAN de Frotcom para el mes.")
 
     fuel_start = first_reading.total_fuel_used if first_reading else None
     fuel_end = last_reading.total_fuel_used if last_reading else None
-    fuel_gallons: float | None = None
-    if fuel_start is not None and fuel_end is not None and (fuel_end - fuel_start) >= 0:
+    if summary_fuel_liters is not None:
+        fuel_gallons = liters_to_gallons(max(0.0, summary_fuel_liters))
+    elif fuel_start is not None and fuel_end is not None and (fuel_end - fuel_start) >= 0:
         fuel_gallons = liters_to_gallons(max(0.0, fuel_end - fuel_start))
     else:
+        fuel_gallons = None
         warnings.append("No se pudo determinar el consumo de combustible en Frotcom para el mes.")
 
     all_present = all(
         value is not None
-        for value in (odo_start, odo_end, fuel_gallons, kms_gps, hours_gps)
+        for value in (odo_start, odo_end, horo_start, horo_end, fuel_gallons, kms_gps, hours_gps)
     )
     status = "calculated" if all_present else "partial"
 
@@ -771,11 +1006,11 @@ def _calculate_frotcom_vehicle_record(
         period_month=month,
         odo_start=odo_start,
         odo_end=odo_end,
-        horo_start=None,
-        horo_end=None,
+        horo_start=horo_start,
+        horo_end=horo_end,
         kms_ecm=kms_ecm,
         kms_gps=kms_gps,
-        hours_ecm=None,
+        hours_ecm=hours_ecm,
         hours_gps=hours_gps,
         fuel_gallons=fuel_gallons,
         calculation_status=status,
@@ -810,9 +1045,11 @@ class FrotcomMonthlyPerformanceProvider:
             return ProviderCalculationResult(records=[], binding_updates=[])
 
         df_iso, dt_iso, month_start, month_end = get_frotcom_month_range(year, month_number)
+        range_start_utc, range_end_utc = get_frotcom_month_range_utc_bounds(year, month_number)
 
         rows: list[MonthlyPerformanceRecord] = []
         binding_updates: list[BindingUpsert] = []
+        prepared_targets: list[tuple[PerformanceTarget, FrotcomConfig, str]] = []
 
         vehicles_cache: dict[tuple[str, str, str], list[dict]] = {}
         vehicles_list_failures: dict[tuple[str, str, str], str] = {}
@@ -940,43 +1177,104 @@ class FrotcomMonthlyPerformanceProvider:
                 )
             )
 
+            prepared_targets.append((target, config, vehicle_id))
+
+        try:
+            configured_workers = int(os.getenv("FROTCOM_MAX_WORKERS", "4"))
+        except ValueError:
+            configured_workers = 4
+        max_workers = max(1, min(configured_workers, 8, len(prepared_targets) or 1))
+
+        def _calculate_prepared(
+            item: tuple[PerformanceTarget, FrotcomConfig, str],
+        ) -> MonthlyPerformanceRecord:
+            target, config, vehicle_id = item
+            return _calculate_frotcom_vehicle_record(
+                target=target,
+                config=config,
+                month=month,
+                vehicle_id=vehicle_id,
+                df_iso=df_iso,
+                dt_iso=dt_iso,
+                month_start=month_start,
+                month_end=month_end,
+                range_start_utc=range_start_utc,
+                range_end_utc=range_end_utc,
+                previous_record=previous_records.get((target.customer_database_id, target.plate)),
+            )
+
+        # Ejecutamos una placa de cada juego de credenciales como preflight. Si
+        # la autenticacion falla, evitamos disparar el resto del grupo. Las
+        # placas restantes si se procesan concurrentemente.
+        prepared_by_credentials: dict[
+            tuple[str, str, str], list[tuple[PerformanceTarget, FrotcomConfig, str]]
+        ] = {}
+        for item in prepared_targets:
+            prepared_by_credentials.setdefault(item[1].cache_key(), []).append(item)
+
+        parallel_targets: list[tuple[PerformanceTarget, FrotcomConfig, str]] = []
+        for credential_targets in prepared_by_credentials.values():
+            first_item, *remaining_items = credential_targets
+            first_target, _first_config, first_vehicle_id = first_item
             try:
-                record = _calculate_frotcom_vehicle_record(
-                    target=target,
-                    config=config,
-                    month=month,
-                    vehicle_id=vehicle_id,
-                    df_iso=df_iso,
-                    dt_iso=dt_iso,
-                    month_start=month_start,
-                    month_end=month_end,
-                    previous_record=previous_records.get((target.customer_database_id, target.plate)),
-                )
-                rows.append(record)
+                rows.append(_calculate_prepared(first_item))
+                parallel_targets.extend(remaining_items)
+                _notify_target_done()
             except FrotcomAuthError as exc:
-                message = str(exc)
-                vehicles_list_failures[cache_key] = message
-                rows.append(
-                    _build_status_record(
-                        target=target,
-                        month=month,
-                        status="error",
-                        provider_vehicle_id=vehicle_id,
-                        warnings=[message],
+                for failed_target, _failed_config, failed_vehicle_id in credential_targets:
+                    rows.append(
+                        _build_status_record(
+                            target=failed_target,
+                            month=month,
+                            status="error",
+                            provider_vehicle_id=failed_vehicle_id,
+                            warnings=[str(exc)],
+                        )
                     )
-                )
+                    _notify_target_done()
             except Exception as exc:
                 rows.append(
                     _build_status_record(
-                        target=target,
+                        target=first_target,
                         month=month,
                         status="error",
-                        provider_vehicle_id=vehicle_id,
+                        provider_vehicle_id=first_vehicle_id,
                         warnings=[f"Error calculando la placa en Frotcom: {exc}"],
                     )
                 )
+                parallel_targets.extend(remaining_items)
+                _notify_target_done()
 
-            _notify_target_done()
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="frotcom") as executor:
+            futures = {
+                executor.submit(_calculate_prepared, item): item
+                for item in parallel_targets
+            }
+            for future in as_completed(futures):
+                target, config, vehicle_id = futures[future]
+                try:
+                    rows.append(future.result())
+                except FrotcomAuthError as exc:
+                    rows.append(
+                        _build_status_record(
+                            target=target,
+                            month=month,
+                            status="error",
+                            provider_vehicle_id=vehicle_id,
+                            warnings=[str(exc)],
+                        )
+                    )
+                except Exception as exc:
+                    rows.append(
+                        _build_status_record(
+                            target=target,
+                            month=month,
+                            status="error",
+                            provider_vehicle_id=vehicle_id,
+                            warnings=[f"Error calculando la placa en Frotcom: {exc}"],
+                        )
+                    )
+                _notify_target_done()
 
         return ProviderCalculationResult(records=rows, binding_updates=binding_updates)
 

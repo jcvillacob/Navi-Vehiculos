@@ -213,6 +213,7 @@ class VehicleAssignmentSummary(BaseModel):
     provider_vehicle_id, access_url, fechas internas, etc.)."""
 
     plate: str = Field(..., description="Placa del vehiculo")
+    customer_id: int | None = Field(default=None, description="ID local del cliente")
     customer_database_id: int | None = Field(default=None, description="ID local de la database")
     vin: str | None = Field(default=None, description="VIN asociado")
     technical_number: str = Field(..., description="Numero tecnico de motor")
@@ -667,6 +668,9 @@ class MonthlyPerformanceRecord(BaseModel):
     hours_ecm: float | None = Field(default=None, description="Horas ECM")
     hours_gps: float | None = Field(default=None, description="Horas GPS")
     fuel_gallons: float | None = Field(default=None, description="Combustible consumido en galones")
+    geotab_regression_count: int = Field(default=0, ge=0, description="Retrocesos Geotab detectados")
+    geotab_regression_total_km: float = Field(default=0, ge=0, description="Total acumulado de retrocesos de odometro")
+    geotab_regression_total_hours: float = Field(default=0, ge=0, description="Total acumulado de retrocesos de horometro")
     vocacional: bool = Field(default=False, description="True si el vehiculo es de uso vocacional (se mide por horas)")
     calculation_status: str = Field(
         ...,
@@ -751,6 +755,7 @@ class CpkCutoffPreviewRow(BaseModel):
     database_name: str | None = Field(default=None, description="Database resuelta")
     source_provider: str | None = Field(default=None, description="Proveedor resuelto")
     provider_vehicle_id: str | None = Field(default=None, description="ID del vehiculo en el proveedor")
+    vocacional: bool = False
     status: str = Field(..., description="valid | invalid_date | invalid_range | not_found | client_not_selected | not_geotab | error")
     warnings: list[str] = Field(default_factory=list)
     odo_start: float | None = None
@@ -762,6 +767,9 @@ class CpkCutoffPreviewRow(BaseModel):
     hours_ecm: float | None = None
     hours_gps: float | None = None
     fuel_gallons: float | None = None
+    geotab_regression_count: int = 0
+    geotab_regression_total_km: float = 0
+    geotab_regression_total_hours: float = 0
 
 
 class CpkCutoffPreviewResponse(BaseModel):

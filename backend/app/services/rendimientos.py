@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import re
 from typing import Any, Callable
@@ -9,7 +10,12 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from app.clients.geotab_client import find_device_by_plate, get_authenticated_client
+from app.clients.geotab_client import (
+    find_device_by_plate,
+    get_authenticated_client,
+    get_geotab_month_range,
+    get_status_data_for_month,
+)
 from app.schemas.vehicle import (
     CpkCutoffPreviewRequest,
     CpkCutoffPreviewResponse,
@@ -21,7 +27,13 @@ from app.schemas.vehicle import (
 )
 from app.core.config import load_geotab_config
 from app.services.motor_catalog import _database_dsn, _ensure_motor_tables
-from app.services.performance_providers import _calculate_geotab_vehicle_record, get_monthly_performance_provider
+from app.services.performance_providers import (
+    _DIAG_ENGINE_HOURS,
+    _DIAG_ODOMETER,
+    _analyze_geotab_regressions,
+    _calculate_geotab_vehicle_record,
+    get_monthly_performance_provider,
+)
 from app.services.performance_types import BindingSnapshot, PerformanceTarget
 from app.services.provider_registry import infer_provider_key, supports_monthly_performance
 
@@ -113,6 +125,9 @@ def _run_performance_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 hours_ecm DOUBLE PRECISION NULL,
                 hours_gps DOUBLE PRECISION NULL,
                 fuel_gallons DOUBLE PRECISION NULL,
+                geotab_regression_count INTEGER NOT NULL DEFAULT 0,
+                geotab_regression_total_km DOUBLE PRECISION NOT NULL DEFAULT 0,
+                geotab_regression_total_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
                 calculation_status TEXT NOT NULL DEFAULT 'partial',
                 warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
                 calculated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -127,6 +142,9 @@ def _run_performance_tables_ddl_inner(conn: psycopg.Connection) -> None:
             ADD COLUMN IF NOT EXISTS is_adhoc BOOLEAN NOT NULL DEFAULT FALSE;
             """
         )
+        cur.execute("ALTER TABLE monthly_vehicle_performance ADD COLUMN IF NOT EXISTS geotab_regression_count INTEGER NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE monthly_vehicle_performance ADD COLUMN IF NOT EXISTS geotab_regression_total_km DOUBLE PRECISION NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE monthly_vehicle_performance ADD COLUMN IF NOT EXISTS geotab_regression_total_hours DOUBLE PRECISION NOT NULL DEFAULT 0;")
 
 
 def _normalize_month(value: str) -> tuple[str, int, int]:
@@ -232,6 +250,7 @@ def _fetch_adhoc_targets(
             SELECT
                 a.plate,
                 a.technical_number,
+                a.vocacional,
                 mc.engine_name
             FROM vehicle_motor_assignments a
             LEFT JOIN motor_catalog mc
@@ -256,6 +275,7 @@ def _fetch_adhoc_targets(
             username=geotab_username,
             password=geotab_password,
             provider_config={},
+            vocacional=bool(row.get("vocacional")),
         )
         for row in rows
     ]
@@ -284,6 +304,9 @@ def _build_record(row: dict[str, Any]) -> MonthlyPerformanceRecord:
         hours_ecm=row.get("hours_ecm"),
         hours_gps=row.get("hours_gps"),
         fuel_gallons=row.get("fuel_gallons"),
+        geotab_regression_count=int(row.get("geotab_regression_count") or 0),
+        geotab_regression_total_km=float(row.get("geotab_regression_total_km") or 0),
+        geotab_regression_total_hours=float(row.get("geotab_regression_total_hours") or 0),
         vocacional=bool(row.get("vocacional")),
         calculation_status=str(row["calculation_status"]),
         warnings=list(row.get("warnings") or []),
@@ -332,6 +355,7 @@ def _fetch_targets(
                 cd.database_name,
                 a.plate,
                 a.technical_number,
+                a.vocacional,
                 mc.engine_name,
                 cd.username,
                 cd.password,
@@ -375,6 +399,7 @@ def _fetch_targets(
                 username=str(row.get("username") or "").strip(),
                 password=str(row.get("password") or "").strip(),
                 provider_config=row.get("provider_config") if isinstance(row.get("provider_config"), dict) else {},
+                vocacional=bool(row.get("vocacional")),
             )
         )
     return targets
@@ -462,6 +487,7 @@ def _fetch_cpk_targets_by_plate(
                 cd.database_name,
                 a.plate,
                 a.technical_number,
+                a.vocacional,
                 mc.engine_name,
                 cd.username,
                 cd.password,
@@ -502,6 +528,7 @@ def _fetch_cpk_targets_by_plate(
             username=str(row.get("username") or "").strip(),
             password=str(row.get("password") or "").strip(),
             provider_config=row.get("provider_config") if isinstance(row.get("provider_config"), dict) else {},
+            vocacional=bool(row.get("vocacional")),
         )
     return targets
 
@@ -648,6 +675,7 @@ def preview_cpk_cutoffs(payload: CpkCutoffPreviewRequest) -> CpkCutoffPreviewRes
                     **base,
                     **target_info,
                     provider_vehicle_id=device_id,
+                    vocacional=target.vocacional,
                     status=status,
                     warnings=warnings,
                     odo_start=record.odo_start,
@@ -659,6 +687,9 @@ def preview_cpk_cutoffs(payload: CpkCutoffPreviewRequest) -> CpkCutoffPreviewRes
                     hours_ecm=record.hours_ecm,
                     hours_gps=record.hours_gps,
                     fuel_gallons=record.fuel_gallons,
+                    geotab_regression_count=record.geotab_regression_count,
+                    geotab_regression_total_km=record.geotab_regression_total_km,
+                    geotab_regression_total_hours=record.geotab_regression_total_hours,
                 )
             )
         except Exception as exc:
@@ -672,6 +703,101 @@ def preview_cpk_cutoffs(payload: CpkCutoffPreviewRequest) -> CpkCutoffPreviewRes
             )
 
     return CpkCutoffPreviewResponse(month=payload.month, rows=response_rows)
+
+
+@dataclass(frozen=True)
+class GeotabGranularRegressions:
+    odometer_count: int
+    odometer_total_km: float
+    hourmeter_count: int
+    hourmeter_total_hours: float
+    warnings: list[str]
+
+
+def lookup_geotab_granular_regressions(
+    *,
+    plate: str,
+    month: str,
+    cutoff_start_utc: str | None = None,
+    cutoff_end_utc: str | None = None,
+    provider_vehicle_id: str | None = None,
+    odo_start: float | None = None,
+    horo_start: float | None = None,
+    api_cache: dict[tuple[str, str, str], Any] | None = None,
+) -> GeotabGranularRegressions:
+    """Consulta el StatusData granular de Geotab y acumula los retrocesos de una placa.
+
+    Se usa on-demand desde CPK/CPH cuando la diferencia relevante supera el
+    umbral de revisión y la fila no trae métricas de retroceso (por ejemplo,
+    rendimientos mensuales calculados antes de que existiera la métrica).
+    La ventana es el corte por tanqueo si la fila lo tiene; si no, el mes completo.
+    """
+    normalized_plate = _normalize_cpk_plate(plate)
+    if not normalized_plate:
+        raise ValueError("Placa inválida para la verificación granular.")
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_performance_tables(conn)
+        targets = _fetch_cpk_targets_by_plate(conn, plates=[normalized_plate])
+        target = targets.get(normalized_plate)
+        bindings = _load_binding_map(
+            conn,
+            [target] if target is not None and target.customer_database_id else [],
+        )
+
+    if target is None or target.provider_key != "geotab":
+        raise ValueError("La placa no pertenece a una database Geotab.")
+    if not target.username or not target.password or not target.database_name:
+        raise ValueError("La database Geotab no tiene credenciales completas.")
+
+    if cutoff_start_utc and cutoff_end_utc:
+        from_date, to_date = cutoff_start_utc, cutoff_end_utc
+    else:
+        year_text, month_text = month.split("-", 1)
+        from_date, to_date = get_geotab_month_range(int(year_text), int(month_text))
+
+    api_key = (target.username, target.password, target.database_name)
+    api = api_cache.get(api_key) if api_cache is not None else None
+    if api is None:
+        api = get_authenticated_client(target.username, target.password, target.database_name)
+        if api_cache is not None:
+            api_cache[api_key] = api
+
+    device_id = str(provider_vehicle_id or "").strip()
+    if not device_id:
+        binding = bindings.get((target.provider_key, target.customer_database_id, target.plate))
+        device_id = str(binding.provider_vehicle_id or "").strip() if binding and binding.is_manual else ""
+    if not device_id:
+        device = find_device_by_plate(api, target.plate, plate_prefix=target.provider_config.get("plate_prefix"))
+        device_id = str(device.get("id") or "").strip() if device else ""
+    if not device_id:
+        raise ValueError("No fue posible resolver el dispositivo en Geotab para esta placa.")
+
+    odo_readings = get_status_data_for_month(api, device_id, _DIAG_ODOMETER, from_date, to_date)
+    hours_readings = get_status_data_for_month(api, device_id, _DIAG_ENGINE_HOURS, from_date, to_date)
+    odometer = _analyze_geotab_regressions(
+        odo_readings,
+        label="odómetro",
+        divisor=1000.0,
+        unit="km",
+        initial_value=odo_start * 1000.0 if odo_start is not None else None,
+        initial_timestamp="lectura inicial del periodo" if odo_start is not None else None,
+    )
+    hourmeter = _analyze_geotab_regressions(
+        hours_readings,
+        label="horómetro",
+        divisor=3600.0,
+        unit="h",
+        initial_value=horo_start * 3600.0 if horo_start is not None else None,
+        initial_timestamp="lectura inicial del periodo" if horo_start is not None else None,
+    )
+    return GeotabGranularRegressions(
+        odometer_count=odometer.count,
+        odometer_total_km=odometer.total,
+        hourmeter_count=hourmeter.count,
+        hourmeter_total_hours=hourmeter.total,
+        warnings=[*odometer.warnings, *hourmeter.warnings],
+    )
 
 
 def _load_existing_records(
@@ -706,6 +832,9 @@ def _load_existing_records(
                 mp.hours_ecm,
                 mp.hours_gps,
                 mp.fuel_gallons,
+                mp.geotab_regression_count,
+                mp.geotab_regression_total_km,
+                mp.geotab_regression_total_hours,
                 mp.calculation_status,
                 mp.warnings,
                 mp.calculated_at
@@ -839,6 +968,9 @@ def _upsert_monthly_record(
                 hours_ecm,
                 hours_gps,
                 fuel_gallons,
+                geotab_regression_count,
+                geotab_regression_total_km,
+                geotab_regression_total_hours,
                 calculation_status,
                 warnings,
                 is_adhoc,
@@ -846,7 +978,8 @@ def _upsert_monthly_record(
                 updated_at
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, NOW(), NOW()
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s::jsonb, %s, NOW(), NOW()
             )
             ON CONFLICT (customer_database_id, plate, period_month)
             DO UPDATE SET
@@ -864,6 +997,9 @@ def _upsert_monthly_record(
                 hours_ecm = EXCLUDED.hours_ecm,
                 hours_gps = EXCLUDED.hours_gps,
                 fuel_gallons = EXCLUDED.fuel_gallons,
+                geotab_regression_count = EXCLUDED.geotab_regression_count,
+                geotab_regression_total_km = EXCLUDED.geotab_regression_total_km,
+                geotab_regression_total_hours = EXCLUDED.geotab_regression_total_hours,
                 calculation_status = EXCLUDED.calculation_status,
                 warnings = EXCLUDED.warnings,
                 is_adhoc = EXCLUDED.is_adhoc,
@@ -889,6 +1025,9 @@ def _upsert_monthly_record(
                 hours_ecm,
                 hours_gps,
                 fuel_gallons,
+                geotab_regression_count,
+                geotab_regression_total_km,
+                geotab_regression_total_hours,
                 calculation_status,
                 warnings,
                 is_adhoc,
@@ -912,6 +1051,9 @@ def _upsert_monthly_record(
                 record.hours_ecm,
                 record.hours_gps,
                 record.fuel_gallons,
+                record.geotab_regression_count,
+                record.geotab_regression_total_km,
+                record.geotab_regression_total_hours,
                 record.calculation_status,
                 Jsonb(record.warnings),
                 record.is_adhoc,
@@ -1178,6 +1320,9 @@ def list_monthly_performance(
                         mp.hours_ecm,
                         mp.hours_gps,
                         mp.fuel_gallons,
+                        mp.geotab_regression_count,
+                        mp.geotab_regression_total_km,
+                        mp.geotab_regression_total_hours,
                         mp.calculation_status,
                         mp.warnings,
                         mp.is_adhoc,
@@ -1231,6 +1376,9 @@ def list_monthly_performance(
                         SUM(mp.hours_ecm) AS hours_ecm,
                         SUM(mp.hours_gps) AS hours_gps,
                         SUM(mp.fuel_gallons) AS fuel_gallons,
+                        SUM(mp.geotab_regression_count) AS geotab_regression_count,
+                        SUM(mp.geotab_regression_total_km) AS geotab_regression_total_km,
+                        SUM(mp.geotab_regression_total_hours) AS geotab_regression_total_hours,
                         CASE
                             WHEN BOOL_OR(mp.calculation_status = 'error') THEN 'error'
                             WHEN BOOL_OR(mp.calculation_status = 'unbound') THEN 'unbound'
@@ -1238,6 +1386,7 @@ def list_monthly_performance(
                             WHEN BOOL_OR(mp.calculation_status = 'partial') THEN 'partial'
                             ELSE 'calculated'
                         END AS calculation_status,
+                        jsonb_path_query_array(jsonb_agg(mp.warnings), '$[*][*]') AS warnings,
                         MAX(mp.calculated_at) AS calculated_at,
                         BOOL_OR(mp.is_adhoc) AS is_adhoc,
                         a.vin,
