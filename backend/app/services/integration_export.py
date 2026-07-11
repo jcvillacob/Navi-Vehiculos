@@ -6,13 +6,21 @@ updated_at) que la otra app replica localmente.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
 
 from app.core.crypto import decrypt_secret
+from app.core.db import db_conn
+from app.services.availability_store import (
+    _SOURCE_CLOUDFLEET,
+    _SYSTEM_CUSTOMER_NAME,
+    _ensure_availability_table,
+)
 from app.services.motor_catalog import _database_dsn, _ensure_motor_tables
 from app.services.provider_registry import public_provider_config
 from app.services.rendimientos import _ensure_performance_tables
@@ -55,6 +63,22 @@ def _iso(value: Any) -> str | None:
             value = value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc).isoformat()
     return None
+
+
+def _float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return float(value)
+    return float(value)
+
+
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def _validate_month(value: str | None, name: str) -> None:
+    if not value or not _MONTH_RE.match(str(value)):
+        raise ValueError(f"El parametro '{name}' debe tener formato YYYY-MM.")
 
 
 def _export_customers(
@@ -409,4 +433,108 @@ def export_customers(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "since": since_dt.isoformat() if since_dt else None,
         "customers": customers,
+    }
+
+
+def export_availability(
+    *,
+    month_from: str,
+    month_to: str,
+    since: str | None = None,
+    limit: int = 500,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """
+    Exporta filas de disponibilidad mensual + MTTR para Portal Clientes.
+
+    Filtros:
+      - period_month en [month_from, month_to] (formato YYYY-MM).
+      - source = 'cloudfleet'.
+      - Excluye placas asignadas al customer interno '__navitrans_system__'.
+      - since opcional sobre last_calculated_at (incremental).
+    """
+    _validate_month(month_from, "month_from")
+    _validate_month(month_to, "month_to")
+    since_dt = _parse_since(since)
+    bounded_limit = max(1, min(int(limit), 2000))
+    bounded_offset = max(0, int(offset))
+
+    _ensure_availability_table()
+
+    where = [
+        "mva.period_month BETWEEN %s AND %s",
+        "mva.source = %s",
+        "(c.name IS NULL OR c.name <> %s)",
+    ]
+    params: list[Any] = [month_from, month_to, _SOURCE_CLOUDFLEET, _SYSTEM_CUSTOMER_NAME]
+    if since_dt is not None:
+        where.append("mva.last_calculated_at > %s")
+        params.append(since_dt)
+    where_sql = " AND ".join(where)
+
+    with db_conn(row_factory=dict_row) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS total
+                FROM monthly_vehicle_availability mva
+                JOIN vehicle_motor_assignments a ON a.plate = mva.plate
+                LEFT JOIN customers c ON c.id = a.customer_id
+                WHERE {where_sql};
+                """,
+                params,
+            )
+            total = int(cur.fetchone()["total"])
+
+            cur.execute(
+                f"""
+                SELECT
+                    mva.plate,
+                    mva.period_month,
+                    mva.calculation_status,
+                    mva.project_availability_pct,
+                    mva.h_total,
+                    mva.h_no_disp,
+                    mva.orders_considered,
+                    mva.mttr_hours,
+                    mva.orders_closed,
+                    mva.last_calculated_at,
+                    a.customer_id,
+                    c.name AS customer_name
+                FROM monthly_vehicle_availability mva
+                JOIN vehicle_motor_assignments a ON a.plate = mva.plate
+                LEFT JOIN customers c ON c.id = a.customer_id
+                WHERE {where_sql}
+                ORDER BY mva.period_month ASC, mva.plate ASC
+                LIMIT %s OFFSET %s;
+                """,
+                [*params, bounded_limit, bounded_offset],
+            )
+            rows = cur.fetchall()
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "month_from": month_from,
+        "month_to": month_to,
+        "since": since_dt.isoformat() if since_dt else None,
+        "total": total,
+        "limit": bounded_limit,
+        "offset": bounded_offset,
+        "rows": [
+            {
+                "plate": row["plate"],
+                "period_month": row["period_month"],
+                "calculation_status": row["calculation_status"],
+                "project_availability_pct": _float(row["project_availability_pct"]),
+                "h_total": _float(row["h_total"]),
+                "h_no_disp": _float(row["h_no_disp"]),
+                "orders_considered": int(row["orders_considered"]),
+                "mttr_hours": _float(row["mttr_hours"]),
+                "orders_closed": int(row["orders_closed"]),
+                "customer_id": int(row["customer_id"]) if row["customer_id"] is not None else None,
+                "customer_name": row["customer_name"],
+                "last_calculated_at": _iso(row["last_calculated_at"]),
+            }
+            for row in rows
+        ],
     }

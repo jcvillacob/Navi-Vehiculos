@@ -20,7 +20,7 @@ from app.schemas.vehicle import (
     GeotabRuleGroupCreateRequest,
     GeotabRuleInspection,
 )
-from app.services import integration_export, motor_catalog, rendimientos
+from app.services import availability_store, integration_export, motor_catalog, rendimientos
 
 
 def _connect():
@@ -705,3 +705,190 @@ async def test_vehicles_pagination(client, vehicle, monkeypatch):
     assert payload["vehicles"][0]["plate"] == "ABC123"
     assert payload["vehicles"][0]["marketing_model_name"] == "L9 370"
     assert payload["vehicles"][0]["service_model_name"] == "L9 CM2450 L126B"
+
+
+# ── Endpoint /integration/availability ────────────────────────────────
+
+
+@pytest.fixture
+def availability_data(motor_tables):
+    """Cliente real + cliente sistema con placas y filas de disponibilidad."""
+    availability_store._ensure_availability_table()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE monthly_vehicle_availability RESTART IDENTITY CASCADE;")
+
+            cur.execute(
+                "INSERT INTO customers (name) VALUES ('Cliente Avail') RETURNING id;"
+            )
+            normal_customer_id = int(cur.fetchone()["id"])
+            cur.execute(
+                "INSERT INTO customers (name) VALUES (%s) RETURNING id;",
+                (availability_store._SYSTEM_CUSTOMER_NAME,),
+            )
+            system_customer_id = int(cur.fetchone()["id"])
+
+            cur.execute(
+                """
+                INSERT INTO customer_databases
+                    (customer_id, database_name, username, password, connection_type)
+                VALUES (%s, 'db_avail', 'avail@navi.co', 'secret', 'geotab')
+                RETURNING id;
+                """,
+                (normal_customer_id,),
+            )
+            normal_database_id = int(cur.fetchone()["id"])
+            cur.execute(
+                """
+                INSERT INTO customer_databases
+                    (customer_id, database_name, username, password, connection_type)
+                VALUES (%s, 'db_system', 'system@navi.co', 'secret', 'geotab')
+                RETURNING id;
+                """,
+                (system_customer_id,),
+            )
+            system_database_id = int(cur.fetchone()["id"])
+
+            cur.execute(
+                """
+                INSERT INTO vehicle_motor_assignments
+                    (plate, technical_number, customer_id, customer_database_id)
+                VALUES
+                    ('AVL001', 'TEC-A1', %s, %s),
+                    ('AVL002', 'TEC-A2', %s, %s),
+                    ('SYS001', 'TEC-S1', %s, %s);
+                """,
+                (
+                    normal_customer_id,
+                    normal_database_id,
+                    normal_customer_id,
+                    normal_database_id,
+                    system_customer_id,
+                    system_database_id,
+                ),
+            )
+
+            cur.execute(
+                """
+                INSERT INTO monthly_vehicle_availability
+                    (plate, period_month, calculation_status,
+                     project_availability_pct, h_total, h_no_disp,
+                     orders_considered, mttr_hours, orders_closed,
+                     last_calculated_at, source)
+                VALUES
+                    ('AVL001', '2026-01', 'calculated',
+                     98.5, 744.0, 11.16, 3, 3.72, 3,
+                     '2026-01-15T10:00:00+00:00', 'cloudfleet'),
+                    ('AVL002', '2026-02', 'no_orders',
+                     100.0, 672.0, 0.0, 0, NULL, 0,
+                     '2026-02-20T10:00:00+00:00', 'cloudfleet'),
+                    ('SYS001', '2026-01', 'calculated',
+                     95.0, 744.0, 37.2, 5, 7.44, 5,
+                     '2026-01-10T10:00:00+00:00', 'cloudfleet');
+                """
+            )
+        conn.commit()
+
+    return {
+        "normal_customer_id": normal_customer_id,
+        "system_customer_id": system_customer_id,
+        "normal_database_id": normal_database_id,
+        "system_database_id": system_database_id,
+    }
+
+
+async def test_availability_shape_and_excludes_system(client, availability_data, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+
+    response = await client.get(
+        "/api/v1/integration/availability",
+        headers=headers,
+        params={"month_from": "2026-01", "month_to": "2026-02"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["month_from"] == "2026-01"
+    assert payload["month_to"] == "2026-02"
+    assert payload["since"] is None
+    assert payload["limit"] == 500
+    assert payload["offset"] == 0
+    assert payload["total"] == 2
+    assert len(payload["rows"]) == 2
+
+    plates = {r["plate"] for r in payload["rows"]}
+    assert plates == {"AVL001", "AVL002"}
+    assert "SYS001" not in plates
+
+    row = next(r for r in payload["rows"] if r["plate"] == "AVL001")
+    assert row["period_month"] == "2026-01"
+    assert row["calculation_status"] == "calculated"
+    assert row["project_availability_pct"] == 98.5
+    assert row["h_total"] == 744.0
+    assert row["h_no_disp"] == 11.16
+    assert row["orders_considered"] == 3
+    assert row["mttr_hours"] == 3.72
+    assert row["orders_closed"] == 3
+    assert row["customer_id"] == availability_data["normal_customer_id"]
+    assert row["customer_name"] == "Cliente Avail"
+    assert row["last_calculated_at"]
+
+
+async def test_availability_filter_by_month(client, availability_data, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+
+    response = await client.get(
+        "/api/v1/integration/availability",
+        headers=headers,
+        params={"month_from": "2026-02", "month_to": "2026-02"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["total"] == 1
+    assert len(payload["rows"]) == 1
+    assert payload["rows"][0]["plate"] == "AVL002"
+    assert payload["rows"][0]["period_month"] == "2026-02"
+
+
+async def test_availability_incremental_since(client, availability_data, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+
+    response = await client.get(
+        "/api/v1/integration/availability",
+        headers=headers,
+        params={
+            "month_from": "2026-01",
+            "month_to": "2026-02",
+            "since": "2026-01-16T00:00:00Z",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["total"] == 1
+    assert len(payload["rows"]) == 1
+    assert payload["rows"][0]["plate"] == "AVL002"
+    assert payload["rows"][0]["last_calculated_at"].startswith("2026-02-20T10:00:00")
+
+
+async def test_availability_invalid_month_returns_422(client, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+
+    response = await client.get(
+        "/api/v1/integration/availability",
+        headers=headers,
+        params={"month_from": "2026-13", "month_to": "2026-02"},
+    )
+    assert response.status_code == 422
+
+    response = await client.get(
+        "/api/v1/integration/availability",
+        headers=headers,
+        params={"month_from": "2026/01", "month_to": "2026-02"},
+    )
+    assert response.status_code == 422

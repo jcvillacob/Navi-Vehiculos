@@ -362,3 +362,100 @@ Al consultar la API de Geotab (informes, ExceptionEvents de las reglas):
 - Passwords cifrados en reposo en ambas apps (Fernet con key propia por app).
 - El endpoint de integración no expone usuarios, roles ni datos de auth de Navi
   Vehículos — solo el dominio cliente/vehículo/regla/credencial.
+
+---
+
+## 6. Disponibilidad y MTTR
+
+```
+GET {NAVI_BASE_URL}/api/v1/integration/availability
+    ?month_from=2026-01          (requerido)
+    &month_to=2026-03            (requerido)
+    &since=2026-02-01T00:00:00Z  (opcional — incremental por last_calculated_at)
+    &limit=500                   (opcional — default 500, máx. 2000)
+    &offset=0                    (opcional — default 0)
+```
+
+Exporta las filas de disponibilidad mensual calculadas desde CloudFleet,
+cruzadas con el cliente asignado localmente. Portal Clientes puede usar este
+endpoint para replicar métricas de disponibilidad y MTTR por vehículo.
+
+Filtros aplicados por Navi Vehículos:
+
+- `month_from` / `month_to`: rango de `period_month` (formato `YYYY-MM`).
+- `source = 'cloudfleet'`.
+- Se excluyen las placas asignadas al cliente interno `__navitrans_system__`.
+- `since` filtra filas con `last_calculated_at` posterior al valor dado.
+
+### 6.1 Respuesta
+
+```json
+{
+  "generated_at": "2026-03-15T10:00:00Z",
+  "month_from": "2026-01",
+  "month_to": "2026-03",
+  "since": null,
+  "total": 2,
+  "limit": 500,
+  "offset": 0,
+  "rows": [
+    {
+      "plate": "ABC123",
+      "period_month": "2026-01",
+      "calculation_status": "calculated",
+      "project_availability_pct": 98.5,
+      "h_total": 744.0,
+      "h_no_disp": 11.16,
+      "orders_considered": 3,
+      "mttr_hours": 3.72,
+      "orders_closed": 3,
+      "customer_id": 12,
+      "customer_name": "Transportes El Roble",
+      "last_calculated_at": "2026-01-31T23:59:00Z"
+    },
+    {
+      "plate": "DEF456",
+      "period_month": "2026-02",
+      "calculation_status": "no_orders",
+      "project_availability_pct": 100.0,
+      "h_total": 672.0,
+      "h_no_disp": 0.0,
+      "orders_considered": 0,
+      "mttr_hours": null,
+      "orders_closed": 0,
+      "customer_id": 12,
+      "customer_name": "Transportes El Roble",
+      "last_calculated_at": "2026-02-28T23:59:00Z"
+    }
+  ]
+}
+```
+
+Notas sobre los campos clave:
+
+| Campo | Significado |
+|---|---|
+| `rows[].period_month` | Mes al que aplica el cálculo (`YYYY-MM`). |
+| `rows[].calculation_status` | `calculated`, `no_orders`, `not_in_cloudfleet` o `error`. |
+| `rows[].project_availability_pct` | Porcentaje de disponibilidad del vehículo en el mes. |
+| `rows[].h_total` | Horas totales del mes consideradas para el cálculo. |
+| `rows[].h_no_disp` | Horas en las que el vehículo estuvo no disponible. |
+| `rows[].orders_considered` | Órdenes de trabajo consideradas para el cálculo. |
+| `rows[].mttr_hours` | Tiempo medio de reparación (horas) calculado sobre las órdenes cerradas. |
+| `rows[].orders_closed` | Órdenes cerradas incluidas en el cálculo de MTTR. |
+| `rows[].customer_id` / `customer_name` | Cliente asignado localmente; puede ser `null` si la placa no tiene cliente. |
+| `rows[].last_calculated_at` | Última vez que se recalculó la fila; útil para sync incremental. |
+
+### 6.2 Paginación
+
+La respuesta incluye `total` (total de filas que coinciden con los filtros),
+`limit`, `offset` y el array `rows` con hasta `limit` elementos. Portal Clientes
+puede recorrer el dataset completo incrementando `offset` en cada request.
+
+### 6.3 Errores
+
+| Código | Causa | Acción en Portal Clientes |
+|---|---|---|
+| `422` | `month_from` / `month_to` mal formado o `since` no es ISO-8601 | Corregir formato de los parámetros. |
+| `401` | API key inválida/ausente | Revisar rotación de clave. |
+| `503` | `INTEGRATION_API_KEYS` sin configurar | Alertar al equipo de Navi Vehículos. |

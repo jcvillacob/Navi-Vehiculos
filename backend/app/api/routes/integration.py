@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.core.dependencies import require_integration_key
 from app.services.integration_export import (
     build_snapshot,
+    export_availability,
     export_customers,
     export_vehicles,
 )
@@ -44,6 +45,31 @@ def get_vehicles(
 ) -> dict:
     try:
         return export_vehicles(since=since, limit=limit, offset=offset)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/availability",
+    description=(
+        "Disponibilidad mensual y MTTR por vehiculo para Portal Clientes"
+    ),
+)
+def get_availability(
+    month_from: str = Query(description="Mes inicial YYYY-MM (inclusive)"),
+    month_to: str = Query(description="Mes final YYYY-MM (inclusive)"),
+    since: str | None = Query(default=None, description="ISO-8601 incremental"),
+    limit: int = Query(default=500, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return export_availability(
+            month_from=month_from,
+            month_to=month_to,
+            since=since,
+            limit=limit,
+            offset=offset,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
