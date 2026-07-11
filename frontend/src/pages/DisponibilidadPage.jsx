@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -18,6 +18,7 @@ import {
 
 import Can from "../components/Can";
 import { useAvailabilityDashboard } from "../features/availability/hooks/useAvailabilityDashboard";
+import { exportDisponibilidadExcel } from "../utils/disponibilidadExport";
 
 // Colores alineados con los badges .availability-* de styles.css
 const STATUS_COLOR = {
@@ -101,6 +102,7 @@ export default function DisponibilidadPage() {
     overview,
     ranking,
     trend,
+    coverage,
     loadingOverview,
     loadingDetail,
     error,
@@ -109,6 +111,9 @@ export default function DisponibilidadPage() {
     job,
     recalcError,
   } = useAvailabilityDashboard();
+
+  const [exporting, setExporting] = useState(false);
+  const [coverageOpen, setCoverageOpen] = useState(false);
 
   const overall = overview?.overall ?? null;
   const fleets = overview?.fleets ?? [];
@@ -172,6 +177,32 @@ export default function DisponibilidadPage() {
 
   const jobProgress = job && typeof job.progress_pct === "number" ? Math.round(job.progress_pct) : null;
 
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      await exportDisponibilidadExcel({ month, overview, ranking, coverage });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const coverageSummary = coverage?.summary || {};
+  const coverageFleets = Array.isArray(coverage?.fleets) ? coverage.fleets : [];
+  const coveragePlates = Array.isArray(coverage?.uncovered_plates) ? coverage.uncovered_plates : [];
+  const coverageByFleet = useMemo(() => {
+    const map = new Map();
+    for (const p of coveragePlates) {
+      const key = p.customer_id ?? p.customer_name ?? "Sin flota";
+      const entry = map.get(key) || { customer_id: p.customer_id, customer_name: p.customer_name || "Sin flota", plates: [] };
+      entry.plates.push(p.plate);
+      map.set(key, entry);
+    }
+    return [...map.values()];
+  }, [coveragePlates]);
+
+  const hasCoverageData = coverageSummary.total > 0 || coverageFleets.length > 0;
+
   return (
     <section className="panel">
       <header className="page-header page-header-row">
@@ -185,6 +216,15 @@ export default function DisponibilidadPage() {
             <span>Mes</span>
             <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
           </label>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={handleExport}
+            disabled={loadingOverview || exporting}
+            title="Exportar disponibilidad a Excel"
+          >
+            {exporting ? "Exportando…" : "Exportar"}
+          </button>
           <Can permission="rendimientos.refresh">
             <button
               type="button"
@@ -453,17 +493,18 @@ export default function DisponibilidadPage() {
                 <th>Flota</th>
                 <th>Disponibilidad</th>
                 <th>Horas no disp.</th>
+                <th>MTTR</th>
                 <th>Órdenes</th>
               </tr>
             </thead>
             <tbody>
               {loadingDetail ? (
                 <tr>
-                  <td className="table-empty-row" colSpan={6}>Cargando…</td>
+                  <td className="table-empty-row" colSpan={7}>Cargando…</td>
                 </tr>
               ) : ranking.length === 0 ? (
                 <tr>
-                  <td className="table-empty-row" colSpan={6}>
+                  <td className="table-empty-row" colSpan={7}>
                     Sin vehículos calculados para {monthLabel(month)}.
                   </td>
                 </tr>
@@ -479,6 +520,7 @@ export default function DisponibilidadPage() {
                       </span>
                     </td>
                     <td>{Number(v.h_no_disp).toFixed(1)} h</td>
+                    <td>{fmtMttr(v.mttr_hours)}</td>
                     <td>{v.orders_considered}</td>
                   </tr>
                 ))
@@ -486,6 +528,83 @@ export default function DisponibilidadPage() {
             </tbody>
           </table>
         </div>
+      </article>
+
+      {/* Cobertura CloudFleet */}
+      <article className="card disp-coverage-card">
+        <button
+          type="button"
+          className="button-block disp-coverage-header"
+          onClick={() => setCoverageOpen((open) => !open)}
+          aria-expanded={coverageOpen}
+        >
+          <div>
+            <span className="eyebrow">Cobertura CloudFleet</span>
+            <h3 className="disp-ranking-title">
+              {hasCoverageData
+                ? `${coverageSummary.covered ?? 0} de ${coverageSummary.total ?? 0} placas con datos (${fmtPct(coverageSummary.coverage_pct)})`
+                : "Sin información de cobertura"}
+            </h3>
+          </div>
+          <span className="button-secondary button-sm">
+            {coverageOpen ? "Ocultar" : "Ver detalle"}
+          </span>
+        </button>
+
+        {coverageOpen && (
+          <div className="disp-coverage-body">
+            {!hasCoverageData ? (
+              <p className="disp-empty">No hay datos de cobertura para {monthLabel(month)}.</p>
+            ) : (
+              <>
+                <div className="vehicles-table-shell">
+                  <table className="vehicles-table">
+                    <thead>
+                      <tr>
+                        <th>Flota</th>
+                        <th>Placas</th>
+                        <th>Sin cobertura</th>
+                        <th>Cobertura %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {coverageFleets.length === 0 ? (
+                        <tr>
+                          <td className="table-empty-row" colSpan={4}>Sin datos por flota.</td>
+                        </tr>
+                      ) : (
+                        coverageFleets.map((f) => (
+                          <tr key={f.customer_id ?? f.customer_name}>
+                            <td>{f.customer_name}</td>
+                            <td>{f.total}</td>
+                            <td>{f.uncovered}</td>
+                            <td>{fmtPct(f.coverage_pct)}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {coverageByFleet.length > 0 && (
+                  <div className="disp-coverage-plates">
+                    <h4 className="disp-coverage-subtitle">Placas sin cobertura</h4>
+                    {coverageByFleet.map((group) => (
+                      <div key={group.customer_id ?? group.customer_name} className="disp-coverage-group">
+                        <span className="disp-coverage-fleet">{group.customer_name}</span>
+                        <div className="disp-coverage-chips">
+                          {group.plates.map((plate) => (
+                            <span key={plate} className="disp-coverage-chip">{plate}</span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </article>
     </section>
   );

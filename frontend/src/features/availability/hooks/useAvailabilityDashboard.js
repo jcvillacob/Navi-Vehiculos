@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   calculateMonthlyPerformance,
+  fetchAvailabilityCoverage,
   fetchAvailabilityOverview,
   fetchAvailabilityRanking,
   fetchAvailabilityTrend,
@@ -42,6 +43,7 @@ export function useAvailabilityDashboard() {
   const [overview, setOverview] = useState(null);
   const [ranking, setRanking] = useState([]);
   const [trend, setTrend] = useState(null);
+  const [coverage, setCoverage] = useState(null);
 
   const [loadingOverview, setLoadingOverview] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -86,6 +88,16 @@ export function useAvailabilityDashboard() {
     }
   }, [month]);
 
+  const loadCoverage = useCallback(async () => {
+    if (!isValidMonth(month)) return;
+    try {
+      const data = await fetchAvailabilityCoverage({ month });
+      setCoverage(data);
+    } catch (err) {
+      setCoverage(null);
+    }
+  }, [month]);
+
   const loadDetail = useCallback(async () => {
     if (!isValidMonth(month)) return;
     setLoadingDetail(true);
@@ -116,7 +128,8 @@ export function useAvailabilityDashboard() {
 
   useEffect(() => {
     loadOverview();
-  }, [loadOverview]);
+    loadCoverage();
+  }, [loadOverview, loadCoverage]);
 
   useEffect(() => {
     loadDetail();
@@ -124,8 +137,9 @@ export function useAvailabilityDashboard() {
 
   const refreshAll = useCallback(() => {
     loadOverview();
+    loadCoverage();
     loadDetail();
-  }, [loadOverview, loadDetail]);
+  }, [loadOverview, loadCoverage, loadDetail]);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -192,6 +206,7 @@ export function useAvailabilityDashboard() {
     overview,
     ranking,
     trend,
+    coverage,
     // estado
     loadingOverview,
     loadingDetail,

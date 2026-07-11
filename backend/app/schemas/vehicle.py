@@ -830,6 +830,38 @@ class AvailabilityRankingItem(BaseModel):
     h_total: float = Field(default=0.0)
     orders_considered: int = Field(default=0)
     status: str = Field(default="no_data")
+    mttr_hours: float | None = Field(default=None, description="MTTR de la placa en horas")
+    orders_closed: int = Field(default=0, description="Ordenes cerradas de la placa")
+
+
+class AvailabilityCoverageSummary(BaseModel):
+    total: int = Field(default=0, description="Total de placas en el mes")
+    covered: int = Field(default=0, description="Placas con calculo o sin ordenes")
+    uncovered: int = Field(default=0, description="Placas no encontradas en CloudFleet")
+    error: int = Field(default=0, description="Placas con error de calculo")
+    coverage_pct: float | None = Field(default=None, description="Porcentaje de cobertura")
+
+
+class AvailabilityCoverageFleet(BaseModel):
+    customer_id: int | None = Field(default=None, description="Id del cliente")
+    customer_name: str = Field(..., description="Nombre del cliente/flota")
+    total: int = Field(default=0, description="Placas del cliente en el mes")
+    uncovered: int = Field(default=0, description="Placas del cliente no cubiertas")
+    coverage_pct: float | None = Field(default=None, description="Porcentaje de cobertura del cliente")
+
+
+class AvailabilityCoveragePlate(BaseModel):
+    plate: str = Field(..., description="Placa no cubierta")
+    customer_id: int | None = Field(default=None, description="Id del cliente")
+    customer_name: str = Field(..., description="Nombre del cliente/flota")
+
+
+class AvailabilityCoverageResponse(BaseModel):
+    month: str = Field(..., description="Mes consultado YYYY-MM")
+    generated_at: str = Field(..., description="Timestamp de generacion")
+    summary: AvailabilityCoverageSummary = Field(default_factory=AvailabilityCoverageSummary)
+    fleets: list[AvailabilityCoverageFleet] = Field(default_factory=list)
+    uncovered_plates: list[AvailabilityCoveragePlate] = Field(default_factory=list)
 
 
 class AvailabilityRankingResponse(BaseModel):

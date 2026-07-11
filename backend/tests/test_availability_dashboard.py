@@ -193,6 +193,27 @@ def test_ranking_include_no_orders(monkeypatch):
             assert r["orders_considered"] == 0
 
 
+def test_ranking_exposes_mttr_and_orders_closed(monkeypatch):
+    """Los items del ranking exponen mttr_hours y orders_closed."""
+    rows = [
+        _row("A01", 1, "Flota A", "calculated", 95.0, 720.0, 36.0, mttr_hours=12.5, orders_closed=3),
+        _row("A02", 1, "Flota A", "calculated", 98.0, 720.0, 14.4, mttr_hours=None, orders_closed=0),
+    ]
+    monkeypatch.setattr(
+        "app.services.availability_dashboard._fetch_month_rows",
+        lambda month, customer_id=None: rows,
+    )
+
+    ranking = dashboard.get_vehicle_ranking("2026-06", order="worst", limit=10)
+    assert len(ranking) == 2
+    assert ranking[0]["plate"] == "A01"
+    assert ranking[0]["mttr_hours"] == 12.5
+    assert ranking[0]["orders_closed"] == 3
+    assert ranking[1]["plate"] == "A02"
+    assert ranking[1]["mttr_hours"] is None
+    assert ranking[1]["orders_closed"] == 0
+
+
 def test_ranking_plate_search_filters_by_substring(monkeypatch):
     """plate_search filtra placas por substring de forma case-insensitive."""
     rows = [
@@ -343,6 +364,54 @@ def test_overview_aggregation_handles_decimal(monkeypatch):
     expected_pct = round((1440.0 - 72.0) / 1440.0 * 100.0, 3)
     assert overall["availability_pct"] == expected_pct
     assert overall["availability_pct"] == 95.0
+
+
+# ── _fetch_month_rows query ─────────────────────────────────────────────────
+
+
+# ── get_cloudfleet_coverage ─────────────────────────────────────────────────
+
+
+def test_coverage_summary_and_uncovered_lists(monkeypatch):
+    """Coverage resume conteos, ordena fleets por uncovered DESC y lista placas."""
+    rows = [
+        _row("A01", 1, "Flota A", "calculated", 100.0, 720.0, 0.0),
+        _row("A02", 1, "Flota A", "not_in_cloudfleet", None, None, None),
+        _row("A03", 1, "Flota A", "not_in_cloudfleet", None, None, None),
+        _row("B01", 2, "Flota B", "calculated", 90.0, 720.0, 72.0),
+        _row("B02", 2, "Flota B", "no_orders", 100.0, 720.0, 0.0),
+        _row("B03", 2, "Flota B", "error", None, None, None),
+        _row("B04", 2, "Flota B", "not_in_cloudfleet", None, None, None),
+    ]
+    monkeypatch.setattr(
+        "app.services.availability_dashboard._fetch_month_rows",
+        lambda month, customer_id=None: rows,
+    )
+
+    coverage = dashboard.get_cloudfleet_coverage("2026-06")
+
+    assert coverage["month"] == "2026-06"
+    assert "generated_at" in coverage
+
+    summary = coverage["summary"]
+    assert summary["total"] == 7
+    assert summary["covered"] == 3
+    assert summary["uncovered"] == 3
+    assert summary["error"] == 1
+    assert summary["coverage_pct"] == round(3 / 7 * 100.0, 1)
+
+    fleets = coverage["fleets"]
+    assert [f["customer_name"] for f in fleets] == ["Flota A", "Flota B"]
+    assert fleets[0]["total"] == 3
+    assert fleets[0]["uncovered"] == 2
+    assert fleets[0]["coverage_pct"] == round(1 / 3 * 100.0, 1)
+    assert fleets[1]["total"] == 4
+    assert fleets[1]["uncovered"] == 1
+    assert fleets[1]["coverage_pct"] == round(3 / 4 * 100.0, 1)
+
+    plates = coverage["uncovered_plates"]
+    assert [p["plate"] for p in plates] == ["A02", "A03", "B04"]
+    assert all(p["customer_name"] in {"Flota A", "Flota B"} for p in plates)
 
 
 # ── _fetch_month_rows query ─────────────────────────────────────────────────

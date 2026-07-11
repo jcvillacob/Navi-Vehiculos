@@ -7087,6 +7087,73 @@ select.control-sm {
   cursor: pointer;
 }
 
+.disp-coverage-card {
+  margin-top: 16px;
+  padding: 18px 20px;
+}
+
+.disp-coverage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.disp-coverage-header > div:first-child {
+  min-width: 0;
+  text-align: left;
+}
+
+.disp-coverage-body {
+  margin-top: 18px;
+  display: grid;
+  gap: 18px;
+}
+
+.disp-coverage-subtitle {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.disp-coverage-plates {
+  display: grid;
+  gap: 14px;
+}
+
+.disp-coverage-group {
+  display: grid;
+  gap: 8px;
+}
+
+.disp-coverage-fleet {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.disp-coverage-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.disp-coverage-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-heading);
+  font-weight: 600;
+}
+
 .disp-filters {
   display: flex;
   align-items: flex-end;

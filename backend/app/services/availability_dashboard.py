@@ -267,9 +267,89 @@ def get_vehicle_ranking(
             "h_total": round(float(row.get("h_total") or 0.0), 3),
             "orders_considered": int(row.get("orders_considered") or 0),
             "status": _classify(float(row["project_availability_pct"])),
+            "mttr_hours": round(float(row["mttr_hours"]), 3) if row.get("mttr_hours") is not None else None,
+            "orders_closed": int(row.get("orders_closed") or 0),
         }
         for row in limited
     ]
+
+
+def get_cloudfleet_coverage(month: str) -> dict[str, Any]:
+    """
+    Reconciliacion de cobertura CloudFleet para el mes: cuantas placas tienen
+    datos calculados vs cuantas no estan en CloudFleet.
+    """
+    rows = _fetch_month_rows(month)
+
+    total = len(rows)
+    covered = 0
+    uncovered = 0
+    error = 0
+
+    fleets_rows: dict[Any, dict[str, Any]] = {}
+    uncovered_plates: list[dict[str, Any]] = []
+
+    for row in rows:
+        status = row.get("calculation_status")
+        if status in _HOURS_STATUSES:
+            covered += 1
+        elif status == "not_in_cloudfleet":
+            uncovered += 1
+            uncovered_plates.append(
+                {
+                    "plate": row["plate"],
+                    "customer_id": row.get("customer_id"),
+                    "customer_name": row.get("customer_name"),
+                }
+            )
+        elif status == "error":
+            error += 1
+
+        key = row.get("customer_id")
+        bucket = fleets_rows.setdefault(
+            key,
+            {
+                "customer_id": key,
+                "customer_name": row.get("customer_name"),
+                "total": 0,
+                "uncovered": 0,
+            },
+        )
+        bucket["total"] += 1
+        if status == "not_in_cloudfleet":
+            bucket["uncovered"] += 1
+
+    coverage_pct = round(covered / total * 100.0, 1) if total > 0 else None
+
+    fleets = [
+        {
+            "customer_id": bucket["customer_id"],
+            "customer_name": bucket["customer_name"],
+            "total": bucket["total"],
+            "uncovered": bucket["uncovered"],
+            "coverage_pct": round((bucket["total"] - bucket["uncovered"]) / bucket["total"] * 100.0, 1)
+            if bucket["total"] > 0
+            else None,
+        }
+        for bucket in fleets_rows.values()
+    ]
+    fleets.sort(key=lambda f: f["uncovered"], reverse=True)
+
+    uncovered_plates.sort(key=lambda p: (p["customer_name"] or "", p["plate"]))
+
+    return {
+        "month": month,
+        "generated_at": datetime.now().isoformat(),
+        "summary": {
+            "total": total,
+            "covered": covered,
+            "uncovered": uncovered,
+            "error": error,
+            "coverage_pct": coverage_pct,
+        },
+        "fleets": fleets,
+        "uncovered_plates": uncovered_plates,
+    }
 
 
 def _add_months(month: str, delta: int) -> str:
@@ -335,6 +415,7 @@ __all__ = [
     "get_availability_overview",
     "get_vehicle_ranking",
     "get_availability_trend",
+    "get_cloudfleet_coverage",
     "FLEET_GOOD",
     "FLEET_WARNING",
 ]

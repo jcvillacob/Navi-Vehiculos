@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
+    AvailabilityCoverageResponse,
     AvailabilityOverviewResponse,
     AvailabilityRankingItem,
     AvailabilityRankingResponse,
@@ -10,6 +11,7 @@ from app.schemas.vehicle import (
 from app.services.availability_dashboard import (
     get_availability_overview,
     get_availability_trend,
+    get_cloudfleet_coverage,
     get_vehicle_ranking,
 )
 
@@ -65,3 +67,13 @@ def get_trend(
     """Serie temporal de disponibilidad (global o de una flota)."""
     data = get_availability_trend(month_to, months=months, customer_id=customer_id)
     return AvailabilityTrendResponse(**data)
+
+
+@router.get("/coverage", response_model=AvailabilityCoverageResponse)
+def get_coverage(
+    month: str = Query(..., pattern=_MONTH_PATTERN, description="Mes YYYY-MM"),
+    _user: dict = Depends(require_permission("rendimientos.view")),
+) -> AvailabilityCoverageResponse:
+    """Reconciliacion de cobertura CloudFleet: placas cubiertas vs no cubiertas."""
+    data = get_cloudfleet_coverage(month)
+    return AvailabilityCoverageResponse(**data)

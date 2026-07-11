@@ -363,6 +363,12 @@ export async function fetchAvailabilityTrend({ month_to, months = 6, customer_id
   return parseJsonOrThrow(response, "Error cargando la tendencia de disponibilidad");
 }
 
+export async function fetchAvailabilityCoverage({ month }) {
+  const query = new URLSearchParams({ month });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/disponibilidad/coverage?${query.toString()}`));
+  return parseJsonOrThrow(response, "Error cargando la cobertura CloudFleet");
+}
+
 // ── Vehicle ───────────────────────────────────────────────────────────────────
 
 export async function lookupVehicle(identifier, { force = false } = {}) {
