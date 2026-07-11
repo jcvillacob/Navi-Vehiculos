@@ -87,10 +87,15 @@ Además, el cron diario (`rendimientos_cron`) ahora corre con `compute_availabil
 
 ## 5. Orden del plan según estos datos
 
-1. **Fase 0.5** — `availability_only` en el job: botón Recalcular 25 min → ~2 min. (en curso)
-2. **Fase 1 (redefinida)** — instrumentar timing por provider dentro del job y atacar
-   Frotcom primero (chunks/429/paralelismo real); Geotab multicall después.
-3. **Fase 2** — pool psycopg (20 ms/request + ~800 connects por job en progreso).
-4. **Fase 4** — batch upserts + throttle de progreso.
-5. **Fase 5/6** — paginación + frontend (preventivo).
-6. **Fase 3** (índices) y **Fase 7** (vistas): pospuestas — los datos no las justifican hoy.
+1. **Fase 0.5** ✓ — `availability_only`: botón Recalcular 25 min → 80 s (commit 7d28507).
+2. **Fase 1** ✓ — instrumentación + Geotab MultiCall: 2.9× por database (commit 5d60193).
+3. **Fase 2** ✓ — pool psycopg + disponibilidad en el cron diario (commit e990cbc).
+4. **Fase 4** — CERRADA sin implementar: su dolor (conexión por placa en _update_progress)
+   lo resolvió el pool; el commit por fila restante es ~1 s por job, ruido.
+5. **Fase 5/6** (paginación, virtualización) — POSPUESTAS: preventivas, revisar cuando la
+   flota crezca varias veces (hoy 799 placas / 3k filas, endpoints en 76-159 ms).
+6. **Fase 3** (índices) y **Fase 7** (vistas) — POSPUESTAS: los datos no las justifican.
+
+**Plan cerrado 2026-07-11.** Resultado neto: job diario ~23.5 min → ~9-10 min estimado
+(verificar en el próximo run del cron con los logs de instrumentación); refresco de
+disponibilidad 25 min → 80 s; lecturas UI 3-5× más rápidas.
