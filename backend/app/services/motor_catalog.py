@@ -785,9 +785,10 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 ON CONFLICT (customer_database_id, username) DO NOTHING;
                 """,
                 (
-                    legacy_row["id"],
-                    legacy_row["username"],
-                    encrypt_secret(legacy_row["password"]),
+                    # Cursor sin row_factory: las filas son tuplas (id, username, password).
+                    legacy_row[0],
+                    legacy_row[1],
+                    encrypt_secret(legacy_row[2]),
                 ),
             )
         cur.execute(

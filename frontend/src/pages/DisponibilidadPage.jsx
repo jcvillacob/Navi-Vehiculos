@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -512,7 +513,11 @@ export default function DisponibilidadPage() {
                 ranking.map((v, idx) => (
                   <tr key={v.plate}>
                     <td>{idx + 1}</td>
-                    <td><strong>{v.plate}</strong></td>
+                    <td>
+                      <Link to={`/vehiculo/${v.plate}`} className="ficha-plate-link">
+                        <strong>{v.plate}</strong>
+                      </Link>
+                    </td>
                     <td>{v.customer_name}</td>
                     <td>
                       <span className={`availability-badge ${STATUS_BADGE_CLASS[v.status]}`}>

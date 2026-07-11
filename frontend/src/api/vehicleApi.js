@@ -608,6 +608,20 @@ export async function fetchConnectionStats(month) {
   return parseJsonOrThrow(response, "Error obteniendo estadisticas de conexion");
 }
 
+export async function fetchVehicleFicha(plate) {
+  const normalizedPlate = (plate || "").trim().toUpperCase();
+  if (!normalizedPlate) {
+    throw new Error("Se requiere una placa para cargar la ficha");
+  }
+  const response = await fetchWithAuth(
+    buildUrl(`/api/v1/vehicle/${encodeURIComponent(normalizedPlate)}/ficha`)
+  );
+  if (response.status === 404) {
+    throw new Error("Placa no encontrada");
+  }
+  return parseJsonOrThrow(response, "Error cargando la ficha del vehiculo");
+}
+
 // ── Motors ────────────────────────────────────────────────────────────────────
 
 export async function listMotors() {

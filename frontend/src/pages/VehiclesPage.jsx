@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import * as XLSX from "xlsx-js-style";
 
 import Can from "../components/Can";
@@ -1016,7 +1017,9 @@ export default function VehiclesPage() {
                       if (col.key === "plate") {
                         return (
                           <td key={col.key} data-label={col.label}>
-                            <strong>{vehicle.plate}</strong>
+                            <Link to={`/vehiculo/${vehicle.plate}`} className="ficha-plate-link">
+                              <strong>{vehicle.plate}</strong>
+                            </Link>
                           </td>
                         );
                       }

@@ -22,6 +22,7 @@ import CustomersPage from "./pages/CustomersPage";
 import EngineLookupPage from "./pages/EngineLookupPage";
 import MotorsPage from "./pages/MotorsPage";
 import VehiclesPage from "./pages/VehiclesPage";
+import VehicleFichaPage from "./pages/VehicleFichaPage";
 import StyleLabPage from "./pages/StyleLabPage";
 
 function ChangePasswordModal({ user, onClose }) {
@@ -307,6 +308,7 @@ function AppShell() {
               <Route path="/motores" element={<MotorsPage />} />
               <Route path="/clientes" element={<CustomersPage />} />
               <Route path="/vehiculos" element={<VehiclesPage />} />
+              <Route path="/vehiculo/:placa" element={<VehicleFichaPage />} />
               <Route path="/rendimientos" element={<RendimientosPage />} />
               <Route
                 path="/cpk-cph"
