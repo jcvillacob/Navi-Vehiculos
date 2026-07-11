@@ -30,6 +30,10 @@ _logger = logging.getLogger(__name__)
 # UTC offset hardcoded segun la doc (la app esta atada a Colombia).
 _LOCAL_OFFSET_HOURS = 5
 
+# Estados inactivos segun doc seccion 6: el vehiculo se considera disponible,
+# por lo que la orden no aporta horas de no-disponibilidad.
+_INACTIVE_ORDER_STATUSES = frozenset({"closed", "cancelled", "voided", "completed", "finished"})
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tipos publicos
@@ -128,14 +132,30 @@ def _order_start_local(order: dict[str, Any]) -> datetime | None:
     return _parse_utc_to_local(order.get("workshopDate"))
 
 
-def _order_end_local_project(order: dict[str, Any], *, now: datetime) -> datetime:
+def _order_end_local_project(order: dict[str, Any], *, now: datetime) -> datetime | None:
     """
     Para disponibilidad de proyectos: el periodo no-disponible termina en
-    technicalCompletionDate; si la orden sigue activa, en `now`.
+    technicalCompletionDate. Cascada de resolucion:
+
+      1. technicalCompletionDate presente y parseable -> usarla.
+      2. Si no, finalCompletionDate presente y parseable -> usarla
+         (cierre conservador para ordenes cerradas sin completacion tecnica).
+      3. Si no, y status normalizado esta en `_INACTIVE_ORDER_STATUSES`
+         -> None: la orden no aporta horas (no esta "en curso").
+      4. Cualquier otro caso (activa o estado desconocido) -> `now`.
     """
     tc = _parse_utc_to_local(order.get("technicalCompletionDate"))
     if tc is not None:
         return tc
+
+    fc = _parse_utc_to_local(order.get("finalCompletionDate"))
+    if fc is not None:
+        return fc
+
+    status = str(order.get("status") or "").strip().lower()
+    if status in _INACTIVE_ORDER_STATUSES:
+        return None
+
     return now
 
 
@@ -154,6 +174,8 @@ def _order_unavailable_hours(
     if order_start is None:
         return 0.0
     order_end = _order_end_local_project(order, now=now)
+    if order_end is None:
+        return 0.0
 
     effective_start = max(order_start, period_start)
     effective_end = min(order_end, period_end)
@@ -180,8 +202,60 @@ def _affects_availability(order: dict[str, Any]) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Funcion publica
+# Funciones publicas
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def dedupe_work_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Deduplica ordenes por `number`, conservando la version con `updatedAt`
+    mas reciente (doc seccion 3).
+
+    - Clave: `number`; si falta o esta vacio, se usa `id`; si tampoco existe,
+      se conserva la orden tal cual (no se descarta).
+    - Entre duplicados gana el `updatedAt` mas reciente segun `_parse_utc_to_local`;
+      si no parsea se trata como el mas viejo.
+    - Mantiene el orden estable de primera aparicion.
+    """
+    seen: dict[Any, dict[str, Any]] = {}
+    preserved_order: list[Any] = []
+
+    for order in orders:
+        if not isinstance(order, dict):
+            continue
+        raw_key = order.get("number") or order.get("id")
+        if raw_key is None or str(raw_key).strip() == "":
+            preserved_order.append(id(order))
+            continue
+        key = str(raw_key).strip()
+
+        current = seen.get(key)
+        if current is None:
+            seen[key] = order
+            preserved_order.append(key)
+            continue
+
+        current_updated = _parse_utc_to_local(current.get("updatedAt"))
+        new_updated = _parse_utc_to_local(order.get("updatedAt"))
+        # None se trata como "muy viejo", asi que solo gana si el actual
+        # tambien es None (se queda con el primero) o si el nuevo es mas reciente.
+        if current_updated is None:
+            if new_updated is not None:
+                seen[key] = order
+        elif new_updated is not None and new_updated > current_updated:
+            seen[key] = order
+
+    result: list[dict[str, Any]] = []
+    for token in preserved_order:
+        if token in seen:
+            result.append(seen[token])
+        else:
+            # token es id(order) de una orden sin clave conocida.
+            for order in orders:
+                if id(order) == token:
+                    result.append(order)
+                    break
+    return result
 
 
 def calculate_availability_for_targets(
@@ -321,5 +395,6 @@ __all__ = [
     "AvailabilityTarget",
     "AvailabilityResult",
     "calculate_availability_for_targets",
+    "dedupe_work_orders",
     "_month_bounds_utc",
 ]

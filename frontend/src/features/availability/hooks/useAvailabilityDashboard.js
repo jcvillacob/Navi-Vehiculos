@@ -19,6 +19,10 @@ const RANKING_LIMIT = 25;
 const POLL_INTERVAL_MS = 2500;
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
 
+function isValidMonth(value) {
+  return /^\d{4}-\d{2}$/.test(value);
+}
+
 /**
  * Estado y datos del dashboard de Disponibilidad.
  * - Lee overview/ranking/trend de los endpoints /disponibilidad/*.
@@ -59,6 +63,7 @@ export function useAvailabilityDashboard() {
   }, []);
 
   const loadOverview = useCallback(async () => {
+    if (!isValidMonth(month)) return;
     setLoadingOverview(true);
     setError("");
     try {
@@ -73,6 +78,7 @@ export function useAvailabilityDashboard() {
   }, [month]);
 
   const loadDetail = useCallback(async () => {
+    if (!isValidMonth(month)) return;
     setLoadingDetail(true);
     try {
       const [rankingData, trendData] = await Promise.all([
@@ -120,6 +126,10 @@ export function useAvailabilityDashboard() {
   useEffect(() => stopPolling, [stopPolling]);
 
   const recalculate = useCallback(async () => {
+    if (!isValidMonth(month)) {
+      setRecalcError("Selecciona un mes válido");
+      return;
+    }
     setRecalcError("");
     const payload = {
       month,

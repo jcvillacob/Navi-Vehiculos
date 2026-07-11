@@ -9,7 +9,7 @@ Persistencia + orquestacion del calculo de disponibilidad por vehiculo.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 import psycopg
@@ -27,6 +27,7 @@ from app.services.availability import (
     AvailabilityTarget,
     _month_bounds_utc,
     calculate_availability_for_targets,
+    dedupe_work_orders,
 )
 from app.services.motor_catalog import _database_dsn
 
@@ -34,6 +35,12 @@ _logger = logging.getLogger(__name__)
 
 _TABLE_BOOTSTRAPPED = False
 _SOURCE_CLOUDFLEET = "cloudfleet"
+
+# Dias hacia atras que miramos en `updatedAt` al consultar work-orders.
+# Captura ordenes abiertas viejas que no fueron tocadas durante el mes pero
+# siguen restando disponibilidad, sin depender de que updatedAt caiga dentro
+# del rango del mes.
+_ORDER_LOOKBACK_DAYS = 90
 
 
 def _ensure_availability_table() -> None:
@@ -254,7 +261,9 @@ def run_availability_phase(
             "error": 0,
         }
 
-    updated_at_from, updated_at_to = _month_bounds_utc(month)
+    start_utc, end_utc = _month_bounds_utc(month)
+    updated_at_from = start_utc - timedelta(days=_ORDER_LOOKBACK_DAYS)
+    updated_at_to = max(end_utc, datetime.now() + timedelta(days=1))
 
     _logger.info(
         "Disponibilidad %s: descargando inventario CloudFleet (placas locales=%d).",
@@ -279,11 +288,22 @@ def run_availability_phase(
             f"Error inesperado consultando CloudFleet: {exc}"
         ) from exc
 
+    deduped_orders = dedupe_work_orders(orders)
+    dropped = len(orders) - len(deduped_orders)
+    if dropped:
+        _logger.info(
+            "Disponibilidad %s: se descartaron %d ordenes duplicadas (de %d a %d).",
+            month,
+            dropped,
+            len(orders),
+            len(deduped_orders),
+        )
+
     results = calculate_availability_for_targets(
         targets,
         month=month,
         cloudfleet_vehicles=vehicles,
-        cloudfleet_work_orders=orders,
+        cloudfleet_work_orders=deduped_orders,
         now=datetime.now(),
     )
 
