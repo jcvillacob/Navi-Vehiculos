@@ -13,6 +13,7 @@ from psycopg.types.json import Jsonb
 
 from app.clients.geotab_client import build_rule_inspection
 from app.core.config import GeotabConfig
+from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.db import db_conn
 from app.schemas.vehicle import (
     AssignedDatabaseSummary,
@@ -767,16 +768,28 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             );
             """
         )
+        # Migra credenciales legacy de customer_databases al pool cifrado.
         cur.execute(
             """
-            INSERT INTO customer_database_credentials (customer_database_id, username, password)
             SELECT id, username, password
             FROM customer_databases
             WHERE username IS NOT NULL AND username <> ''
-              AND password IS NOT NULL AND password <> ''
-            ON CONFLICT (customer_database_id, username) DO NOTHING;
+              AND password IS NOT NULL AND password <> '';
             """
         )
+        for legacy_row in cur.fetchall():
+            cur.execute(
+                """
+                INSERT INTO customer_database_credentials (customer_database_id, username, password)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (customer_database_id, username) DO NOTHING;
+                """,
+                (
+                    legacy_row["id"],
+                    legacy_row["username"],
+                    encrypt_secret(legacy_row["password"]),
+                ),
+            )
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS geotab_rule_groups (
@@ -2735,7 +2748,7 @@ def _sync_primary_credential(
                 is_active = TRUE,
                 updated_at = NOW();
             """,
-            (database_id, normalized_username, normalized_password),
+            (database_id, normalized_username, encrypt_secret(normalized_password)),
         )
 
 
@@ -2786,7 +2799,7 @@ def create_database_credential(
                     (
                         database_id,
                         normalized_username,
-                        normalized_password,
+                        encrypt_secret(normalized_password),
                         _normalize_optional_text(payload.label),
                         bool(payload.is_active),
                     ),
@@ -2819,7 +2832,7 @@ def update_database_credential(
         if not normalized_password:
             raise ValueError("La contraseña no puede quedar vacia.")
         set_clauses.append("password = %s")
-        params.append(normalized_password)
+        params.append(encrypt_secret(normalized_password))
     if payload.label is not None:
         set_clauses.append("label = %s")
         params.append(_normalize_optional_text(payload.label))
@@ -2988,7 +3001,7 @@ def get_geotab_config_for_database(
         return (
             GeotabConfig(
                 username=str(credential_row["username"]).strip(),
-                password=str(credential_row["password"]).strip(),
+                password=str(decrypt_secret(credential_row["password"])).strip(),
                 database=database_name,
             ),
             int(credential_row["id"]),

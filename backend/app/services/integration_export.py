@@ -12,6 +12,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from app.core.crypto import decrypt_secret
 from app.services.motor_catalog import _database_dsn, _ensure_motor_tables
 from app.services.provider_registry import public_provider_config
 from app.services.rendimientos import _ensure_performance_tables
@@ -150,7 +151,9 @@ def _export_customers(
             {
                 "id": int(row["id"]),
                 "username": row["username"],
-                "password": row["password"] if include_credentials else _PASSWORD_MASK,
+                "password": (
+                    decrypt_secret(row["password"]) if include_credentials else _PASSWORD_MASK
+                ),
                 "label": row.get("label"),
                 "is_active": bool(row["is_active"]),
                 "updated_at": _iso(row["updated_at"]),
