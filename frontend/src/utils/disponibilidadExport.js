@@ -215,6 +215,7 @@ function buildRankingSheet(XLSX, ranking) {
 function buildCoverageSheet(XLSX, coverage) {
   const fleets = Array.isArray(coverage?.fleets) ? coverage.fleets : [];
   const plates = Array.isArray(coverage?.uncovered_plates) ? coverage.uncovered_plates : [];
+  const cloudfleetUnmatched = Array.isArray(coverage?.cloudfleet_unmatched) ? coverage.cloudfleet_unmatched : [];
   const summary = coverage?.summary || {};
 
   const sheet = {};
@@ -276,9 +277,36 @@ function buildCoverageSheet(XLSX, coverage) {
     sheet[XLSX.utils.encode_cell({ r: r - 1, c: 1 })] = { v: p.customer_name || "—", t: "s", s: band ? cellBand : cellBase };
   });
 
+  if (cloudfleetUnmatched.length > 0) {
+    row = row + plates.length + 2;
+    sheet[XLSX.utils.encode_cell({ r: row - 1, c: 0 })] = {
+      v: `En CloudFleet sin registrar localmente (${cloudfleetUnmatched.length})`,
+      t: "s",
+      s: headerStyle,
+    };
+    sheet[XLSX.utils.encode_cell({ r: row - 1, c: 1 })] = { v: "Cost center", t: "s", s: headerStyle };
+    row += 1;
+
+    cloudfleetUnmatched.forEach((item, idx) => {
+      const r = row + idx;
+      const band = idx % 2 === 1;
+      sheet[XLSX.utils.encode_cell({ r: r - 1, c: 0 })] = {
+        v: item.code || "—",
+        t: "s",
+        s: band ? cellBand : cellBase,
+      };
+      sheet[XLSX.utils.encode_cell({ r: r - 1, c: 1 })] = {
+        v: item.cost_center || "—",
+        t: "s",
+        s: band ? cellBand : cellBase,
+      };
+    });
+  }
+
+  const finalRow = row + Math.max(plates.length, cloudfleetUnmatched.length, 1);
   sheet["!ref"] = XLSX.utils.encode_range({
     s: { r: 0, c: 0 },
-    e: { r: row + Math.max(plates.length, 1), c: 3 },
+    e: { r: finalRow, c: 3 },
   });
   sheet["!cols"] = [{ wch: 36 }, { wch: 36 }, { wch: 16 }, { wch: 14 }];
   sheet["!rows"] = [{ hpt: 28 }];

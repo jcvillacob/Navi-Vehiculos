@@ -191,6 +191,8 @@ export default function DisponibilidadPage() {
   const coverageSummary = coverage?.summary || {};
   const coverageFleets = Array.isArray(coverage?.fleets) ? coverage.fleets : [];
   const coveragePlates = Array.isArray(coverage?.uncovered_plates) ? coverage.uncovered_plates : [];
+  const cloudfleetUnmatched = Array.isArray(coverage?.cloudfleet_unmatched) ? coverage.cloudfleet_unmatched : [];
+  const cloudfleetOnlyCount = cloudfleetUnmatched.length;
   const coverageByFleet = useMemo(() => {
     const map = new Map();
     for (const p of coveragePlates) {
@@ -547,7 +549,7 @@ export default function DisponibilidadPage() {
             <span className="eyebrow">Cobertura CloudFleet</span>
             <h3 className="disp-ranking-title">
               {hasCoverageData
-                ? `${coverageSummary.covered ?? 0} de ${coverageSummary.total ?? 0} placas con datos (${fmtPct(coverageSummary.coverage_pct)})`
+                ? `${coverageSummary.covered ?? 0} de ${coverageSummary.total ?? 0} placas con datos (${fmtPct(coverageSummary.coverage_pct)})${cloudfleetOnlyCount > 0 ? ` · ${cloudfleetOnlyCount} solo en CloudFleet` : ""}`
                 : "Sin información de cobertura"}
             </h3>
           </div>
@@ -604,6 +606,32 @@ export default function DisponibilidadPage() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {cloudfleetUnmatched.length > 0 && (
+                  <div className="disp-coverage-plates">
+                    <h4 className="disp-coverage-subtitle">
+                      En CloudFleet sin registrar localmente ({cloudfleetUnmatched.length})
+                    </h4>
+                    <div className="vehicles-table-shell">
+                      <table className="vehicles-table">
+                        <thead>
+                          <tr>
+                            <th>Código</th>
+                            <th>Cost center</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cloudfleetUnmatched.map((item) => (
+                            <tr key={item.code}>
+                              <td>{item.code}</td>
+                              <td>{item.cost_center || "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </>

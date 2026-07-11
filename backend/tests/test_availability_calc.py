@@ -19,8 +19,10 @@ import pytest
 
 from app.services.availability import (
     AvailabilityTarget,
+    _normalize_plate,
     calculate_availability_for_targets,
     dedupe_work_orders,
+    find_unmatched_cloudfleet_vehicles,
 )
 
 
@@ -495,3 +497,74 @@ def test_mttr_closed_order_outside_month_ignored():
     assert result.mttr_hours is None
     assert result.orders_closed == 0
     assert result.h_no_disp > 0.0
+
+
+# ── find_unmatched_cloudfleet_vehicles ──────────────────────────────────────
+
+
+def test_unmatched_normalizes_and_skips_matched():
+    """Solo devuelve codigos CloudFleet cuya placa normalizada no esta local."""
+    local = {"ABC123", "XYZ789"}
+    vehicles = [
+        {"code": "ABC-123"},  # match normalizado
+        {"code": "QLM001"},
+        {"code": "xyz 789"},  # match normalizado
+        {"code": "QLM002"},
+    ]
+    result = find_unmatched_cloudfleet_vehicles(vehicles, local)
+    assert [item["code"] for item in result] == ["QLM001", "QLM002"]
+    assert all(item["normalized"] == _normalize_plate(item["code"]) for item in result)
+
+
+def test_unmatched_ignores_missing_code():
+    """Vehiculos sin code se ignoran."""
+    local = {"ABC123"}
+    vehicles = [
+        {"code": None},
+        {"code": ""},
+        {"code": "   "},
+        {"code": "QLM001"},
+    ]
+    result = find_unmatched_cloudfleet_vehicles(vehicles, local)
+    assert [item["code"] for item in result] == ["QLM001"]
+
+
+def test_unmatched_dedupes_by_normalized():
+    """Deduplica por placa normalizada conservando la primera aparicion."""
+    local = set()
+    vehicles = [
+        {"code": "qlm-001"},
+        {"code": "QLM001"},
+        {"code": "QLM 001"},
+    ]
+    result = find_unmatched_cloudfleet_vehicles(vehicles, local)
+    assert len(result) == 1
+    assert result[0]["code"] == "qlm-001"
+    assert result[0]["normalized"] == "QLM001"
+
+
+def test_unmatched_cost_center_none_when_missing():
+    """cost_center es None cuando no viene en el vehiculo."""
+    local = set()
+    vehicles = [
+        {"code": "QLM001"},
+        {"code": "QLM002", "costCenter": None},
+        {"code": "QLM003", "costCenter": {"name": "Taller Norte"}},
+    ]
+    result = find_unmatched_cloudfleet_vehicles(vehicles, local)
+    by_code = {item["code"]: item["cost_center"] for item in result}
+    assert by_code["QLM001"] is None
+    assert by_code["QLM002"] is None
+    assert by_code["QLM003"] == "Taller Norte"
+
+
+def test_unmatched_sorts_by_code():
+    """El resultado se ordena por code ascendente."""
+    local = set()
+    vehicles = [
+        {"code": "ZZZ999"},
+        {"code": "AAA001"},
+        {"code": "MMM500"},
+    ]
+    result = find_unmatched_cloudfleet_vehicles(vehicles, local)
+    assert [item["code"] for item in result] == ["AAA001", "MMM500", "ZZZ999"]

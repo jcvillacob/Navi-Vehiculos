@@ -834,12 +834,19 @@ class AvailabilityRankingItem(BaseModel):
     orders_closed: int = Field(default=0, description="Ordenes cerradas de la placa")
 
 
+class CloudfleetUnmatchedVehicle(BaseModel):
+    code: str = Field(..., description="Codigo del vehiculo en CloudFleet")
+    cost_center: str | None = Field(default=None, description="Centro de costo en CloudFleet")
+    last_seen_at: str | None = Field(default=None, description="Ultima vez visto en formato ISO-8601")
+
+
 class AvailabilityCoverageSummary(BaseModel):
     total: int = Field(default=0, description="Total de placas en el mes")
     covered: int = Field(default=0, description="Placas con calculo o sin ordenes")
     uncovered: int = Field(default=0, description="Placas no encontradas en CloudFleet")
     error: int = Field(default=0, description="Placas con error de calculo")
     coverage_pct: float | None = Field(default=None, description="Porcentaje de cobertura")
+    cloudfleet_only: int = Field(default=0, description="Vehiculos que existen en CloudFleet pero no en el maestro local")
 
 
 class AvailabilityCoverageFleet(BaseModel):
@@ -862,6 +869,10 @@ class AvailabilityCoverageResponse(BaseModel):
     summary: AvailabilityCoverageSummary = Field(default_factory=AvailabilityCoverageSummary)
     fleets: list[AvailabilityCoverageFleet] = Field(default_factory=list)
     uncovered_plates: list[AvailabilityCoveragePlate] = Field(default_factory=list)
+    cloudfleet_unmatched: list[CloudfleetUnmatchedVehicle] = Field(
+        default_factory=list,
+        description="Vehiculos presentes en CloudFleet pero no registrados localmente",
+    )
 
 
 class AvailabilityRankingResponse(BaseModel):

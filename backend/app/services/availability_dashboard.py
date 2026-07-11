@@ -27,6 +27,7 @@ from app.services.availability_store import (
     _SYSTEM_CUSTOMER_NAME,
     _ensure_availability_table,
     list_monthly_availability,
+    list_unmatched_cloudfleet,
 )
 from app.core.db import db_conn
 
@@ -321,6 +322,18 @@ def get_cloudfleet_coverage(month: str) -> dict[str, Any]:
 
     coverage_pct = round(covered / total * 100.0, 1) if total > 0 else None
 
+    cloudfleet_unmatched = list_unmatched_cloudfleet(month)
+    cloudfleet_unmatched_payload = [
+        {
+            "code": item["code"],
+            "cost_center": item["cost_center"],
+            "last_seen_at": item["last_seen_at"].isoformat()
+            if item.get("last_seen_at")
+            else None,
+        }
+        for item in cloudfleet_unmatched
+    ]
+
     fleets = [
         {
             "customer_id": bucket["customer_id"],
@@ -346,9 +359,11 @@ def get_cloudfleet_coverage(month: str) -> dict[str, Any]:
             "uncovered": uncovered,
             "error": error,
             "coverage_pct": coverage_pct,
+            "cloudfleet_only": len(cloudfleet_unmatched_payload),
         },
         "fleets": fleets,
         "uncovered_plates": uncovered_plates,
+        "cloudfleet_unmatched": cloudfleet_unmatched_payload,
     }
 
 

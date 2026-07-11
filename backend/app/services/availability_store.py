@@ -27,8 +27,10 @@ from app.services.availability import (
     AvailabilityResult,
     AvailabilityTarget,
     _month_bounds_utc,
+    _normalize_plate,
     calculate_availability_for_targets,
     dedupe_work_orders,
+    find_unmatched_cloudfleet_vehicles,
 )
 
 _logger = logging.getLogger(__name__)
@@ -100,6 +102,24 @@ def _ensure_availability_table() -> None:
                     ADD COLUMN IF NOT EXISTS orders_closed INTEGER NOT NULL DEFAULT 0;
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS cloudfleet_unmatched_vehicles (
+                    id BIGSERIAL PRIMARY KEY,
+                    period_month TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    cost_center TEXT NULL,
+                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (period_month, code)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS cloudfleet_unmatched_vehicles_month_idx
+                    ON cloudfleet_unmatched_vehicles (period_month);
+                """
+            )
         own_conn.commit()
     _TABLE_BOOTSTRAPPED = True
 
@@ -150,6 +170,57 @@ def _upsert_result(
                 _SOURCE_CLOUDFLEET,
             ),
         )
+
+
+def _sync_cloudfleet_unmatched(
+    conn: psycopg.Connection,
+    *,
+    period_month: str,
+    unmatched: list[dict[str, Any]],
+) -> None:
+    """
+    Reemplaza los registros de vehiculos CloudFleet no registrados localmente
+    para el mes dado. `unmatched` viene de `find_unmatched_cloudfleet_vehicles`.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM cloudfleet_unmatched_vehicles WHERE period_month = %s",
+            (period_month,),
+        )
+        if unmatched:
+            cur.executemany(
+                """
+                INSERT INTO cloudfleet_unmatched_vehicles
+                    (period_month, code, cost_center, last_seen_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (period_month, code) DO UPDATE SET
+                    cost_center = EXCLUDED.cost_center,
+                    last_seen_at = NOW();
+                """,
+                [
+                    (period_month, item["code"], item["cost_center"])
+                    for item in unmatched
+                ],
+            )
+
+
+def list_unmatched_cloudfleet(month: str) -> list[dict[str, Any]]:
+    """
+    Devuelve los codigos CloudFleet del mes que no tienen placa local asociada.
+    """
+    _ensure_availability_table()
+    with db_conn(row_factory=dict_row) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT code, cost_center, last_seen_at
+                FROM cloudfleet_unmatched_vehicles
+                WHERE period_month = %s
+                ORDER BY code ASC;
+                """,
+                (month,),
+            )
+            return [dict(row) for row in cur.fetchall()]
 
 
 def list_monthly_availability(
@@ -227,6 +298,37 @@ def _load_plates_for_customers(
             rows = cur.fetchall()
 
     return [AvailabilityTarget(plate=str(row["plate"])) for row in rows if row.get("plate")]
+
+
+def _load_all_local_plates_normalized() -> set[str]:
+    """
+    Todas las placas locales normalizadas, SIN filtro de customer.
+
+    Se excluyen las placas asignadas al customer interno `__navitrans_system__`
+    (rendimientos ad-hoc). Esto garantiza que la deteccion de vehiculos CloudFleet
+    "sin match local" sea consistente aunque `run_availability_phase` se invoque
+    con un subconjunto de customers: los filtros no deben hacer que placas locales
+    de otros clientes parezcan "fantasmas" en CloudFleet.
+    """
+    with db_conn(row_factory=dict_row) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT a.plate
+                FROM vehicle_motor_assignments a
+                LEFT JOIN customers c ON c.id = a.customer_id
+                WHERE c.name IS NULL OR c.name <> %s;
+                """,
+                (_SYSTEM_CUSTOMER_NAME,),
+            )
+            rows = cur.fetchall()
+
+    plates: set[str] = set()
+    for row in rows:
+        plate = row.get("plate")
+        if plate:
+            plates.add(_normalize_plate(plate))
+    return plates
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -324,6 +426,17 @@ def run_availability_phase(
             len(deduped_orders),
         )
 
+    # Deteccion bidireccional: placas CloudFleet que no existen localmente.
+    # Se usa el universo COMPLETO de placas locales (sin filtro de customer) para
+    # evitar falsos positivos cuando el calculo se filtra a un subconjunto.
+    local_plates = _load_all_local_plates_normalized()
+    cloudfleet_unmatched = find_unmatched_cloudfleet_vehicles(vehicles, local_plates)
+    _logger.info(
+        "Disponibilidad %s: %d vehiculos CloudFleet no registrados localmente.",
+        month,
+        len(cloudfleet_unmatched),
+    )
+
     results = calculate_availability_for_targets(
         targets,
         month=month,
@@ -334,6 +447,9 @@ def run_availability_phase(
 
     processed = 0
     with db_conn() as conn:
+        _sync_cloudfleet_unmatched(
+            conn, period_month=month, unmatched=cloudfleet_unmatched
+        )
         for result in results:
             _upsert_result(conn, period_month=month, result=result)
             processed += 1
@@ -361,4 +477,5 @@ def run_availability_phase(
 __all__ = [
     "run_availability_phase",
     "list_monthly_availability",
+    "list_unmatched_cloudfleet",
 ]

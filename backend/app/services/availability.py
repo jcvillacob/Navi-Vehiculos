@@ -298,6 +298,34 @@ def dedupe_work_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def find_unmatched_cloudfleet_vehicles(
+    cloudfleet_vehicles: list[dict[str, Any]],
+    local_plates: set[str],
+) -> list[dict[str, Any]]:
+    """
+    Devuelve los vehiculos de CloudFleet cuyo codigo normalizado no esta
+    presente en el set de placas locales normalizadas.
+
+    - `local_plates` debe contener placas YA normalizadas (usar `_normalize_plate`).
+    - Se ignora cualquier vehiculo sin `code`.
+    - Se deduplica por placa normalizada conservando la primera aparicion.
+    - Resultado ordenado por `code` ascendente.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for vehicle in cloudfleet_vehicles:
+        if not isinstance(vehicle, dict):
+            continue
+        code = _extract_vehicle_code(vehicle)
+        if not code:
+            continue
+        normalized = _normalize_plate(code)
+        if not normalized or normalized in local_plates or normalized in seen:
+            continue
+        cost_center = (vehicle.get("costCenter") or {}).get("name") or None
+        seen[normalized] = {"code": code, "normalized": normalized, "cost_center": cost_center}
+    return sorted(seen.values(), key=lambda item: item["code"])
+
+
 def calculate_availability_for_targets(
     targets: list[AvailabilityTarget],
     *,
@@ -456,5 +484,6 @@ __all__ = [
     "AvailabilityResult",
     "calculate_availability_for_targets",
     "dedupe_work_orders",
+    "find_unmatched_cloudfleet_vehicles",
     "_month_bounds_utc",
 ]

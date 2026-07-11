@@ -387,6 +387,13 @@ def test_coverage_summary_and_uncovered_lists(monkeypatch):
         "app.services.availability_dashboard._fetch_month_rows",
         lambda month, customer_id=None: rows,
     )
+    monkeypatch.setattr(
+        "app.services.availability_dashboard.list_unmatched_cloudfleet",
+        lambda month: [
+            {"code": "QLM001", "cost_center": "Taller Norte", "last_seen_at": None},
+            {"code": "QLM002", "cost_center": None, "last_seen_at": None},
+        ],
+    )
 
     coverage = dashboard.get_cloudfleet_coverage("2026-06")
 
@@ -399,6 +406,7 @@ def test_coverage_summary_and_uncovered_lists(monkeypatch):
     assert summary["uncovered"] == 3
     assert summary["error"] == 1
     assert summary["coverage_pct"] == round(3 / 7 * 100.0, 1)
+    assert summary["cloudfleet_only"] == 2
 
     fleets = coverage["fleets"]
     assert [f["customer_name"] for f in fleets] == ["Flota A", "Flota B"]
@@ -412,6 +420,13 @@ def test_coverage_summary_and_uncovered_lists(monkeypatch):
     plates = coverage["uncovered_plates"]
     assert [p["plate"] for p in plates] == ["A02", "A03", "B04"]
     assert all(p["customer_name"] in {"Flota A", "Flota B"} for p in plates)
+
+    unmatched = coverage["cloudfleet_unmatched"]
+    assert len(unmatched) == 2
+    assert unmatched[0]["code"] == "QLM001"
+    assert unmatched[0]["cost_center"] == "Taller Norte"
+    assert unmatched[1]["code"] == "QLM002"
+    assert unmatched[1]["cost_center"] is None
 
 
 # ── _fetch_month_rows query ─────────────────────────────────────────────────
