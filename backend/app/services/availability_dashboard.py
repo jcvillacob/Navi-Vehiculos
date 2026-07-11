@@ -36,6 +36,10 @@ _logger = logging.getLogger(__name__)
 FLEET_GOOD = 97.0
 FLEET_WARNING = 96.0
 
+# Umbrales de clasificacion de MTTR (doc seccion 9 / 17).
+MTTR_GOOD = 24.0
+MTTR_WARNING = 48.0
+
 # Estados cuyo h_total cuenta para el denominador de disponibilidad.
 _HOURS_STATUSES = ("calculated", "no_orders")
 _ALL_STATUSES = ("calculated", "no_orders", "not_in_cloudfleet", "error")
@@ -54,6 +58,17 @@ def _classify(pct: float | None) -> str:
     return "critical"
 
 
+def _classify_mttr(hours: float | None) -> str:
+    """good / warning / critical / no_data segun los umbrales de MTTR."""
+    if hours is None:
+        return "no_data"
+    if hours <= MTTR_GOOD:
+        return "good"
+    if hours <= MTTR_WARNING:
+        return "warning"
+    return "critical"
+
+
 def _empty_breakdown() -> dict[str, int]:
     return {status: 0 for status in _ALL_STATUSES}
 
@@ -68,11 +83,14 @@ def _pct_from_hours(h_total: float, h_no_disp: float) -> float | None:
 def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """
     Agrega una lista de filas (cada una de una placa) en metricas de conjunto.
-    Espera columnas: calculation_status, h_total, h_no_disp.
+    Espera columnas: calculation_status, h_total, h_no_disp, mttr_hours,
+    orders_closed.
     """
     h_total = 0.0
     h_no_disp = 0.0
     vehicle_count = 0
+    mttr_weighted_numerator = 0.0
+    mttr_closed_orders = 0
     breakdown = _empty_breakdown()
     for row in rows:
         vehicle_count += 1
@@ -82,7 +100,19 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if status in _HOURS_STATUSES and row.get("h_total") is not None:
             h_total += float(row["h_total"])
             h_no_disp += float(row.get("h_no_disp") or 0.0)
+
+        row_mttr = row.get("mttr_hours")
+        row_closed = int(row.get("orders_closed") or 0)
+        if row_mttr is not None and row_closed > 0:
+            mttr_weighted_numerator += float(row_mttr) * row_closed
+            mttr_closed_orders += row_closed
+
     pct = _pct_from_hours(h_total, h_no_disp)
+    if mttr_closed_orders > 0:
+        mttr_hours = round(mttr_weighted_numerator / mttr_closed_orders, 3)
+    else:
+        mttr_hours = None
+
     return {
         "vehicle_count": vehicle_count,
         "h_total": round(h_total, 3),
@@ -90,6 +120,9 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "availability_pct": pct,
         "status": _classify(pct),
         "status_breakdown": breakdown,
+        "mttr_hours": mttr_hours,
+        "orders_closed": mttr_closed_orders,
+        "mttr_status": _classify_mttr(mttr_hours),
     }
 
 
@@ -118,6 +151,8 @@ def _fetch_month_rows(month: str, *, customer_id: int | None = None) -> list[dic
                        mva.h_total,
                        mva.h_no_disp,
                        mva.orders_considered,
+                       mva.mttr_hours,
+                       mva.orders_closed,
                        a.customer_id,
                        COALESCE(c.name, %s) AS customer_name
                 FROM monthly_vehicle_availability mva
@@ -180,20 +215,39 @@ def get_vehicle_ranking(
     customer_id: int | None = None,
     limit: int = 20,
     order: str = "worst",
+    include_no_orders: bool = False,
 ) -> list[dict[str, Any]]:
     """
-    Ranking de vehiculos por disponibilidad. Solo placas con estado 'calculated'
-    (las unicas con un pct comparable). `order='worst'` => peor disponibilidad
-    primero.
+    Ranking de vehiculos por disponibilidad.
+
+    Por defecto solo incluye placas con estado 'calculated' (las unicas con un
+    pct comparable). `order='worst'` => peor disponibilidad primero.
+
+    Si `include_no_orders=True`, tambien se incluyen las placas con estado
+    'no_orders' (100% de disponibilidad almacenado), ubicandose al final del
+    orden 'best' o al inicio del orden 'worst'.
     """
+    allowed_statuses = {"calculated"}
+    if include_no_orders:
+        allowed_statuses.add("no_orders")
+
     rows = [
         row
         for row in _fetch_month_rows(month, customer_id=customer_id)
-        if row.get("calculation_status") == "calculated"
+        if row.get("calculation_status") in allowed_statuses
         and row.get("project_availability_pct") is not None
     ]
-    reverse = order == "best"
-    rows.sort(key=lambda r: float(r["project_availability_pct"]), reverse=reverse)
+
+    def _rank(row: dict[str, Any]) -> tuple[int, float]:
+        pct = float(row["project_availability_pct"])
+        # 'calculated' siempre tiene prioridad sobre 'no_orders' dentro del
+        # mismo sentido de ordenamiento; en 'best' las no_orders quedan al final.
+        status_rank = 0 if row.get("calculation_status") == "calculated" else 1
+        if order == "best":
+            return (status_rank, -pct)
+        return (status_rank, pct)
+
+    rows.sort(key=_rank)
     limited = rows[: max(1, min(limit, 200))]
     return [
         {

@@ -35,6 +35,7 @@ export function useAvailabilityDashboard() {
   const [month, setMonth] = useState(currentMonth);
   const [selectedCustomerId, setSelectedCustomerId] = useState(null);
   const [rankingOrder, setRankingOrder] = useState("worst");
+  const [includeNoOrders, setIncludeNoOrders] = useState(false);
 
   const [customers, setCustomers] = useState([]);
   const [overview, setOverview] = useState(null);
@@ -94,6 +95,7 @@ export function useAvailabilityDashboard() {
           customer_id: selectedCustomerId,
           limit: RANKING_LIMIT,
           order: rankingOrder,
+          include_no_orders: includeNoOrders,
         }),
         fetchAvailabilityTrend({
           month_to: month,
@@ -108,7 +110,7 @@ export function useAvailabilityDashboard() {
     } finally {
       setLoadingDetail(false);
     }
-  }, [month, selectedCustomerId, rankingOrder]);
+  }, [month, selectedCustomerId, rankingOrder, includeNoOrders]);
 
   useEffect(() => {
     loadOverview();
@@ -178,6 +180,8 @@ export function useAvailabilityDashboard() {
     setSelectedCustomerId,
     rankingOrder,
     setRankingOrder,
+    includeNoOrders,
+    setIncludeNoOrders,
     // datos
     customers,
     overview,

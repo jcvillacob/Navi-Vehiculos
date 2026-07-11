@@ -34,10 +34,17 @@ def get_ranking(
     customer_id: int | None = Query(default=None, gt=0, description="Filtrar por flota"),
     limit: int = Query(default=20, ge=1, le=200),
     order: str = Query(default="worst", pattern=r"^(worst|best)$"),
+    include_no_orders: bool = Query(default=False, description="Incluir placas sin ordenes (100%)"),
     _user: dict = Depends(require_permission("rendimientos.view")),
 ) -> AvailabilityRankingResponse:
     """Ranking de vehiculos por disponibilidad (peor o mejor estado)."""
-    items = get_vehicle_ranking(month, customer_id=customer_id, limit=limit, order=order)
+    items = get_vehicle_ranking(
+        month,
+        customer_id=customer_id,
+        limit=limit,
+        order=order,
+        include_no_orders=include_no_orders,
+    )
     return AvailabilityRankingResponse(
         month=month,
         customer_id=customer_id,

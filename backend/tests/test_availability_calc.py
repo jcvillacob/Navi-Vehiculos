@@ -381,3 +381,117 @@ def test_dedupe_unparseable_updated_at_keeps_first():
     result = dedupe_work_orders(orders)
     assert len(result) == 1
     assert result[0]["value"] == 1
+
+
+# ── MTTR mensual ────────────────────────────────────────────────────────────
+
+
+def test_mttr_single_closed_order_in_month():
+    """Orden cerrada en el mes con start/finalCompletionDate conocidos."""
+    _reset_order_seq()
+    targets = [AvailabilityTarget(plate="ABC123")]
+    vehicles = [_vehicle("ABC123")]
+    orders = [
+        _order(
+            "ABC123",
+            status="closed",
+            startDate="2026-06-10T18:00:00.0000000Z",
+            finalCompletionDate="2026-06-11T18:00:00.0000000Z",
+        )
+    ]
+    results = calculate_availability_for_targets(
+        targets,
+        month="2026-06",
+        cloudfleet_vehicles=vehicles,
+        cloudfleet_work_orders=orders,
+        now=datetime(2026, 7, 11, 12, 0, 0),
+    )
+    result = results[0]
+    assert result.status == "calculated"
+    assert result.mttr_hours == 24.0
+    assert result.orders_closed == 1
+
+
+def test_mttr_two_closed_orders_average():
+    """Promedio de dos ordenes cerradas en el mes."""
+    _reset_order_seq()
+    targets = [AvailabilityTarget(plate="ABC123")]
+    vehicles = [_vehicle("ABC123")]
+    orders = [
+        _order(
+            "ABC123",
+            status="closed",
+            startDate="2026-06-10T18:00:00.0000000Z",
+            finalCompletionDate="2026-06-11T06:00:00.0000000Z",
+        ),
+        _order(
+            "ABC123",
+            status="closed",
+            startDate="2026-06-12T18:00:00.0000000Z",
+            finalCompletionDate="2026-06-14T06:00:00.0000000Z",
+        ),
+    ]
+    results = calculate_availability_for_targets(
+        targets,
+        month="2026-06",
+        cloudfleet_vehicles=vehicles,
+        cloudfleet_work_orders=orders,
+        now=datetime(2026, 7, 11, 12, 0, 0),
+    )
+    result = results[0]
+    assert result.status == "calculated"
+    assert result.mttr_hours == 24.0
+    assert result.orders_closed == 2
+
+
+def test_mttr_open_order_ignored():
+    """Orden abierta (sin fc/tc) no cuenta para MTTR pero si para h_no_disp."""
+    _reset_order_seq()
+    targets = [AvailabilityTarget(plate="ABC123")]
+    vehicles = [_vehicle("ABC123")]
+    orders = [
+        _order(
+            "ABC123",
+            status="opened",
+            startDate="2026-06-10T18:00:00.0000000Z",
+        )
+    ]
+    results = calculate_availability_for_targets(
+        targets,
+        month="2026-06",
+        cloudfleet_vehicles=vehicles,
+        cloudfleet_work_orders=orders,
+        now=datetime(2026, 7, 11, 12, 0, 0),
+    )
+    result = results[0]
+    assert result.status == "calculated"
+    assert result.mttr_hours is None
+    assert result.orders_closed == 0
+    assert result.h_no_disp > 0.0
+
+
+def test_mttr_closed_order_outside_month_ignored():
+    """Orden cerrada fuera del mes no cuenta para MTTR pero si para h_no_disp."""
+    _reset_order_seq()
+    targets = [AvailabilityTarget(plate="ABC123")]
+    vehicles = [_vehicle("ABC123")]
+    orders = [
+        _order(
+            "ABC123",
+            status="closed",
+            startDate="2026-06-25T18:00:00.0000000Z",
+            finalCompletionDate="2026-07-02T18:00:00.0000000Z",
+        )
+    ]
+    results = calculate_availability_for_targets(
+        targets,
+        month="2026-06",
+        cloudfleet_vehicles=vehicles,
+        cloudfleet_work_orders=orders,
+        now=datetime(2026, 7, 11, 12, 0, 0),
+    )
+    result = results[0]
+    assert result.status == "calculated"
+    assert result.mttr_hours is None
+    assert result.orders_closed == 0
+    assert result.h_no_disp > 0.0

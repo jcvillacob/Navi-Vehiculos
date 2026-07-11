@@ -25,6 +25,8 @@ def _row(
     pct: float | None = 100.0,
     h_total: float | None = 720.0,
     h_no_disp: float | None = 0.0,
+    mttr_hours: float | None = None,
+    orders_closed: int = 0,
 ) -> dict[str, Any]:
     return {
         "plate": plate,
@@ -33,6 +35,8 @@ def _row(
         "h_total": h_total,
         "h_no_disp": h_no_disp,
         "orders_considered": 0,
+        "mttr_hours": mttr_hours,
+        "orders_closed": orders_closed,
         "customer_id": customer_id,
         "customer_name": customer_name,
     }
@@ -80,6 +84,30 @@ def test_overview_grouping_and_global_metrics(monkeypatch):
     assert fleets[1]["status"] == "good"
 
 
+def test_overview_mttr_weighted_aggregation(monkeypatch):
+    """MTTR de flota es el promedio ponderado por ordenes cerradas."""
+    rows = [
+        _row("A01", 1, "Flota A", "calculated", 100.0, 720.0, 0.0, mttr_hours=24.0, orders_closed=1),
+        _row("A02", 1, "Flota A", "calculated", 100.0, 720.0, 0.0, mttr_hours=48.0, orders_closed=1),
+    ]
+    monkeypatch.setattr(
+        "app.services.availability_dashboard._fetch_month_rows",
+        lambda month, customer_id=None: rows,
+    )
+
+    overview = dashboard.get_availability_overview("2026-06")
+
+    overall = overview["overall"]
+    assert overall["mttr_hours"] == 36.0
+    assert overall["orders_closed"] == 2
+    assert overall["mttr_status"] == "warning"
+
+    fleet = overview["fleets"][0]
+    assert fleet["mttr_hours"] == 36.0
+    assert fleet["orders_closed"] == 2
+    assert fleet["mttr_status"] == "warning"
+
+
 # ── _classify ────────────────────────────────────────────────────────────────
 
 
@@ -95,6 +123,20 @@ def test_overview_grouping_and_global_metrics(monkeypatch):
 def test_classify_thresholds(pct, expected):
     """Umbrales good/warning/critical/no_data."""
     assert dashboard._classify(pct) == expected
+
+
+@pytest.mark.parametrize(
+    "hours,expected",
+    [
+        (24.0, "good"),
+        (30.0, "warning"),
+        (50.0, "critical"),
+        (None, "no_data"),
+    ],
+)
+def test_classify_mttr_thresholds(hours, expected):
+    """Umbrales MTTR good/warning/critical/no_data."""
+    assert dashboard._classify_mttr(hours) == expected
 
 
 # ── get_vehicle_ranking ─────────────────────────────────────────────────────
@@ -126,6 +168,29 @@ def test_ranking_filters_and_ordering(monkeypatch):
     limited = dashboard.get_vehicle_ranking("2026-06", order="worst", limit=1)
     assert len(limited) == 1
     assert limited[0]["plate"] == "A01"
+
+
+def test_ranking_include_no_orders(monkeypatch):
+    """include_no_orders=True agrega placas no_orders al final del orden 'best'."""
+    rows = [
+        _row("A01", 1, "Flota A", "calculated", 95.0, 720.0, 36.0),
+        _row("A02", 1, "Flota A", "calculated", 98.0, 720.0, 14.4),
+        _row("A03", 1, "Flota A", "no_orders", 100.0, 720.0, 0.0),
+        _row("A04", 1, "Flota A", "no_orders", 100.0, 720.0, 0.0),
+    ]
+    monkeypatch.setattr(
+        "app.services.availability_dashboard._fetch_month_rows",
+        lambda month, customer_id=None: rows,
+    )
+
+    best = dashboard.get_vehicle_ranking(
+        "2026-06", order="best", limit=10, include_no_orders=True
+    )
+    plates = [r["plate"] for r in best]
+    assert plates == ["A02", "A01", "A03", "A04"]
+    for r in best:
+        if r["plate"].startswith("A03") or r["plate"].startswith("A04"):
+            assert r["orders_considered"] == 0
 
 
 # ── _add_months ──────────────────────────────────────────────────────────────

@@ -60,6 +60,8 @@ class AvailabilityResult:
     h_no_disp: float | None = None
     project_availability_pct: float | None = None
     orders_considered: int = 0
+    mttr_hours: float | None = None
+    orders_closed: int = 0
     error_message: str | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -157,6 +159,44 @@ def _order_end_local_project(order: dict[str, Any], *, now: datetime) -> datetim
         return None
 
     return now
+
+
+def _order_repair_hours(
+    order: dict[str, Any],
+    *,
+    month_start: datetime,
+    month_end_full: datetime,
+) -> float | None:
+    """
+    Duracion de reparacion de una orden en horas, usada para MTTR mensual.
+
+    - Solo se consideran ordenes CERRADAS DENTRO del mes.
+    - El cierre real es `finalCompletionDate` (doc seccion 9), con fallback a
+      `technicalCompletionDate` si no existe (nota: esta es una desviacion
+      deliberada respecto a la doc, que usa finalCompletionDate).
+    - Si no hay fecha de cierre real -> None (orden abierta, no cuenta).
+    - Si el cierre cae fuera de [month_start, month_end_full] -> None.
+    - Si el inicio es invalido o start >= end -> None.
+
+    Nota: este modulo solo indexa ordenes con `affectsVehicleAvailability=true`,
+    por lo que el MTTR calculado aqui considera exclusivamente ese subconjunto.
+    Esto difiere de la doc seccion 9, que promedia todas las ordenes cerradas;
+    la desviacion es deliberada y documentada.
+    """
+    end = _parse_utc_to_local(order.get("finalCompletionDate"))
+    if end is None:
+        end = _parse_utc_to_local(order.get("technicalCompletionDate"))
+    if end is None:
+        return None
+
+    if end < month_start or end > month_end_full:
+        return None
+
+    start = _order_start_local(order)
+    if start is None or start >= end:
+        return None
+
+    return (end - start).total_seconds() / 3600.0
 
 
 def _order_unavailable_hours(
@@ -277,11 +317,16 @@ def calculate_availability_for_targets(
       3. Calcular h_no_disp como suma de intersecciones (formula 8.2).
       4. h_total = dias_del_mes * 24 (un solo vehiculo, denominador completo).
       5. pct = max(0, min(100, (h_total - h_no_disp) / h_total * 100)).
+      6. MTTR mensual: promedio de horas de reparacion de las ordenes cerradas
+         DENTRO del mes (ver `_order_repair_hours`).
 
     Notas:
       - Para meses pasados completos: period_end = ultimo segundo del mes.
       - Para mes actual: period_end = min(now, ultimo segundo del mes).
       - now se inyecta para facilitar testing.
+      - El MTTR aqui considera solo ordenes con `affectsVehicleAvailability=true`
+        (las unicas que indexa este modulo), a diferencia de la doc seccion 9
+        que usa todas las ordenes cerradas. Esta desviacion es deliberada.
     """
     period_start, period_end_full, days_in_month = _month_bounds_local(month)
     h_total = days_in_month * 24.0
@@ -356,6 +401,7 @@ def calculate_availability_for_targets(
 
         try:
             h_no_disp = 0.0
+            repair_durations: list[float] = []
             for order in plate_orders:
                 h_no_disp += _order_unavailable_hours(
                     order,
@@ -363,10 +409,22 @@ def calculate_availability_for_targets(
                     period_end=period_end,
                     now=now,
                 )
+                repair_hours = _order_repair_hours(
+                    order,
+                    month_start=period_start,
+                    month_end_full=period_end_full,
+                )
+                if repair_hours is not None:
+                    repair_durations.append(repair_hours)
+
             # No deberia pasar pero por si las fechas se solapan entre ordenes:
             h_no_disp = max(0.0, min(h_no_disp, h_total))
             pct = (h_total - h_no_disp) / h_total * 100.0
             pct = max(0.0, min(100.0, pct))
+
+            orders_closed = len(repair_durations)
+            mttr_hours = round(sum(repair_durations) / orders_closed, 3) if repair_durations else None
+
             results.append(
                 AvailabilityResult(
                     plate=target.plate,
@@ -375,6 +433,8 @@ def calculate_availability_for_targets(
                     h_no_disp=round(h_no_disp, 3),
                     project_availability_pct=round(pct, 3),
                     orders_considered=len(plate_orders),
+                    mttr_hours=mttr_hours,
+                    orders_closed=orders_closed,
                 )
             )
         except Exception as exc:

@@ -726,6 +726,8 @@ class MonthlyVehicleAvailabilityRow(BaseModel):
     h_total: float | None = Field(default=None, description="Horas teoricas del mes (dias*24)")
     h_no_disp: float | None = Field(default=None, description="Horas no disponibles en el mes")
     orders_considered: int = Field(default=0, description="Cantidad de ordenes que afectaron disponibilidad")
+    mttr_hours: float | None = Field(default=None, description="MTTR mensual en horas")
+    orders_closed: int = Field(default=0, description="Ordenes cerradas en el mes que alimentan el MTTR")
     error_message: str | None = Field(default=None, description="Detalle del error si lo hubo")
     last_calculated_at: datetime = Field(..., description="Cuando se calculo por ultima vez")
     source: str = Field(default="cloudfleet", description="Fuente del calculo")
@@ -793,6 +795,9 @@ class AvailabilityFleet(BaseModel):
     availability_pct: float | None = Field(default=None, description="Disponibilidad agregada de la flota")
     status: str = Field(default="no_data", description="good | warning | critical | no_data")
     status_breakdown: dict[str, int] = Field(default_factory=dict, description="Conteo por calculation_status")
+    mttr_hours: float | None = Field(default=None, description="MTTR ponderado de la flota (horas)")
+    orders_closed: int = Field(default=0, description="Ordenes cerradas en el mes que alimentan el MTTR")
+    mttr_status: str = Field(default="no_data", description="good | warning | critical | no_data")
 
 
 class AvailabilityOverall(BaseModel):
@@ -804,6 +809,9 @@ class AvailabilityOverall(BaseModel):
     status_breakdown: dict[str, int] = Field(default_factory=dict)
     critical_fleets: int = Field(default=0, description="Flotas en estado critico")
     fleet_count: int = Field(default=0, description="Total de flotas con datos")
+    mttr_hours: float | None = Field(default=None, description="MTTR ponderado global (horas)")
+    orders_closed: int = Field(default=0, description="Ordenes cerradas en el mes que alimentan el MTTR")
+    mttr_status: str = Field(default="no_data", description="good | warning | critical | no_data")
 
 
 class AvailabilityOverviewResponse(BaseModel):

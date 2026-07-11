@@ -9,6 +9,7 @@ import {
   PolarAngleAxis,
   RadialBar,
   RadialBarChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -52,11 +53,32 @@ function fmtPct(value) {
   return `${Number(value).toFixed(1)}%`;
 }
 
+function fmtMttr(value) {
+  if (value === null || value === undefined) return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return `${n.toFixed(1)} h`;
+}
+
+function fmtHours(value) {
+  if (value === null || value === undefined) return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return `${Math.round(n).toLocaleString("es-CO")} h`;
+}
+
 function monthLabel(month) {
   if (!month) return "";
   const [year, mon] = month.split("-").map(Number);
   const names = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
   return `${names[mon - 1] || mon} ${year}`;
+}
+
+function shortMonthLabel(month) {
+  if (!month) return "";
+  const mon = Number(month.split("-")[1]);
+  const names = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+  return names[mon - 1] || month;
 }
 
 function GaugeTooltip() {
@@ -71,6 +93,8 @@ export default function DisponibilidadPage() {
     setSelectedCustomerId,
     rankingOrder,
     setRankingOrder,
+    includeNoOrders,
+    setIncludeNoOrders,
     customers,
     overview,
     ranking,
@@ -97,6 +121,19 @@ export default function DisponibilidadPage() {
     return (b.not_in_cloudfleet || 0) + (b.error || 0);
   }, [overall]);
 
+  const prevPct = useMemo(() => {
+    if (!trend?.labels?.length || !Array.isArray(trend.availability_pct)) return null;
+    const idx = trend.labels.length - 2;
+    if (idx < 0) return null;
+    return trend.availability_pct[idx] ?? null;
+  }, [trend]);
+
+  const availabilityDelta = useMemo(() => {
+    const current = overall?.availability_pct;
+    if (current === null || current === undefined || prevPct === null || prevPct === undefined) return null;
+    return Number(current) - Number(prevPct);
+  }, [overall?.availability_pct, prevPct]);
+
   const fleetChartData = useMemo(
     () =>
       fleets
@@ -107,6 +144,7 @@ export default function DisponibilidadPage() {
           pct: f.availability_pct,
           status: f.status,
           vehicles: f.vehicle_count,
+          mttr_hours: f.mttr_hours,
         })),
     [fleets],
   );
@@ -185,7 +223,39 @@ export default function DisponibilidadPage() {
           <strong style={{ color: STATUS_COLOR[overall?.status || "no_data"] }}>
             {loadingOverview ? "…" : fmtPct(overall?.availability_pct)}
           </strong>
-          <p>{monthLabel(month)}</p>
+          <p>
+            {monthLabel(month)}
+            {availabilityDelta !== null && (
+              <span
+                className="disp-kpi-delta"
+                style={{
+                  color:
+                    Math.abs(availabilityDelta) < 0.05
+                      ? STATUS_COLOR.no_data
+                      : availabilityDelta > 0
+                        ? STATUS_COLOR.good
+                        : STATUS_COLOR.critical,
+                }}
+              >
+                {availabilityDelta > 0 ? "▲" : availabilityDelta < 0 ? "▼" : "●"}{" "}
+                {`${availabilityDelta > 0 ? "+" : ""}${availabilityDelta.toFixed(1)} pts vs ${shortMonthLabel(trend?.labels?.[trend.labels.length - 2])}`}
+              </span>
+            )}
+          </p>
+        </article>
+        <article className="card metric-card">
+          <span className="eyebrow">MTTR del mes</span>
+          <strong style={{ color: STATUS_COLOR[overall?.mttr_status || "no_data"] }}>
+            {loadingOverview ? "…" : fmtMttr(overall?.mttr_hours)}
+          </strong>
+          <p>
+            {overall?.orders_closed ?? "—"} órdenes cerradas · meta ≤24 h
+          </p>
+        </article>
+        <article className="card metric-card">
+          <span className="eyebrow">Horas no disponibles</span>
+          <strong>{loadingOverview ? "…" : fmtHours(overall?.h_no_disp)}</strong>
+          <p>acumuladas en {monthLabel(month)}</p>
         </article>
         <article className="card metric-card">
           <span className="eyebrow">Vehículos cubiertos</span>
@@ -231,6 +301,7 @@ export default function DisponibilidadPage() {
               <span className={`availability-badge ${STATUS_BADGE_CLASS[overall?.status || "no_data"]}`}>
                 {STATUS_LABEL[overall?.status || "no_data"]}
               </span>
+              <span className="disp-gauge-target">Meta: 96%</span>
             </div>
           </div>
           <div className="disp-breakdown">
@@ -262,9 +333,14 @@ export default function DisponibilidadPage() {
                   tickFormatter={(v) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)}
                 />
                 <Tooltip
-                  formatter={(value, _n, p) => [`${Number(value).toFixed(1)}%`, `${p.payload.vehicles} veh.`]}
+                  formatter={(value, _n, p) => {
+                    const mttr = p.payload.mttr_hours;
+                    const mttrText = mttr === null || mttr === undefined ? "" : ` · MTTR ${fmtMttr(mttr)}`;
+                    return [`${Number(value).toFixed(1)}% · ${p.payload.vehicles} veh.${mttrText}`, ""];
+                  }}
                   cursor={{ fill: "rgba(53,69,80,0.05)" }}
                 />
+                <ReferenceLine x={97} stroke="#354550" strokeDasharray="4 4" label={{ value: "Meta 97%", position: "top", fontSize: 10, fill: "#354550" }} />
                 <Bar dataKey="pct" radius={[0, 6, 6, 0]} onClick={handleFleetClick} cursor="pointer">
                   {fleetChartData.map((entry) => (
                     <Cell
@@ -290,6 +366,7 @@ export default function DisponibilidadPage() {
               <XAxis dataKey="label" fontSize={11} />
               <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} fontSize={11} width={38} />
               <Tooltip formatter={(value) => (value === null ? "Sin datos" : `${Number(value).toFixed(1)}%`)} />
+              <ReferenceLine y={96} stroke="#354550" strokeDasharray="4 4" label={{ value: "Meta 96%", position: "right", fontSize: 10, fill: "#354550" }} />
               <Line
                 type="monotone"
                 dataKey="pct"
@@ -314,6 +391,14 @@ export default function DisponibilidadPage() {
             </h3>
           </div>
           <div className="disp-ranking-actions">
+            <label className="disp-checkbox">
+              <input
+                type="checkbox"
+                checked={includeNoOrders}
+                onChange={(e) => setIncludeNoOrders(e.target.checked)}
+              />
+              <span>Incluir sin órdenes</span>
+            </label>
             {selectedCustomerId ? (
               <button type="button" className="button-secondary button-sm" onClick={() => setSelectedCustomerId(null)}>
                 Ver todas

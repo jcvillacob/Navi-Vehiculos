@@ -88,6 +88,18 @@ def _ensure_availability_table() -> None:
                     ON monthly_vehicle_availability (period_month);
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE monthly_vehicle_availability
+                    ADD COLUMN IF NOT EXISTS mttr_hours NUMERIC(10,3) NULL;
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE monthly_vehicle_availability
+                    ADD COLUMN IF NOT EXISTS orders_closed INTEGER NOT NULL DEFAULT 0;
+                """
+            )
         own_conn.commit()
     _TABLE_BOOTSTRAPPED = True
 
@@ -109,15 +121,18 @@ def _upsert_result(
             INSERT INTO monthly_vehicle_availability (
                 plate, period_month, calculation_status,
                 project_availability_pct, h_total, h_no_disp,
-                orders_considered, error_message,
+                orders_considered, mttr_hours, orders_closed,
+                error_message,
                 last_calculated_at, source
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
             ON CONFLICT (plate, period_month, source) DO UPDATE SET
                 calculation_status = EXCLUDED.calculation_status,
                 project_availability_pct = EXCLUDED.project_availability_pct,
                 h_total = EXCLUDED.h_total,
                 h_no_disp = EXCLUDED.h_no_disp,
                 orders_considered = EXCLUDED.orders_considered,
+                mttr_hours = EXCLUDED.mttr_hours,
+                orders_closed = EXCLUDED.orders_closed,
                 error_message = EXCLUDED.error_message,
                 last_calculated_at = NOW();
             """,
@@ -129,6 +144,8 @@ def _upsert_result(
                 result.h_total,
                 result.h_no_disp,
                 result.orders_considered,
+                result.mttr_hours,
+                result.orders_closed,
                 result.error_message,
                 _SOURCE_CLOUDFLEET,
             ),
@@ -157,6 +174,8 @@ def list_monthly_availability(
                        h_total,
                        h_no_disp,
                        orders_considered,
+                       mttr_hours,
+                       orders_closed,
                        error_message,
                        last_calculated_at,
                        source

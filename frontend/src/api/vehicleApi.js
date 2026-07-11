@@ -337,9 +337,16 @@ export async function fetchAvailabilityOverview({ month }) {
   return parseJsonOrThrow(response, "Error cargando el resumen de disponibilidad");
 }
 
-export async function fetchAvailabilityRanking({ month, customer_id = null, limit = 20, order = "worst" }) {
+export async function fetchAvailabilityRanking({
+  month,
+  customer_id = null,
+  limit = 20,
+  order = "worst",
+  include_no_orders = false,
+}) {
   const query = new URLSearchParams({ month, limit: String(limit), order });
   if (customer_id) query.set("customer_id", String(customer_id));
+  if (include_no_orders) query.set("include_no_orders", "true");
   const response = await fetchWithAuth(buildUrl(`/api/v1/disponibilidad/ranking?${query.toString()}`));
   const data = await parseJsonOrThrow(response, "Error cargando el ranking de vehiculos");
   return Array.isArray(data?.items) ? data.items : [];
