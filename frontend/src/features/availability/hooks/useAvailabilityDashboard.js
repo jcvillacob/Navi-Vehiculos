@@ -142,7 +142,8 @@ export function useAvailabilityDashboard() {
       month,
       customer_ids: selectedCustomerId ? [selectedCustomerId] : [],
       compute_availability: true,
-      force_recalculate: true,
+      availability_only: true,
+      force_recalculate: false,
       adhoc_only: false,
     };
     try {

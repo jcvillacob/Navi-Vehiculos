@@ -623,6 +623,10 @@ class MonthlyPerformanceCalculateRequest(BaseModel):
         default=False,
         description="Si es true, despues de los rendimientos calcula tambien la disponibilidad de proyectos desde CloudFleet.",
     )
+    availability_only: bool = Field(
+        default=False,
+        description="Si es true, salta la fase de rendimientos y calcula SOLO la disponibilidad CloudFleet (implica compute_availability).",
+    )
     include_adhoc: bool = Field(
         default=False,
         description="Si true, incluye vehiculos sin database asignada usando credenciales Navitrans Geotab.",
@@ -860,6 +864,10 @@ class PerformanceCalculationJob(BaseModel):
     compute_availability: bool = Field(
         default=False,
         description="Si es true, el job tambien corrio el calculo de disponibilidad CloudFleet.",
+    )
+    availability_only: bool = Field(
+        default=False,
+        description="Si es true, el job salto la fase de rendimientos y corrio SOLO la disponibilidad CloudFleet.",
     )
     include_adhoc: bool = Field(
         default=False,

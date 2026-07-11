@@ -126,6 +126,12 @@ def _ensure_jobs_table(conn: psycopg.Connection | None = None) -> None:
                 ADD COLUMN IF NOT EXISTS adhoc_only BOOLEAN NOT NULL DEFAULT FALSE;
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE performance_calculation_jobs
+                ADD COLUMN IF NOT EXISTS availability_only BOOLEAN NOT NULL DEFAULT FALSE;
+                """
+            )
         own_conn.commit()
     finally:
         own_conn.close()
@@ -150,7 +156,12 @@ def _compute_scope_key(payload: MonthlyPerformanceCalculateRequest) -> str:
         cids.add(int(payload.customer_id))
     cids_part = ",".join(str(c) for c in sorted(cids)) if cids else "all"
     db_part = str(payload.customer_database_id) if payload.customer_database_id is not None else "any"
-    avail_part = "av" if payload.compute_availability else "noav"
+    if payload.availability_only:
+        # availability_only implica compute_availability pero debe tener su
+        # propio scope para no colisionar con un job estandar del mismo mes.
+        avail_part = "avonly"
+    else:
+        avail_part = "av" if payload.compute_availability else "noav"
     adhoc_part = "adhoconly" if payload.adhoc_only else ("adhoc" if payload.include_adhoc else "std")
     return f"{cids_part}|{db_part}|{avail_part}|{adhoc_part}"
 
@@ -177,6 +188,7 @@ def _row_to_job(row: dict[str, Any]) -> PerformanceCalculationJob:
         compute_availability=bool(row.get("compute_availability")),
         include_adhoc=bool(row.get("include_adhoc")),
         adhoc_only=bool(row.get("adhoc_only")),
+        availability_only=bool(row.get("availability_only")),
         total_targets=total,
         processed_targets=processed,
         progress_pct=progress,
@@ -230,6 +242,9 @@ def create_job(
     Inserta un job en estado 'queued'. Si ya hay uno activo para el mismo scope,
     levanta JobAlreadyRunning con el job existente.
     """
+    # Normalizacion: availability_only implica compute_availability=true.
+    # Se aplica tanto al scope como al valor persistido.
+    compute_availability = payload.compute_availability or payload.availability_only
     scope_key = _compute_scope_key(payload)
     customer_ids = sorted({int(c) for c in (payload.customer_ids or [])})
 
@@ -248,9 +263,10 @@ def create_job(
                         customer_id, customer_ids, customer_database_id,
                         force_recalculate, compute_availability,
                         include_adhoc, adhoc_plates, adhoc_filters, adhoc_only,
+                        availability_only,
                         triggered_by, created_by_user_id
                     )
-                    VALUES ('queued', %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
+                    VALUES ('queued', %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
                     RETURNING *;
                     """,
                     (
@@ -260,11 +276,12 @@ def create_job(
                         Jsonb(customer_ids),
                         payload.customer_database_id,
                         payload.force_recalculate,
-                        payload.compute_availability,
+                        compute_availability,
                         payload.include_adhoc,
                         Jsonb(list(payload.adhoc_plates or [])),
                         Jsonb(dict(payload.adhoc_filters or {})),
                         payload.adhoc_only,
+                        payload.availability_only,
                         triggered_by,
                         user_id,
                     ),
@@ -356,6 +373,51 @@ def _mark_error(job_id: int, message: str) -> None:
         conn.commit()
 
 
+def _run_availability_for_job(
+    job_id: int,
+    payload: MonthlyPerformanceCalculateRequest,
+    *,
+    rendimientos_total: int = 0,
+) -> AvailabilitySummary | None:
+    """
+    Ejecuta la fase de disponibilidad CloudFleet para un job.
+
+    En modo availability_only `rendimientos_total` es 0 y se inicializa la
+    barra de progreso en 0/total. En el flujo normal se pasa el total de
+    placas procesadas en rendimientos para mantener la barra monotona.
+    Devuelve None si la fase fallo (y ya marco el job como error).
+    """
+    try:
+        availability_total = _count_availability_targets(payload)
+        if rendimientos_total == 0:
+            # availability_only: inicializamos la barra de progreso en 0/total.
+            _update_progress(job_id, 0, availability_total)
+            grand_total = availability_total
+        else:
+            # Flujo normal: extendemos el total para que el front anticipe
+            # el segundo tramo y la fraccion overall se mantenga monotona.
+            _bump_total(job_id, extra_total=availability_total)
+            grand_total = rendimientos_total + availability_total
+
+        availability_summary = run_availability_phase(
+            month=payload.month,
+            customer_ids=list(payload.customer_ids or []),
+            progress_callback=lambda processed: _update_progress(
+                job_id,
+                rendimientos_total + processed,
+                grand_total,
+            ),
+        )
+        return AvailabilitySummary(**availability_summary)
+    except (CloudFleetAuthError, CloudFleetUnavailableError) as exc:
+        _logger.exception("Job %s: fase de disponibilidad fallo", job_id)
+        _mark_error(job_id, f"Disponibilidad: {type(exc).__name__}: {exc}")
+    except Exception as exc:
+        _logger.exception("Job %s: fase de disponibilidad fallo (inesperado)", job_id)
+        _mark_error(job_id, f"Disponibilidad: {type(exc).__name__}: {exc}")
+    return None
+
+
 def run_job(job_id: int) -> PerformanceCalculationJob:
     """
     Ejecuta el calculo asociado al job_id. Actualiza estado y progreso en la fila.
@@ -371,14 +433,15 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
         # Ya termino o esta en estado raro; no reejecutar.
         return job
 
-    # Recuperar campos ad-hoc desde la fila del job.
+    # Recuperar campos ad-hoc y availability_only desde la fila del job.
     adhoc_plates: list[str] = []
     adhoc_filters: dict[str, list[str]] = {}
     adhoc_only: bool = False
+    availability_only: bool = False
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as _rc:
         with _rc.cursor() as _rcur:
             _rcur.execute(
-                "SELECT include_adhoc, adhoc_plates, adhoc_filters, adhoc_only FROM performance_calculation_jobs WHERE id = %s;",
+                "SELECT include_adhoc, adhoc_plates, adhoc_filters, adhoc_only, availability_only FROM performance_calculation_jobs WHERE id = %s;",
                 (job_id,),
             )
             _adhoc_row = _rcur.fetchone()
@@ -386,6 +449,7 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
                 adhoc_plates = list(_adhoc_row.get("adhoc_plates") or [])
                 adhoc_filters = dict(_adhoc_row.get("adhoc_filters") or {})
                 adhoc_only = bool(_adhoc_row.get("adhoc_only"))
+                availability_only = bool(_adhoc_row.get("availability_only"))
 
     payload = MonthlyPerformanceCalculateRequest(
         month=job.month,
@@ -396,63 +460,56 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
         compute_availability=job.compute_availability,
         include_adhoc=job.include_adhoc,
         adhoc_only=adhoc_only,
+        availability_only=availability_only,
         adhoc_plates=adhoc_plates,
         adhoc_filters=adhoc_filters,
     )
 
     _mark_running(job_id)
     _logger.info(
-        "Job %s: running (month=%s, scope_key=%s, availability=%s)",
+        "Job %s: running (month=%s, scope_key=%s, availability=%s, availability_only=%s)",
         job_id,
         job.month,
         _compute_scope_key(payload),
         job.compute_availability,
+        availability_only,
     )
 
-    try:
-        result = calculate_monthly_performance(
-            payload,
-            progress_callback=lambda processed, total: _update_progress(job_id, processed, total),
+    if availability_only:
+        # Modo availability_only: saltamos rendimientos y corremos SOLO disponibilidad.
+        result_summary = MonthlyPerformanceSummary()
+        availability_summary = _run_availability_for_job(job_id, payload, rendimientos_total=0)
+        if availability_summary is None:
+            with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+                return _fetch_job(conn, job_id) or job
+        summary_with_availability = result_summary.model_copy(
+            update={"availability": availability_summary}
         )
-    except Exception as exc:
-        _logger.exception("Job %s fallo en fase de rendimientos", job_id)
-        _mark_error(job_id, f"{type(exc).__name__}: {exc}")
-        with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-            return _fetch_job(conn, job_id) or job
-
-    summary_with_availability = result.summary
-
-    if job.compute_availability:
+    else:
         try:
-            rendimientos_total = max(result.summary.total, 0)
-            availability_total = _count_availability_targets(payload)
-            grand_total = rendimientos_total + availability_total
-            # La barra de progreso suma rendimientos + disponibilidad. Subimos
-            # total_targets aqui para que el front anticipe el segundo tramo
-            # y la fraccion overall se mantenga monotona.
-            _bump_total(job_id, extra_total=availability_total)
-            availability_summary = run_availability_phase(
-                month=job.month,
-                customer_ids=list(payload.customer_ids or []),
-                progress_callback=lambda processed: _update_progress(
-                    job_id,
-                    rendimientos_total + processed,
-                    grand_total,
-                ),
+            result = calculate_monthly_performance(
+                payload,
+                progress_callback=lambda processed, total: _update_progress(job_id, processed, total),
             )
-            summary_with_availability = result.summary.model_copy(
-                update={"availability": AvailabilitySummary(**availability_summary)}
-            )
-        except (CloudFleetAuthError, CloudFleetUnavailableError) as exc:
-            _logger.exception("Job %s: fase de disponibilidad fallo", job_id)
-            _mark_error(job_id, f"Disponibilidad: {type(exc).__name__}: {exc}")
-            with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-                return _fetch_job(conn, job_id) or job
         except Exception as exc:
-            _logger.exception("Job %s: fase de disponibilidad fallo (inesperado)", job_id)
-            _mark_error(job_id, f"Disponibilidad: {type(exc).__name__}: {exc}")
+            _logger.exception("Job %s fallo en fase de rendimientos", job_id)
+            _mark_error(job_id, f"{type(exc).__name__}: {exc}")
             with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
                 return _fetch_job(conn, job_id) or job
+
+        summary_with_availability = result.summary
+
+        if job.compute_availability:
+            rendimientos_total = max(result.summary.total, 0)
+            availability_summary = _run_availability_for_job(
+                job_id, payload, rendimientos_total=rendimientos_total
+            )
+            if availability_summary is None:
+                with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+                    return _fetch_job(conn, job_id) or job
+            summary_with_availability = result.summary.model_copy(
+                update={"availability": availability_summary}
+            )
 
     _mark_done(job_id, summary_with_availability)
     avail_log = ""
@@ -465,11 +522,11 @@ def run_job(job_id: int) -> PerformanceCalculationJob:
     _logger.info(
         "Job %s: done — calculated=%d partial=%d unbound=%d no_data=%d error=%d%s",
         job_id,
-        result.summary.calculated,
-        result.summary.partial,
-        result.summary.unbound,
-        result.summary.no_data,
-        result.summary.error,
+        summary_with_availability.calculated,
+        summary_with_availability.partial,
+        summary_with_availability.unbound,
+        summary_with_availability.no_data,
+        summary_with_availability.error,
         avail_log,
     )
 
