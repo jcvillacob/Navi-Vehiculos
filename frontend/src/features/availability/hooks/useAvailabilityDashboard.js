@@ -18,6 +18,7 @@ const TREND_MONTHS = 6;
 const RANKING_LIMIT = 25;
 const POLL_INTERVAL_MS = 2500;
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
+const SYSTEM_CUSTOMER = "__navitrans_system__";
 
 function isValidMonth(value) {
   return /^\d{4}-\d{2}$/.test(value);
@@ -52,7 +53,13 @@ export function useAvailabilityDashboard() {
     let cancelled = false;
     listCustomers()
       .then((data) => {
-        if (!cancelled) setCustomers(Array.isArray(data) ? data : []);
+        if (!cancelled) {
+          setCustomers(
+            Array.isArray(data)
+              ? data.filter((c) => c.name !== SYSTEM_CUSTOMER)
+              : []
+          );
+        }
       })
       .catch(() => {
         if (!cancelled) setCustomers([]);

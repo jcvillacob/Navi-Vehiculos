@@ -249,3 +249,49 @@ def test_overview_aggregation_handles_decimal(monkeypatch):
     expected_pct = round((1440.0 - 72.0) / 1440.0 * 100.0, 3)
     assert overall["availability_pct"] == expected_pct
     assert overall["availability_pct"] == 95.0
+
+
+# ── _fetch_month_rows query ─────────────────────────────────────────────────
+
+
+def test_fetch_month_rows_query_excludes_system_customer(monkeypatch):
+    """El SQL generado por _fetch_month_rows excluye al customer sistema."""
+    captured: dict[str, Any] = {}
+
+    class FakeCursor:
+        def execute(self, sql: str, params=None):
+            captured["sql"] = sql
+            captured["params"] = list(params or [])
+
+        def fetchall(self):
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class FakeConn:
+        def cursor(self, *args, **kwargs):
+            return FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        "app.services.availability_dashboard._ensure_availability_table",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "app.services.availability_dashboard.psycopg.connect",
+        lambda *args, **kwargs: FakeConn(),
+    )
+
+    dashboard._fetch_month_rows("2026-06")
+
+    assert "__navitrans_system__" in captured["params"]
+    assert "(c.name IS NULL OR c.name <> %s)" in captured["sql"]

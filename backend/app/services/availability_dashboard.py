@@ -24,6 +24,7 @@ from psycopg.rows import dict_row
 
 from app.services.availability_store import (
     _SOURCE_CLOUDFLEET,
+    _SYSTEM_CUSTOMER_NAME,
     _ensure_availability_table,
     list_monthly_availability,
 )
@@ -98,8 +99,12 @@ def _fetch_month_rows(month: str, *, customer_id: int | None = None) -> list[dic
     asignacion conocida (INNER JOIN con vehicle_motor_assignments).
     """
     _ensure_availability_table()
-    where = ["mva.period_month = %s", "mva.source = %s"]
-    params: list[Any] = [month, _SOURCE_CLOUDFLEET]
+    where = [
+        "mva.period_month = %s",
+        "mva.source = %s",
+        "(c.name IS NULL OR c.name <> %s)",
+    ]
+    params: list[Any] = [month, _SOURCE_CLOUDFLEET, _SYSTEM_CUSTOMER_NAME]
     if customer_id is not None:
         where.append("a.customer_id = %s")
         params.append(customer_id)

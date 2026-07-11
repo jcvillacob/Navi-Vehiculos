@@ -36,6 +36,10 @@ _logger = logging.getLogger(__name__)
 _TABLE_BOOTSTRAPPED = False
 _SOURCE_CLOUDFLEET = "cloudfleet"
 
+# Cliente interno de rendimientos ad-hoc (Geotab). La disponibilidad es solo
+# para clientes reales, por lo que se excluye de todas las queries del modulo.
+_SYSTEM_CUSTOMER_NAME = "__navitrans_system__"
+
 # Dias hacia atras que miramos en `updatedAt` al consultar work-orders.
 # Captura ordenes abiertas viejas que no fueron tocadas durante el mes pero
 # siguen restando disponibilidad, sin depender de que updatedAt caiga dentro
@@ -181,9 +185,13 @@ def _load_plates_for_customers(
     Devuelve TODAS las placas asignadas a los customers indicados
     (sin filtro por provider, a diferencia de la fase de rendimientos).
     Si la lista es vacia, devuelve todas las placas.
+
+    Excluye placas asignadas al customer interno `__navitrans_system__`
+    (rendimientos ad-hoc). Las placas con `customer_id` NULL siguen entrando.
     """
     params: list[Any] = []
-    where = ["1 = 1"]
+    where = ["1 = 1", "(c.name IS NULL OR c.name <> %s)"]
+    params.append(_SYSTEM_CUSTOMER_NAME)
     if customer_ids:
         where.append("a.customer_id = ANY(%s)")
         params.append(sorted({int(c) for c in customer_ids}))
@@ -194,6 +202,7 @@ def _load_plates_for_customers(
                 f"""
                 SELECT DISTINCT a.plate
                 FROM vehicle_motor_assignments a
+                LEFT JOIN customers c ON c.id = a.customer_id
                 WHERE {" AND ".join(where)}
                 ORDER BY a.plate ASC;
                 """,

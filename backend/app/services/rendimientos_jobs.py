@@ -24,7 +24,10 @@ from app.schemas.vehicle import (
     MonthlyPerformanceSummary,
     PerformanceCalculationJob,
 )
-from app.services.availability_store import run_availability_phase
+from app.services.availability_store import (
+    _SYSTEM_CUSTOMER_NAME,
+    run_availability_phase,
+)
 from app.clients.cloudfleet_client import CloudFleetAuthError, CloudFleetUnavailableError
 from app.services.motor_catalog import _database_dsn
 from app.services.rendimientos import calculate_monthly_performance
@@ -503,7 +506,8 @@ def _count_availability_targets(payload: MonthlyPerformanceCalculateRequest) -> 
     el front pueda mostrar el progreso completo desde el inicio.
     """
     params: list[Any] = []
-    where = ["1 = 1"]
+    where = ["1 = 1", "(c.name IS NULL OR c.name <> %s)"]
+    params.append(_SYSTEM_CUSTOMER_NAME)
     customer_ids = sorted({int(c) for c in (payload.customer_ids or [])})
     if customer_ids:
         where.append("a.customer_id = ANY(%s)")
@@ -515,6 +519,7 @@ def _count_availability_targets(payload: MonthlyPerformanceCalculateRequest) -> 
                     f"""
                     SELECT COUNT(DISTINCT a.plate)
                     FROM vehicle_motor_assignments a
+                    LEFT JOIN customers c ON c.id = a.customer_id
                     WHERE {" AND ".join(where)};
                     """,
                     params,
