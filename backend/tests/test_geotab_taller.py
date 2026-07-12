@@ -263,6 +263,35 @@ def redis_raw() -> Redis:
     return Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
 
 
+@pytest.fixture
+def mapa_manager_user(admin_user):
+    """Admin no tiene mapa.taller.manage en los seeds base; lo agregamos para
+    los tests de operaciones manuales sin tocar codigo de produccion."""
+    from app.services.auth_service import clear_role_permissions_cache
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            # El catalogo `permissions` se siembra por migraciones y no incluye
+            # los codenames nuevos de module_registry en la DB de test.
+            cur.execute(
+                """
+                INSERT INTO permissions (codename, description)
+                VALUES ('mapa.taller.manage', 'Gestionar estado manual del mapa de taller')
+                ON CONFLICT (codename) DO NOTHING;
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO role_permissions (role, permission)
+                VALUES ('admin', 'mapa.taller.manage')
+                ON CONFLICT (role, permission) DO NOTHING;
+                """
+            )
+        conn.commit()
+    clear_role_permissions_cache("admin")
+    return admin_user
+
+
 # ── Limpieza / parseo / clasificacion (unit) ─────────────────────────────
 
 
@@ -705,7 +734,7 @@ async def test_webhook_reenter_when_already_in_is_fresh_start(
 
 
 async def test_manual_add_creates_state(
-    client, flota_vehicle, admin_user, redis_raw
+    client, flota_vehicle, mapa_manager_user, redis_raw
 ):
     """Agregar manualmente crea estado in con manual=true."""
     await client.post(
@@ -738,7 +767,7 @@ async def test_manual_add_requires_permission(client, flota_vehicle, viewer_user
 
 
 async def test_manual_hide_excludes_from_snapshot(
-    client, flota_vehicle, admin_user, redis_raw, monkeypatch
+    client, flota_vehicle, mapa_manager_user, redis_raw, monkeypatch
 ):
     """Ocultar manualmente quita el vehiculo del snapshot del mapa."""
     monkeypatch.setenv("GEOTAB_WEBHOOK_API_KEYS", "k")
@@ -773,7 +802,7 @@ async def test_manual_hide_excludes_from_snapshot(
 
 
 async def test_manual_unhide_restores_to_snapshot(
-    client, flota_vehicle, admin_user, redis_raw, monkeypatch
+    client, flota_vehicle, mapa_manager_user, redis_raw, monkeypatch
 ):
     """Des-ocultar vuelve a mostrar el vehiculo en el mapa."""
     monkeypatch.setenv("GEOTAB_WEBHOOK_API_KEYS", "k")
@@ -807,7 +836,7 @@ async def test_manual_unhide_restores_to_snapshot(
 
 
 async def test_manual_close_deletes_state(
-    client, flota_vehicle, admin_user, redis_raw, monkeypatch
+    client, flota_vehicle, mapa_manager_user, redis_raw, monkeypatch
 ):
     """Cerrar elimina el estado por completo."""
     monkeypatch.setenv("GEOTAB_WEBHOOK_API_KEYS", "k")
@@ -835,7 +864,7 @@ async def test_manual_close_deletes_state(
 
 
 async def test_enter_real_replaces_manual(
-    client, flota_vehicle, admin_user, redis_raw, monkeypatch
+    client, flota_vehicle, mapa_manager_user, redis_raw, monkeypatch
 ):
     """Un enter real de Geotab reemplaza el estado manual (fresh, manual=false)."""
     monkeypatch.setenv("GEOTAB_WEBHOOK_API_KEYS", "k")
@@ -861,7 +890,7 @@ async def test_enter_real_replaces_manual(
 
 
 async def test_snapshot_includes_manual_flag(
-    client, flota_vehicle, admin_user, redis_raw, monkeypatch
+    client, flota_vehicle, mapa_manager_user, redis_raw, monkeypatch
 ):
     """El snapshot incluye el flag manual para que el front muestre el badge."""
     monkeypatch.setenv("GEOTAB_WEBHOOK_API_KEYS", "k")
@@ -994,9 +1023,14 @@ async def test_mapa_hides_vehicles_under_min_minutes(
     """Un vehiculo con < TALLER_MIN_MINUTES no aparece en el mapa (req #2)."""
     monkeypatch.setenv("GEOTAB_WEBHOOK_API_KEYS", "k")
     # Enter "ahora" (sin minutos en el pasado) -> 0 min, debajo del umbral.
+    now = datetime.now(tz=timezone.utc)
     response = await client.post(
         "/api/v1/geotab/taller?api_key=k",
-        content=_raw_payload(exception_id="hide1"),
+        content=_raw_payload(
+            exception_id="hide1",
+            date=now.strftime("%b, %d, %Y"),
+            time=now.strftime("%I:%M:%S %p"),
+        ),
         headers={"Content-Type": "application/json"},
     )
     assert response.status_code == 200

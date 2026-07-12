@@ -128,6 +128,7 @@ def build_user_payload(user: dict) -> dict:
         "is_active": user["is_active"],
         "created_at": user["created_at"],
         "updated_at": user["updated_at"],
+        "last_login_at": user.get("last_login_at"),
         "permissions": sorted(get_user_permissions(user["role"])),
     }
 

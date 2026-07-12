@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -46,7 +46,7 @@ async def receive_geotab_taller_webhook(request: Request) -> dict:
     ),
 )
 def get_mapa_taller(
-    if_none_match: str | None = None,
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
     _user: dict = Depends(get_current_user),
 ) -> JSONResponse:
     snapshot, etag = geotab_taller.get_mapa_snapshot_cacheable()

@@ -64,7 +64,12 @@ async def test_me_with_cookie_returns_user(client, viewer_user, auth_helpers):
     response = await client.get("/api/v1/auth/me")
 
     assert response.status_code == 200
-    assert response.json()["permissions"] == ["customers.list", "dashboard.view", "engine_lookup.use", "motors.list", "rendimientos.view", "vehicles.list"]
+    # Comparar contra la fuente de verdad en vez de hardcodear la lista:
+    # el rol viewer gana permisos cada vez que se agregan modulos nuevos.
+    from app.services.auth_service import get_user_permissions
+
+    assert response.json()["permissions"] == sorted(get_user_permissions("viewer"))
+    assert "dashboard.view" in response.json()["permissions"]
 
 
 async def test_refresh_rotates_tokens(client, viewer_user, auth_helpers):

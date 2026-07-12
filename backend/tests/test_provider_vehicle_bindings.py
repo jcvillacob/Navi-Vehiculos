@@ -68,12 +68,14 @@ def geotab_database(db_connection):
             row = cur.fetchone()
             db_id = row["id"]
 
+    db_connection.commit()
     yield db_id
 
     with db_connection.cursor() as cur:
+        cur.execute("DELETE FROM vehicle_provider_bindings WHERE customer_database_id = %s;", (db_id,))
         cur.execute("DELETE FROM customer_databases WHERE id = %s;", (db_id,))
-    with db_connection.cursor() as cur:
         cur.execute("DELETE FROM customers WHERE id = %s;", (customer_id,))
+    db_connection.commit()
 
 
 @pytest.fixture
@@ -118,12 +120,14 @@ def frotcom_database(db_connection):
             row = cur.fetchone()
             db_id = row["id"]
 
+    db_connection.commit()
     yield db_id
 
     with db_connection.cursor() as cur:
+        cur.execute("DELETE FROM vehicle_provider_bindings WHERE customer_database_id = %s;", (db_id,))
         cur.execute("DELETE FROM customer_databases WHERE id = %s;", (db_id,))
-    with db_connection.cursor() as cur:
         cur.execute("DELETE FROM customers WHERE id = %s;", (customer_id,))
+    db_connection.commit()
 
 
 @pytest.fixture
@@ -147,22 +151,24 @@ def test_vehicle(db_connection):
             """,
             (plate,),
         )
+    db_connection.commit()
     yield plate
     with db_connection.cursor() as cur:
         cur.execute("DELETE FROM vehicle_provider_bindings WHERE plate = %s;", (plate,))
-    with db_connection.cursor() as cur:
         cur.execute("DELETE FROM vehicle_motor_assignments WHERE plate = %s;", (plate,))
+    db_connection.commit()
 
 
 @pytest.fixture
-async def authenticated_editor(client):
+async def authenticated_editor(client, editor_user):
     resp = await client.post(
         "/api/v1/auth/login",
         json={"username": "editor", "password": "EditorPass1!"},
     )
     assert resp.status_code == 200
-    data = resp.json()
-    token = data.get("access_token")
+    # La autenticacion es por cookie (el client de httpx la persiste solo);
+    # devolvemos el valor por compatibilidad con _auth_headers.
+    token = resp.cookies.get("access_token")
     assert token
     return token
 
@@ -308,18 +314,24 @@ class TestProviderVehicleBindings:
                     """,
                     (test_vehicle, geotab_database),
                 )
+                cur.execute(
+                    """
+                    UPDATE vehicle_motor_assignments
+                    SET customer_database_id = %s
+                    WHERE plate = %s;
+                    """,
+                    (geotab_database, test_vehicle),
+                )
             conn.commit()
 
         resp = await client.get(
-            f"/api/v1/vehicle?search={test_vehicle}",
+            f"/api/v1/vehicle/{test_vehicle}",
             headers=_auth_headers(authenticated_editor),
         )
         assert resp.status_code == 200, resp.text
-        records = resp.json()
-        matching = [r for r in records if r["plate"] == test_vehicle]
-        assert len(matching) == 1, f"Expected 1 record for {test_vehicle}, got {len(matching)}"
-        assert matching[0]["provider_vehicle_id"] == "b9999"
-        assert matching[0]["is_provider_vehicle_id_manual"] is True
+        record = resp.json()
+        assert record["provider_vehicle_id"] == "b9999"
+        assert record["is_provider_vehicle_id_manual"] is True
 
     @pytest.mark.asyncio
     async def test_assign_vehicle_database_without_database_preserves_existing_behavior(

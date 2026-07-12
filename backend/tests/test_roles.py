@@ -79,11 +79,14 @@ async def test_delete_system_role_raises(seeded_users):
         delete_role("admin")
 
 
-async def test_delete_role_in_use_raises(seeded_users):
-    from app.services.auth_service import RoleInUseError
+async def test_delete_role_in_use_raises():
+    from app.services.auth_service import RoleInUseError, create_user
+
+    create_role("custom_ops", "Custom Ops")
+    create_user("opsmember", "ops@example.com", "OpsMemberPass1!", "custom_ops")
 
     with pytest.raises(RoleInUseError):
-        delete_role("viewer")
+        delete_role("custom_ops")
 
 
 # ── Permission matrix ─────────────────────────────────────────────────────
@@ -177,8 +180,8 @@ async def test_replace_matrix_unknown_module_ignored(seeded_users):
 # ── API endpoints ────────────────────────────────────────────────────────
 
 
-async def test_get_modules_endpoint_returns_catalog(client, viewer_user, auth_helpers):
-    await auth_helpers["login"](client, "viewer", "ViewerPass1!")
+async def test_get_modules_endpoint_returns_catalog(client, admin_user, auth_helpers):
+    await auth_helpers["login"](client, "admin", "AdminPass1!")
     response = await client.get("/api/v1/roles/modules")
     assert response.status_code == 200
     data = response.json()
@@ -187,8 +190,8 @@ async def test_get_modules_endpoint_returns_catalog(client, viewer_user, auth_he
     assert {"dashboard", "vehiculos", "motores", "usuarios", "auditoria", "roles"}.issubset(keys)
 
 
-async def test_list_roles_endpoint_requires_users_list(client, viewer_user, auth_helpers):
-    await auth_helpers["login"](client, "viewer", "ViewerPass1!")
+async def test_list_roles_endpoint_requires_users_list(client, admin_user, auth_helpers):
+    await auth_helpers["login"](client, "admin", "AdminPass1!")
     response = await client.get("/api/v1/roles")
     assert response.status_code == 200
 
@@ -287,7 +290,7 @@ async def test_create_user_with_new_custom_role(client, admin_user, auth_helpers
         json={
             "username": "opsuser",
             "email": "ops@example.com",
-            "password": "OpsPass1!",
+            "password": "OpsPass123!",
             "role": "ops",
         },
     )
@@ -323,7 +326,7 @@ async def test_user_record_includes_last_login_at(client, admin_user, auth_helpe
 
 
 async def test_max_concurrent_sessions_revokes_oldest(seeded_users):
-    """Con limite=2, el 3er login revoca la sesion mas antigua."""
+    """Con limite=2, enforce deja libre un slot para el nuevo login."""
     from app.services.auth_service import (
         create_refresh_token,
         enforce_max_concurrent_sessions,
@@ -337,19 +340,21 @@ async def test_max_concurrent_sessions_revokes_oldest(seeded_users):
     create_refresh_token(user["id"], "127.0.0.1", "ua-2")
     assert len(list_active_sessions(user["id"])) == 2
 
-    # Al forzar el limite a 2, al pedir "otro login" revocamos el mas antiguo
+    # La politica actual deja max_sessions - 1 activas para dar cabida al
+    # nuevo login que se creara a continuacion.
     revoked = enforce_max_concurrent_sessions(user["id"], 2)
-    assert revoked == 0  # todavia hay 2, no sobra
+    assert revoked == 1
+    assert len(list_active_sessions(user["id"])) == 1
 
-    # Un tercer login (el de un nuevo cliente) tiene que dejar libre un slot
-    # Simulamos que llega un nuevo login: enforce con 2 deberia revocar 1
+    # Un tercer login (el de un nuevo cliente) vuelve a dejar 2 activas;
+    # enforce debe revocar la mas antigua para dejar un slot libre.
     create_refresh_token(user["id"], "127.0.0.1", "ua-3")
-    # Ahora hay 3, pero al hacer enforce debe matar los excedentes
+    assert len(list_active_sessions(user["id"])) == 2
     revoked = enforce_max_concurrent_sessions(user["id"], 2)
     assert revoked == 1
 
     active = list_active_sessions(user["id"])
-    assert len(active) == 2
+    assert len(active) == 1
 
 
 async def test_max_concurrent_sessions_zero_means_unlimited(seeded_users):

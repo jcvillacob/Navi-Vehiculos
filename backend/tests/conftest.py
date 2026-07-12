@@ -70,7 +70,32 @@ def setup_test_database() -> None:
     config = Config(str(alembic_ini))
     config.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "app" / "migrations"))
     command.upgrade(config, "head")
+
+    # Las migraciones alembic NO crean las tablas de DDL runtime (patron
+    # _ensure_* de los services). Los tests que insertan directo en esas
+    # tablas (motor_catalog, geotab_taller_events, vehicle_connection_log,
+    # monthly_vehicle_performance, etc.) dependian del orden de ejecucion:
+    # solo pasaban si otro test disparaba antes el bootstrap. Corremos los
+    # bootstraps una vez aqui, contra la DB de test recien creada.
+    from app.services.availability_store import _ensure_availability_table
+    from app.services.geotab_taller import _ensure_taller_events_table
+    from app.services.motor_catalog import _ensure_motor_tables
+    from app.services.rendimientos import _ensure_performance_tables
+    from app.services.rendimientos_jobs import _ensure_jobs_table
+
+    with psycopg.connect(TEST_DATABASE_URL) as bootstrap_conn:
+        _ensure_motor_tables(bootstrap_conn)
+        _ensure_performance_tables(bootstrap_conn)
+        bootstrap_conn.commit()
+    _ensure_taller_events_table()
+    _ensure_jobs_table()
+    _ensure_availability_table()
+
     yield
+    # Cierra el pool antes de dropear la DB para no dejar conexiones colgadas.
+    from app.core.db import close_pool
+
+    close_pool()
     with psycopg.connect(admin_url, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -97,10 +122,21 @@ def clean_state(redis_client) -> None:
     with psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE refresh_tokens, audit_logs, users RESTART IDENTITY CASCADE")
+            # Roles custom creados por tests (los de sistema se preservan);
+            # sin esto, tests que crean el mismo rol ('ops', 'supervisor')
+            # fallaban con DuplicateRoleError por estado residual.
+            cur.execute(
+                "DELETE FROM role_permissions WHERE role IN (SELECT key FROM roles WHERE NOT is_system)"
+            )
+            cur.execute("DELETE FROM roles WHERE NOT is_system")
         conn.commit()
     storage = getattr(limiter, "_storage", None)
     if storage and hasattr(storage, "reset"):
         storage.reset()
+    # El cache en memoria de permisos puede retener roles borrados arriba.
+    from app.services.auth_service import clear_role_permissions_cache
+
+    clear_role_permissions_cache()
 
 
 @pytest.fixture
