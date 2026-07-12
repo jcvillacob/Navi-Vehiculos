@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Bar,
@@ -18,6 +18,7 @@ import {
 } from "recharts";
 
 import Can from "../components/Can";
+import { manualAssignVehicle } from "../api/vehicleApi";
 import { useAvailabilityDashboard } from "../features/availability/hooks/useAvailabilityDashboard";
 import { exportDisponibilidadExcel } from "../utils/disponibilidadExport";
 
@@ -111,10 +112,16 @@ export default function DisponibilidadPage() {
     isRecalculating,
     job,
     recalcError,
+    refreshAll,
   } = useAvailabilityDashboard();
 
   const [exporting, setExporting] = useState(false);
   const [coverageOpen, setCoverageOpen] = useState(false);
+  const [registerModalOpen, setRegisterModalOpen] = useState(false);
+  const [registerItem, setRegisterItem] = useState(null);
+  const [registerLoading, setRegisterLoading] = useState(false);
+  const [registerError, setRegisterError] = useState("");
+  const [registerSuccess, setRegisterSuccess] = useState("");
 
   const overall = overview?.overall ?? null;
   const fleets = overview?.fleets ?? [];
@@ -187,6 +194,54 @@ export default function DisponibilidadPage() {
       setExporting(false);
     }
   };
+
+  useEffect(() => {
+    if (!registerSuccess) return;
+    const timer = setTimeout(() => setRegisterSuccess(""), 5000);
+    return () => clearTimeout(timer);
+  }, [registerSuccess]);
+
+  const handleOpenRegister = useCallback((item) => {
+    setRegisterItem(item);
+    setRegisterError("");
+    setRegisterSuccess("");
+    setRegisterModalOpen(true);
+  }, []);
+
+  const handleCloseRegister = useCallback(() => {
+    setRegisterModalOpen(false);
+    setRegisterItem(null);
+    setRegisterError("");
+  }, []);
+
+  const handleRegisterSubmit = useCallback(
+    async ({ plate, technical_number, nombre_vehiculo, marca, linea }) => {
+      const normalizedPlate = plate.trim().toUpperCase();
+      const normalizedTechnical = technical_number.trim();
+      if (!normalizedPlate || !normalizedTechnical) return;
+
+      setRegisterLoading(true);
+      setRegisterError("");
+      try {
+        await manualAssignVehicle(normalizedPlate, {
+          technical_number: normalizedTechnical,
+          nombre_vehiculo: nombre_vehiculo.trim() || null,
+          marca: marca.trim() || null,
+          linea: linea.trim() || null,
+          geotab_status: "unknown",
+        });
+        setRegisterSuccess(`Vehiculo ${normalizedPlate} registrado correctamente.`);
+        setRegisterModalOpen(false);
+        setRegisterItem(null);
+        refreshAll();
+      } catch (err) {
+        setRegisterError(err instanceof Error ? err.message : "No fue posible registrar el vehiculo");
+      } finally {
+        setRegisterLoading(false);
+      }
+    },
+    [refreshAll]
+  );
 
   const coverageSummary = coverage?.summary || {};
   const coverageFleets = Array.isArray(coverage?.fleets) ? coverage.fleets : [];
@@ -283,6 +338,7 @@ export default function DisponibilidadPage() {
 
       {error ? <div className="notice-banner notice-error">{error}</div> : null}
       {recalcError ? <div className="notice-banner notice-error">{recalcError}</div> : null}
+      {registerSuccess ? <div className="notice-banner notice-info">{registerSuccess}</div> : null}
       {isRecalculating ? (
         <div className="notice-banner notice-soft">
           Recalculando disponibilidad para {monthLabel(month)}. El panel se actualizará al terminar.
@@ -620,6 +676,7 @@ export default function DisponibilidadPage() {
                           <tr>
                             <th>Código</th>
                             <th>Cost center</th>
+                            <th>Acciones</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -627,6 +684,17 @@ export default function DisponibilidadPage() {
                             <tr key={item.code}>
                               <td>{item.code}</td>
                               <td>{item.cost_center || "—"}</td>
+                              <td>
+                                <Can permission="vehicles.edit">
+                                  <button
+                                    type="button"
+                                    className="button-secondary button-sm"
+                                    onClick={() => handleOpenRegister(item)}
+                                  >
+                                    Registrar
+                                  </button>
+                                </Can>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -639,6 +707,139 @@ export default function DisponibilidadPage() {
           </div>
         )}
       </article>
+
+      {registerModalOpen && registerItem && (
+        <RegisterUnmatchedModal
+          item={registerItem}
+          loading={registerLoading}
+          error={registerError}
+          onClose={handleCloseRegister}
+          onSubmit={handleRegisterSubmit}
+        />
+      )}
     </section>
+  );
+}
+
+function RegisterUnmatchedModal({ item, loading, error, onClose, onSubmit }) {
+  const [plate, setPlate] = useState((item?.code || "").toUpperCase());
+  const [technicalNumber, setTechnicalNumber] = useState("");
+  const [nombreVehiculo, setNombreVehiculo] = useState("");
+  const [marca, setMarca] = useState("");
+  const [linea, setLinea] = useState("");
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    onSubmit({
+      plate,
+      technical_number: technicalNumber,
+      nombre_vehiculo: nombreVehiculo,
+      marca,
+      linea,
+    });
+  };
+
+  return (
+    <div
+      className="modal-overlay"
+      role="presentation"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="card modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Registrar vehiculo local"
+      >
+        <header className="modal-header">
+          <div className="modal-heading">
+            <span className="eyebrow">CloudFleet</span>
+            <h3>Registrar vehiculo local</h3>
+          </div>
+          <button type="button" className="icon-button modal-close-button" onClick={onClose}>
+            Cerrar
+          </button>
+        </header>
+
+        <form className="register-form" onSubmit={handleSubmit}>
+          {error ? <div className="notice-banner notice-error">{error}</div> : null}
+
+          <div className="form-field">
+            <label htmlFor="register-plate">Placa</label>
+            <input
+              id="register-plate"
+              value={plate}
+              onChange={(event) => setPlate(event.target.value.toUpperCase())}
+              placeholder="Ej: ABC123"
+              required
+              autoFocus
+            />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="register-technical-number">TEC#</label>
+            <input
+              id="register-technical-number"
+              value={technicalNumber}
+              onChange={(event) => setTechnicalNumber(event.target.value)}
+              placeholder="Technical Engine Configuration #"
+              required
+            />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="register-nombre">
+              Nombre vehiculo <span className="form-optional">(opcional)</span>
+            </label>
+            <input
+              id="register-nombre"
+              value={nombreVehiculo}
+              onChange={(event) => setNombreVehiculo(event.target.value)}
+              placeholder="Nombre del vehiculo"
+            />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="register-marca">
+              Marca <span className="form-optional">(opcional)</span>
+            </label>
+            <input
+              id="register-marca"
+              value={marca}
+              onChange={(event) => setMarca(event.target.value)}
+              placeholder="Marca"
+            />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="register-linea">
+              Linea <span className="form-optional">(opcional)</span>
+            </label>
+            <input
+              id="register-linea"
+              value={linea}
+              onChange={(event) => setLinea(event.target.value)}
+              placeholder="Linea"
+            />
+          </div>
+
+          <p className="support-copy">
+            El vehiculo quedara en el maestro local sin cliente asignado; asigna cliente y database
+            desde Vehiculos.
+          </p>
+
+          <div className="actions-row modal-actions">
+            <button type="submit" disabled={loading || !plate.trim() || !technicalNumber.trim()}>
+              {loading ? "Registrando…" : "Registrar"}
+            </button>
+            <button type="button" className="button-secondary" onClick={onClose}>
+              Cancelar
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
