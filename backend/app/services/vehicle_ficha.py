@@ -12,6 +12,12 @@ from app.services.availability_store import _ensure_availability_table
 from app.services.motor_catalog import _ensure_motor_tables
 from app.services.rendimientos import _ensure_performance_tables
 from app.services.taller_ordenes import peek_cached_orders
+from app.clients.geotab_client import (
+    get_authenticated_client,
+    get_cached_devices,
+    get_device_live_status,
+    _find_device_in_collection,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -163,6 +169,128 @@ def _build_taller_section(plate: str) -> dict[str, Any]:
         "available": True,
         "generated_at": cached.get("generated_at"),
         "orders": filtered,
+    }
+
+
+def _telemetry_assignment(cur, plate: str) -> dict[str, Any] | None:
+    cur.execute(
+        """
+        SELECT
+            a.plate,
+            a.customer_database_id,
+            cd.database_name,
+            cd.username,
+            cd.password,
+            cd.connection_type
+        FROM vehicle_motor_assignments a
+        LEFT JOIN customer_databases cd
+            ON cd.id = a.customer_database_id
+        WHERE a.plate = %s
+        LIMIT 1;
+        """,
+        (plate,),
+    )
+    row = cur.fetchone()
+    return _serialize_row(row) if row else None
+
+
+def _resolve_geotab_device_id(
+    cur,
+    plate: str,
+    customer_database_id: Any,
+    username: str,
+    password: str,
+    database_name: str,
+) -> str | None:
+    cur.execute(
+        """
+        SELECT provider_vehicle_id, is_manual, binding_status
+        FROM vehicle_provider_bindings
+        WHERE plate = %s
+          AND customer_database_id = %s
+          AND provider = 'geotab'
+          AND provider_vehicle_id IS NOT NULL
+          AND provider_vehicle_id <> ''
+          AND (binding_status = 'resolved' OR is_manual = TRUE)
+        ORDER BY is_manual DESC, updated_at DESC
+        LIMIT 1;
+        """,
+        (plate, customer_database_id),
+    )
+    row = cur.fetchone()
+    if row:
+        provider_vehicle_id = row.get("provider_vehicle_id")
+        if provider_vehicle_id:
+            return str(provider_vehicle_id).strip()
+
+    devices = get_cached_devices(username, password, database_name)
+    device = _find_device_in_collection(devices, plate=plate)
+    if device:
+        device_id = device.get("id")
+        if device_id:
+            return str(device_id).strip()
+    return None
+
+
+def get_vehicle_telemetry(plate: str) -> dict[str, Any]:
+    """
+    Devuelve la telemetria en vivo de Geotab para una placa.
+
+    Si la placa no existe en assignments devuelve None (la ruta traduce a 404).
+    Cualquier otra situacion devuelve un dict con available=True/False y la razon.
+    """
+    normalized_plate = plate.strip().upper()
+    if not normalized_plate:
+        return {"available": False, "reason": "placa_invalida"}
+
+    _ensure_availability_table()
+
+    with db_conn(row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        _ensure_performance_tables(conn)
+
+        with conn.cursor() as cur:
+            assignment = _telemetry_assignment(cur, normalized_plate)
+            if assignment is None:
+                return None
+
+    if not assignment.get("customer_database_id"):
+        return {"available": False, "reason": "sin_database_geotab"}
+
+    connection_type = (assignment.get("connection_type") or "").lower()
+    database_name = assignment.get("database_name")
+    username = assignment.get("username")
+    password = assignment.get("password")
+
+    if connection_type != "geotab" or not database_name or not username or not password:
+        return {"available": False, "reason": "sin_database_geotab"}
+
+    with db_conn(row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            device_id = _resolve_geotab_device_id(
+                cur,
+                normalized_plate,
+                assignment["customer_database_id"],
+                username,
+                password,
+                database_name,
+            )
+
+    if not device_id:
+        return {"available": False, "reason": "device_no_encontrado"}
+
+    try:
+        api = get_authenticated_client(username, password, database_name)
+        live = get_device_live_status(api, device_id)
+    except Exception as exc:
+        _logger.warning("Error consultando telemetria Geotab para %s: %s", normalized_plate, exc)
+        return {"available": False, "reason": "geotab_error", "detail": str(exc)}
+
+    return {
+        "available": True,
+        "plate": normalized_plate,
+        "device_id": device_id,
+        **live,
     }
 
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { fetchVehicleFicha } from "../api/vehicleApi";
+import { fetchVehicleFicha, fetchVehicleTelemetry } from "../api/vehicleApi";
 
 const TALLER_INDICATOR_BADGE_CLASS = {
   on_time: "availability-good",
@@ -19,6 +19,25 @@ function formatMinutesAgo(isoTimestamp) {
   if (minutes < 1) return "hace un momento";
   if (minutes === 1) return "hace 1 min";
   return `hace ${minutes} min`;
+}
+
+function formatRelativeTime(isoTimestamp) {
+  if (!isoTimestamp) return { relative: "", absolute: "" };
+  const generated = new Date(isoTimestamp);
+  if (Number.isNaN(generated.getTime())) return { relative: "", absolute: "" };
+  const diffMs = Math.max(0, Date.now() - generated.getTime());
+  const minutes = Math.floor(diffMs / 60000);
+  const hours = Math.floor(diffMs / 3600000);
+  const days = Math.floor(diffMs / 86400000);
+  let relative = "hace un momento";
+  if (days >= 1) {
+    relative = days === 1 ? "hace 1 d" : `hace ${days} d`;
+  } else if (hours >= 1) {
+    relative = hours === 1 ? "hace 1 h" : `hace ${hours} h`;
+  } else if (minutes >= 1) {
+    relative = minutes === 1 ? "hace 1 min" : `hace ${minutes} min`;
+  }
+  return { relative, absolute: generated.toLocaleString("es-CO") };
 }
 
 function fmtNumber(value, decimals = 1) {
@@ -83,6 +102,159 @@ function MasterPair({ label, value }) {
       <span className="ficha-master-label">{label}</span>
       <span className="ficha-master-value">{value ?? "—"}</span>
     </div>
+  );
+}
+
+function TelemetryPair({ label, value }) {
+  return (
+    <div className="telemetry-pair">
+      <span className="telemetry-label">{label}</span>
+      <span className="telemetry-value">{value ?? "—"}</span>
+    </div>
+  );
+}
+
+function TelemetryCard({ plate }) {
+  const [telemetry, setTelemetry] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadTelemetry = () => {
+    setLoading(true);
+    setError("");
+    fetchVehicleTelemetry(plate)
+      .then((data) => setTelemetry(data))
+      .catch((err) => {
+        setTelemetry(null);
+        setError(err instanceof Error ? err.message : "Error consultando Geotab");
+      })
+      .finally(() => setLoading(false));
+  };
+
+  const reasonMessage = (reason, detail) => {
+    if (reason === "sin_database_geotab") {
+      return "Telemetría no disponible: este vehículo no tiene una base de datos Geotab asignada.";
+    }
+    if (reason === "device_no_encontrado") {
+      return "No se encontró el dispositivo Geotab para esta placa.";
+    }
+    if (reason === "geotab_error") {
+      return `Error consultando Geotab${detail ? `: ${detail}` : ""}.`;
+    }
+    return "No se pudo consultar la telemetría.";
+  };
+
+  const lastComm = formatRelativeTime(telemetry?.last_communication);
+
+  return (
+    <article className="card telemetry-card">
+      <div className="disp-chart-head">
+        <div>
+          <span className="eyebrow">Telemetría en vivo</span>
+          <h3 className="disp-ranking-title">Estado desde Geotab</h3>
+        </div>
+        <button
+          type="button"
+          className="button-secondary button-sm"
+          onClick={loadTelemetry}
+          disabled={loading}
+        >
+          {loading ? (
+            <>
+              <span className="spin" aria-hidden="true">
+                ⟳
+              </span>
+              Consultando…
+            </>
+          ) : telemetry ? (
+            "Actualizar"
+          ) : (
+            "Consultar telemetría"
+          )}
+        </button>
+      </div>
+
+      {!telemetry && !loading && !error && (
+        <p className="disp-hint">Presiona el botón para consultar la telemetría actual del vehículo.</p>
+      )}
+
+      {loading && <p className="disp-hint">Consultando Geotab…</p>}
+
+      {error && <p className="notice-banner notice-error">{error}</p>}
+
+      {telemetry && !telemetry.available && !error && (
+        <p className="notice-banner notice-soft">{reasonMessage(telemetry.reason, telemetry.detail)}</p>
+      )}
+
+      {telemetry?.available && (
+        <>
+          <div className="telemetry-grid">
+            <TelemetryPair
+              label="Última comunicación"
+              value={
+                lastComm.relative ? (
+                  <span title={lastComm.absolute}>
+                    {lastComm.relative}
+                    <span className="telemetry-absolute"> · {lastComm.absolute}</span>
+                  </span>
+                ) : null
+              }
+            />
+            <TelemetryPair
+              label="En movimiento"
+              value={
+                telemetry.is_driving === true ? "Sí" : telemetry.is_driving === false ? "No" : null
+              }
+            />
+            <TelemetryPair
+              label="Velocidad"
+              value={
+                telemetry.speed !== null && telemetry.speed !== undefined
+                  ? `${fmtNumber(telemetry.speed, 1)} km/h`
+                  : null
+              }
+            />
+            <TelemetryPair
+              label="Odómetro actual"
+              value={
+                telemetry.odometer_km !== null && telemetry.odometer_km !== undefined
+                  ? `${fmtNumber(telemetry.odometer_km, 1)} km`
+                  : null
+              }
+            />
+            <TelemetryPair
+              label="Horómetro actual"
+              value={
+                telemetry.engine_hours !== null && telemetry.engine_hours !== undefined
+                  ? `${fmtNumber(telemetry.engine_hours, 1)} h`
+                  : null
+              }
+            />
+            {telemetry.latitude !== null &&
+              telemetry.latitude !== undefined &&
+              telemetry.longitude !== null &&
+              telemetry.longitude !== undefined && (
+                <TelemetryPair
+                  label="Ubicación"
+                  value={
+                    <a
+                      className="access-url-link"
+                      href={`https://maps.google.com/?q=${telemetry.latitude},${telemetry.longitude}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Ver en Google Maps
+                    </a>
+                  }
+                />
+              )}
+          </div>
+          <p className="disp-hint" style={{ marginTop: 10 }}>
+            Ventana de lecturas: {telemetry.readings_window_days} días
+          </p>
+        </>
+      )}
+    </article>
   );
 }
 
@@ -237,6 +409,8 @@ export default function VehicleFichaPage() {
           </>
         )}
       </article>
+
+      <TelemetryCard plate={ficha?.plate} />
 
       <div className="ficha-cards-grid">
         <article className="card">

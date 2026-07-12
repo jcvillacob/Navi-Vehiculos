@@ -37,7 +37,7 @@ from app.services.vehicle_lookup import (
     batch_lookup_vehicles_stream,
     lookup_vehicle as lookup_vehicle_service,
 )
-from app.services.vehicle_ficha import get_vehicle_ficha
+from app.services.vehicle_ficha import get_vehicle_ficha, get_vehicle_telemetry
 
 router = APIRouter(prefix="/vehicle", tags=["vehicle"])
 
@@ -280,3 +280,14 @@ def get_vehicle_ficha_endpoint(
     if ficha is None:
         raise HTTPException(status_code=404, detail="Placa no encontrada")
     return ficha
+
+
+@router.get("/{plate}/telemetria")
+def get_vehicle_telemetry_endpoint(
+    plate: str = Path(..., min_length=1, max_length=32, description="Placa del vehiculo"),
+    _user: dict = Depends(require_permission("vehicles.list")),
+):
+    telemetry = get_vehicle_telemetry(plate)
+    if telemetry is None:
+        raise HTTPException(status_code=404, detail="Placa no encontrada")
+    return telemetry

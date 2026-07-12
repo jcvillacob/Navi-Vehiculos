@@ -627,6 +627,20 @@ export async function fetchVehicleFicha(plate) {
   return parseJsonOrThrow(response, "Error cargando la ficha del vehiculo");
 }
 
+export async function fetchVehicleTelemetry(plate) {
+  const normalizedPlate = (plate || "").trim().toUpperCase();
+  if (!normalizedPlate) {
+    throw new Error("Se requiere una placa para consultar telemetria");
+  }
+  const response = await fetchWithAuth(
+    buildUrl(`/api/v1/vehicle/${encodeURIComponent(normalizedPlate)}/telemetria`)
+  );
+  if (response.status === 404) {
+    throw new Error("Placa no encontrada");
+  }
+  return parseJsonOrThrow(response, "Error consultando telemetria del vehiculo");
+}
+
 // ── Motors ────────────────────────────────────────────────────────────────────
 
 export async function listMotors() {

@@ -8,7 +8,8 @@ from psycopg.rows import dict_row
 from app.services.availability_store import _ensure_availability_table
 from app.services.motor_catalog import _ensure_motor_tables
 from app.services.rendimientos import _ensure_performance_tables
-from app.services.vehicle_ficha import get_vehicle_ficha
+from app.clients.geotab_client import get_device_live_status
+from app.services.vehicle_ficha import get_vehicle_ficha, get_vehicle_telemetry
 
 
 def _connect():
@@ -186,6 +187,7 @@ def _insert_binding(
     provider_vehicle_id: str,
     binding_status: str = "resolved",
     last_error: str | None = None,
+    is_manual: bool = False,
 ) -> None:
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -193,12 +195,32 @@ def _insert_binding(
                 """
                 INSERT INTO vehicle_provider_bindings (
                     plate, customer_database_id, provider, provider_vehicle_id,
-                    binding_status, last_error
-                ) VALUES (%s, %s, %s, %s, %s, %s);
+                    binding_status, last_error, is_manual
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s);
                 """,
-                (plate, database_id, provider, provider_vehicle_id, binding_status, last_error),
+                (plate, database_id, provider, provider_vehicle_id, binding_status, last_error, is_manual),
             )
         conn.commit()
+
+
+def _insert_customer_and_artimo_database() -> tuple[int, int]:
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO customers (name, category) VALUES ('Ficha Artimo Customer', 'Experiencia Superior') RETURNING id;"
+            )
+            customer_id = cur.fetchone()["id"]
+            cur.execute(
+                """
+                INSERT INTO customer_databases (customer_id, database_name, username, password, connection_type)
+                VALUES (%s, 'ficha_artimo_db', 'ficha_user', 'ficha_pass', 'artimo')
+                RETURNING id;
+                """,
+                (customer_id,),
+            )
+            database_id = cur.fetchone()["id"]
+        conn.commit()
+    return customer_id, database_id
 
 
 def test_vehicle_ficha_shape_and_order():
@@ -336,3 +358,127 @@ def test_vehicle_ficha_taller_other_plates_empty(monkeypatch):
     assert ficha["taller"]["available"] is True
     assert ficha["taller"]["generated_at"] == "2026-07-12T10:05:00"
     assert ficha["taller"]["orders"] == []
+
+
+# ── Telemetry ────────────────────────────────────────────────────────────────
+
+
+def test_vehicle_telemetry_happy_path(monkeypatch):
+    _reset_ficha_data()
+    customer_id, database_id = _insert_customer_and_database()
+    _insert_assignment("ABC123", customer_id, database_id)
+    _insert_binding("ABC123", database_id, "geotab", "geo-device-123")
+
+    def _fake_get_authenticated_client(username, password, database):
+        return object()
+
+    def _fake_get_device_live_status(api, device_id):
+        return {
+            "last_communication": "2026-07-12T14:30:00Z",
+            "is_driving": True,
+            "latitude": 4.711,
+            "longitude": -74.0721,
+            "speed": 45.5,
+            "odometer_km": 123456.789,
+            "engine_hours": 5678.9,
+            "readings_window_days": 7,
+        }
+
+    monkeypatch.setattr("app.services.vehicle_ficha.get_authenticated_client", _fake_get_authenticated_client)
+    monkeypatch.setattr("app.services.vehicle_ficha.get_device_live_status", _fake_get_device_live_status)
+
+    telemetry = get_vehicle_telemetry("ABC123")
+
+    assert telemetry["available"] is True
+    assert telemetry["plate"] == "ABC123"
+    assert telemetry["device_id"] == "geo-device-123"
+    assert telemetry["is_driving"] is True
+    assert telemetry["odometer_km"] == 123456.789
+    assert telemetry["engine_hours"] == 5678.9
+    assert telemetry["readings_window_days"] == 7
+
+
+def test_vehicle_telemetry_no_geotab_database():
+    _reset_ficha_data()
+    customer_id, database_id = _insert_customer_and_artimo_database()
+    _insert_assignment("ABC123", customer_id, database_id)
+
+    telemetry = get_vehicle_telemetry("ABC123")
+
+    assert telemetry["available"] is False
+    assert telemetry["reason"] == "sin_database_geotab"
+
+
+def test_vehicle_telemetry_device_not_found(monkeypatch):
+    _reset_ficha_data()
+    customer_id, database_id = _insert_customer_and_database()
+    _insert_assignment("ABC123", customer_id, database_id)
+
+    monkeypatch.setattr("app.services.vehicle_ficha.get_cached_devices", lambda *a, **k: [])
+
+    telemetry = get_vehicle_telemetry("ABC123")
+
+    assert telemetry["available"] is False
+    assert telemetry["reason"] == "device_no_encontrado"
+
+
+def test_vehicle_telemetry_geotab_exception(monkeypatch):
+    _reset_ficha_data()
+    customer_id, database_id = _insert_customer_and_database()
+    _insert_assignment("ABC123", customer_id, database_id)
+    _insert_binding("ABC123", database_id, "geotab", "geo-device-123")
+
+    def _fake_get_authenticated_client(username, password, database):
+        raise Exception("Credenciales Geotab rechazadas")
+
+    monkeypatch.setattr("app.services.vehicle_ficha.get_authenticated_client", _fake_get_authenticated_client)
+
+    telemetry = get_vehicle_telemetry("ABC123")
+
+    assert telemetry["available"] is False
+    assert telemetry["reason"] == "geotab_error"
+    assert "Credenciales Geotab rechazadas" in telemetry["detail"]
+
+
+def test_get_device_live_status_maps_fields_and_uses_last_reading():
+    class FakeAPI:
+        def multi_call(self, calls):
+            return [
+                [{"dateTime": "2026-07-12T14:30:00.000Z", "isDriving": True, "latitude": 4.711, "longitude": -74.0721, "speed": 45.5}],
+                [
+                    {"dateTime": "2026-07-06T10:00:00.000Z", "data": 123000000},
+                    {"dateTime": "2026-07-12T14:00:00.000Z", "data": 123456789},
+                ],
+                [
+                    {"dateTime": "2026-07-06T10:00:00.000Z", "data": 20444040},
+                    {"dateTime": "2026-07-12T14:00:00.000Z", "data": 20444444},
+                ],
+            ]
+
+    telemetry = get_device_live_status(FakeAPI(), "device-1")
+
+    assert telemetry["last_communication"] == "2026-07-12T14:30:00.000Z"
+    assert telemetry["is_driving"] is True
+    assert telemetry["latitude"] == 4.711
+    assert telemetry["longitude"] == -74.0721
+    assert telemetry["speed"] == 45.5
+    assert telemetry["odometer_km"] == 123456.789
+    assert telemetry["engine_hours"] == round(20444444 / 3600, 3)
+    assert telemetry["readings_window_days"] == 7
+
+
+def test_get_device_live_status_graceful_with_missing_shape():
+    class FakeAPI:
+        def multi_call(self, calls):
+            return [[], [], []]
+
+    telemetry = get_device_live_status(FakeAPI(), "device-1")
+
+    assert telemetry["last_communication"] is None
+    assert telemetry["is_driving"] is None
+    assert telemetry["latitude"] is None
+    assert telemetry["longitude"] is None
+    assert telemetry["speed"] is None
+    assert telemetry["odometer_km"] is None
+    assert telemetry["engine_hours"] is None
+    assert telemetry["readings_window_days"] == 7

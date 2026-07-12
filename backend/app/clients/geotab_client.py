@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging
+import math
 import re
 import threading
 import time as _time
@@ -14,6 +15,10 @@ from app.core.config import GeotabConfig
 _logger = logging.getLogger(__name__)
 
 _PLATE_PATTERN = re.compile(r"^[A-Z]{3}[0-9]{3}$")
+
+# Sincronizados con app.services.performance_providers._DIAG_ODOMETER / _DIAG_ENGINE_HOURS
+_DIAG_ODOMETER = "DiagnosticOdometerId"
+_DIAG_ENGINE_HOURS = "DiagnosticEngineHoursId"
 
 
 def build_client(cfg: GeotabConfig):
@@ -671,6 +676,121 @@ def multi_call_with_retry(api: mygeotab.API, calls: list[tuple[str, dict[str, An
                 continue
             raise
     raise last_exc  # type: ignore[misc]
+
+
+# ==============================================================================
+# LIVE TELEMETRY
+# ==============================================================================
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    return n if math.isfinite(n) else None
+
+
+def _last_status_data_value(records: list[dict]) -> float | None:
+    if not records:
+        return None
+    sorted_records = sorted(records, key=lambda r: str(r.get("dateTime") or ""))
+    return _safe_float(sorted_records[-1].get("data"))
+
+
+def get_device_live_status(api: mygeotab.API, device_id: str) -> dict[str, Any]:
+    """
+    Consulta en vivo la telemetria de un dispositivo Geotab.
+
+    Realiza un multi_call con:
+      1. DeviceStatusInfo (estado actual / ultima comunicacion).
+      2. StatusData de odometro de los ultimos 7 dias.
+      3. StatusData de horometro de los ultimos 7 dias.
+
+    Devuelve un dict con los valores formateados; cualquier campo faltante
+    se expresa como None. Nunca explota por shape inesperado de la respuesta.
+    """
+    now = datetime.now(timezone.utc)
+    from_date = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    to_date = (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    calls: list[tuple[str, dict[str, Any]]] = [
+        (
+            "Get",
+            {
+                "typeName": "DeviceStatusInfo",
+                "search": {"deviceSearch": {"id": device_id}},
+            },
+        ),
+        (
+            "Get",
+            {
+                "typeName": "StatusData",
+                "search": {
+                    "deviceSearch": {"id": device_id},
+                    "diagnosticSearch": {"id": _DIAG_ODOMETER},
+                    "fromDate": from_date,
+                    "toDate": to_date,
+                },
+            },
+        ),
+        (
+            "Get",
+            {
+                "typeName": "StatusData",
+                "search": {
+                    "deviceSearch": {"id": device_id},
+                    "diagnosticSearch": {"id": _DIAG_ENGINE_HOURS},
+                    "fromDate": from_date,
+                    "toDate": to_date,
+                },
+            },
+        ),
+    ]
+
+    try:
+        results = multi_call_with_retry(api, calls)
+    except Exception:
+        _logger.exception("Error consultando telemetria en vivo del dispositivo %s", device_id)
+        raise
+
+    status_infos = results[0] if results else []
+    odo_records = results[1] if len(results) > 1 else []
+    hours_records = results[2] if len(results) > 2 else []
+
+    status_info: dict[str, Any] = status_infos[0] if isinstance(status_infos, list) and status_infos else {}
+
+    last_communication = status_info.get("dateTime")
+    if isinstance(last_communication, datetime):
+        last_communication = last_communication.isoformat()
+    elif not isinstance(last_communication, str):
+        last_communication = None
+
+    is_driving_raw = status_info.get("isDriving")
+    is_driving: bool | None = None
+    if isinstance(is_driving_raw, bool):
+        is_driving = is_driving_raw
+    elif isinstance(is_driving_raw, str):
+        is_driving = is_driving_raw.strip().lower() in {"true", "1", "yes"}
+
+    latitude = _safe_float(status_info.get("latitude"))
+    longitude = _safe_float(status_info.get("longitude"))
+    speed = _safe_float(status_info.get("speed"))
+
+    odo_meters = _last_status_data_value(odo_records)
+    hours_seconds = _last_status_data_value(hours_records)
+
+    return {
+        "last_communication": last_communication,
+        "is_driving": is_driving,
+        "latitude": latitude,
+        "longitude": longitude,
+        "speed": speed,
+        "odometer_km": round(odo_meters / 1000, 3) if odo_meters is not None else None,
+        "engine_hours": round(hours_seconds / 3600, 3) if hours_seconds is not None else None,
+        "readings_window_days": 7,
+    }
 
 
 # ==============================================================================
