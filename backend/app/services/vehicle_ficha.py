@@ -11,6 +11,7 @@ from app.core.db import db_conn
 from app.services.availability_store import _ensure_availability_table
 from app.services.motor_catalog import _ensure_motor_tables
 from app.services.rendimientos import _ensure_performance_tables
+from app.services.taller_ordenes import peek_cached_orders
 
 _logger = logging.getLogger(__name__)
 
@@ -130,6 +131,41 @@ def _bindings_query(cur, plate: str) -> list[dict[str, Any]]:
     return [_serialize_row(row) for row in cur.fetchall()]
 
 
+_TALLER_ORDER_KEYS = (
+    "order_number",
+    "type",
+    "status",
+    "status_indicator",
+    "time_status_text",
+    "days_elapsed",
+    "pending_closure_days",
+    "maintenance_labels",
+)
+
+
+def _build_taller_section(plate: str) -> dict[str, Any]:
+    """
+    Lee el cache del monitor de ordenes activas SIN disparar llamadas a
+    CloudFleet y devuelve solo las ordenes que correspondan a la placa.
+    """
+    cached = peek_cached_orders()
+    if cached is None:
+        return {"available": False, "orders": []}
+
+    orders = cached.get("orders") or []
+    filtered = [
+        {key: order.get(key) for key in _TALLER_ORDER_KEYS}
+        for order in orders
+        if isinstance(order, dict) and order.get("plate") == plate
+    ]
+
+    return {
+        "available": True,
+        "generated_at": cached.get("generated_at"),
+        "orders": filtered,
+    }
+
+
 def get_vehicle_ficha(plate: str) -> dict[str, Any] | None:
     """Devuelve la ficha 360° de un vehiculo por placa, o None si no existe."""
     normalized_plate = plate.strip().upper()
@@ -151,11 +187,14 @@ def get_vehicle_ficha(plate: str) -> dict[str, Any] | None:
             disponibilidad = _disponibilidad_query(cur, normalized_plate)
             bindings = _bindings_query(cur, normalized_plate)
 
+    taller = _build_taller_section(normalized_plate)
+
     return {
         "plate": normalized_plate,
         "master": master,
         "rendimientos": rendimientos,
         "disponibilidad": disponibilidad,
         "bindings": bindings,
+        "taller": taller,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

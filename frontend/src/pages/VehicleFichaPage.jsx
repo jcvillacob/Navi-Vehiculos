@@ -3,6 +3,24 @@ import { useParams } from "react-router-dom";
 
 import { fetchVehicleFicha } from "../api/vehicleApi";
 
+const TALLER_INDICATOR_BADGE_CLASS = {
+  on_time: "availability-good",
+  about_to_expire: "availability-warn",
+  overdue: "availability-bad",
+  pending_closure: "availability-empty",
+};
+
+function formatMinutesAgo(isoTimestamp) {
+  if (!isoTimestamp) return "";
+  const generated = new Date(isoTimestamp);
+  if (Number.isNaN(generated.getTime())) return "";
+  const diffMs = Date.now() - generated.getTime();
+  const minutes = Math.max(0, Math.floor(diffMs / 60000));
+  if (minutes < 1) return "hace un momento";
+  if (minutes === 1) return "hace 1 min";
+  return `hace ${minutes} min`;
+}
+
 function fmtNumber(value, decimals = 1) {
   if (value === null || value === undefined) return "—";
   const n = Number(value);
@@ -157,6 +175,67 @@ export default function VehicleFichaPage() {
           <MasterPair label="Provider" value={master.database_connection_type} />
           <MasterPair label="Último visto" value={master.last_seen_at ? new Date(master.last_seen_at).toLocaleString("es-CO") : null} />
         </div>
+      </article>
+
+      <article className="card disp-ranking-card">
+        <div className="disp-chart-head">
+          <div>
+            <span className="eyebrow">Taller ahora</span>
+            <h3 className="disp-ranking-title">Estado en tiempo real</h3>
+          </div>
+        </div>
+
+        {!ficha?.taller?.available ? (
+          <p className="disp-hint">Sin datos de taller en caché (se actualiza cada 10 min)</p>
+        ) : ficha.taller.orders.length === 0 ? (
+          <span className="availability-badge availability-good">Sin órdenes activas</span>
+        ) : (
+          <>
+            <div className="vehicles-table-shell">
+              <table className="vehicles-table">
+                <thead>
+                  <tr>
+                    <th>Orden</th>
+                    <th>Tipo</th>
+                    <th>Indicador</th>
+                    <th>Días</th>
+                    <th>Cierre pendiente</th>
+                    <th>Etiquetas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ficha.taller.orders.map((order) => (
+                    <tr key={order.order_number}>
+                      <td>
+                        <strong>{order.order_number}</strong>
+                      </td>
+                      <td>{order.type || "—"}</td>
+                      <td>
+                        <span
+                          className={`availability-badge ${
+                            TALLER_INDICATOR_BADGE_CLASS[order.status_indicator] || "availability-empty"
+                          }`}
+                        >
+                          {order.time_status_text || order.status_indicator || "—"}
+                        </span>
+                      </td>
+                      <td>{order.days_elapsed ?? "—"}</td>
+                      <td>
+                        {order.pending_closure_days !== null && order.pending_closure_days !== undefined
+                          ? `${order.pending_closure_days} d`
+                          : "—"}
+                      </td>
+                      <td>{order.maintenance_labels?.length ? order.maintenance_labels.join(", ") : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="disp-hint" style={{ marginTop: 10 }}>
+              Dato {formatMinutesAgo(ficha.taller.generated_at)}
+            </p>
+          </>
+        )}
       </article>
 
       <div className="ficha-cards-grid">

@@ -254,3 +254,85 @@ def test_vehicle_ficha_normalizes_plate():
     ficha = get_vehicle_ficha("abc123")
     assert ficha is not None
     assert ficha["plate"] == "ABC123"
+
+
+def _make_order(plate: str, order_number: str = "OT-001") -> dict:
+    return {
+        "order_number": order_number,
+        "plate": plate,
+        "type": "Correctiva",
+        "status": "opened",
+        "status_indicator": "on_time",
+        "time_status_text": "En tiempo",
+        "days_elapsed": 2,
+        "pending_closure_days": None,
+        "maintenance_labels": ["motor"],
+    }
+
+
+def test_vehicle_ficha_taller_shows_matching_order(monkeypatch):
+    _reset_ficha_data()
+    customer_id, database_id = _insert_customer_and_database()
+    _insert_assignment("ABC123", customer_id, database_id)
+
+    def _fake_peek():
+        return {
+            "generated_at": "2026-07-12T10:00:00",
+            "summary": {"total_active": 1},
+            "orders": [_make_order("ABC123")],
+        }
+
+    monkeypatch.setattr("app.services.vehicle_ficha.peek_cached_orders", _fake_peek)
+
+    ficha = get_vehicle_ficha("ABC123")
+    assert ficha is not None
+    assert ficha["taller"]["available"] is True
+    assert ficha["taller"]["generated_at"] == "2026-07-12T10:00:00"
+    assert len(ficha["taller"]["orders"]) == 1
+
+    order = ficha["taller"]["orders"][0]
+    assert order["order_number"] == "OT-001"
+    assert order["type"] == "Correctiva"
+    assert order["status"] == "opened"
+    assert order["status_indicator"] == "on_time"
+    assert order["time_status_text"] == "En tiempo"
+    assert order["days_elapsed"] == 2
+    assert order["pending_closure_days"] is None
+    assert order["maintenance_labels"] == ["motor"]
+
+
+def test_vehicle_ficha_taller_cold_cache(monkeypatch):
+    _reset_ficha_data()
+    customer_id, database_id = _insert_customer_and_database()
+    _insert_assignment("ABC123", customer_id, database_id)
+
+    monkeypatch.setattr("app.services.vehicle_ficha.peek_cached_orders", lambda: None)
+
+    ficha = get_vehicle_ficha("ABC123")
+    assert ficha is not None
+    assert ficha["taller"]["available"] is False
+    assert ficha["taller"]["orders"] == []
+
+
+def test_vehicle_ficha_taller_other_plates_empty(monkeypatch):
+    _reset_ficha_data()
+    customer_id, database_id = _insert_customer_and_database()
+    _insert_assignment("ABC123", customer_id, database_id)
+
+    def _fake_peek():
+        return {
+            "generated_at": "2026-07-12T10:05:00",
+            "summary": {"total_active": 2},
+            "orders": [
+                _make_order("XYZ999", "OT-002"),
+                _make_order("ABC124", "OT-003"),
+            ],
+        }
+
+    monkeypatch.setattr("app.services.vehicle_ficha.peek_cached_orders", _fake_peek)
+
+    ficha = get_vehicle_ficha("ABC123")
+    assert ficha is not None
+    assert ficha["taller"]["available"] is True
+    assert ficha["taller"]["generated_at"] == "2026-07-12T10:05:00"
+    assert ficha["taller"]["orders"] == []
