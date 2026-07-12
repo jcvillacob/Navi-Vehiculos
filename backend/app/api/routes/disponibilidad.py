@@ -1,5 +1,9 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.clients.cloudfleet_client import (
+    CloudFleetAuthError,
+    CloudFleetUnavailableError,
+)
 from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
     AvailabilityCoverageResponse,
@@ -14,6 +18,7 @@ from app.services.availability_dashboard import (
     get_cloudfleet_coverage,
     get_vehicle_ranking,
 )
+from app.services.mtbf import get_mtbf_summary
 
 router = APIRouter(prefix="/disponibilidad", tags=["disponibilidad"])
 
@@ -77,3 +82,15 @@ def get_coverage(
     """Reconciliacion de cobertura CloudFleet: placas cubiertas vs no cubiertas."""
     data = get_cloudfleet_coverage(month)
     return AvailabilityCoverageResponse(**data)
+
+
+@router.get("/mtbf")
+def get_mtbf(
+    force_refresh: bool = Query(default=False, description="Ignora el cache y recalcula"),
+    _user: dict = Depends(require_permission("rendimientos.view")),
+) -> dict:
+    """MTBF del año en curso: promedio de horas entre fallas consecutivas."""
+    try:
+        return get_mtbf_summary(force_refresh=force_refresh)
+    except (CloudFleetAuthError, CloudFleetUnavailableError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

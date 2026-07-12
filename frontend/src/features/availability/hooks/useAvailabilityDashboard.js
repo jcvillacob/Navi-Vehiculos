@@ -6,6 +6,7 @@ import {
   fetchAvailabilityOverview,
   fetchAvailabilityRanking,
   fetchAvailabilityTrend,
+  fetchMtbfSummary,
   fetchPerformanceJob,
   listCustomers,
 } from "../../../api/vehicleApi";
@@ -44,10 +45,13 @@ export function useAvailabilityDashboard() {
   const [ranking, setRanking] = useState([]);
   const [trend, setTrend] = useState(null);
   const [coverage, setCoverage] = useState(null);
+  const [mtbf, setMtbf] = useState(null);
 
   const [loadingOverview, setLoadingOverview] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [mtbfLoading, setMtbfLoading] = useState(false);
   const [error, setError] = useState("");
+  const [mtbfError, setMtbfError] = useState("");
 
   const [job, setJob] = useState(null);
   const [recalcError, setRecalcError] = useState("");
@@ -97,6 +101,20 @@ export function useAvailabilityDashboard() {
       setCoverage(null);
     }
   }, [month]);
+
+  const loadMtbf = useCallback(async (forceRefresh = false) => {
+    setMtbfLoading(true);
+    setMtbfError("");
+    try {
+      const data = await fetchMtbfSummary({ forceRefresh });
+      setMtbf(data);
+    } catch (err) {
+      setMtbfError(err.message || "No fue posible cargar el MTBF del año");
+      setMtbf(null);
+    } finally {
+      setMtbfLoading(false);
+    }
+  }, []);
 
   const loadDetail = useCallback(async () => {
     if (!isValidMonth(month)) return;
@@ -207,10 +225,15 @@ export function useAvailabilityDashboard() {
     ranking,
     trend,
     coverage,
+    mtbf,
     // estado
     loadingOverview,
     loadingDetail,
+    mtbfLoading,
     error,
+    mtbfError,
+    // mtbf lazy
+    loadMtbf,
     // recalculo
     recalculate,
     isRecalculating,

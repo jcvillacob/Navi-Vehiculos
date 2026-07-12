@@ -105,18 +105,23 @@ export default function DisponibilidadPage() {
     ranking,
     trend,
     coverage,
+    mtbf,
     loadingOverview,
     loadingDetail,
+    mtbfLoading,
     error,
+    mtbfError,
     recalculate,
     isRecalculating,
     job,
     recalcError,
     refreshAll,
+    loadMtbf,
   } = useAvailabilityDashboard();
 
   const [exporting, setExporting] = useState(false);
   const [coverageOpen, setCoverageOpen] = useState(false);
+  const [mtbfOpen, setMtbfOpen] = useState(false);
   const [registerModalOpen, setRegisterModalOpen] = useState(false);
   const [registerItem, setRegisterItem] = useState(null);
   const [registerLoading, setRegisterLoading] = useState(false);
@@ -702,6 +707,114 @@ export default function DisponibilidadPage() {
                     </div>
                   </div>
                 )}
+              </>
+            )}
+          </div>
+        )}
+      </article>
+
+      {/* MTBF del año */}
+      <article className="card disp-coverage-card">
+        <button
+          type="button"
+          className="button-block disp-coverage-header"
+          onClick={() => setMtbfOpen((open) => !open)}
+          aria-expanded={mtbfOpen}
+        >
+          <div>
+            <span className="eyebrow">MTBF del año</span>
+            <h3 className="disp-ranking-title">
+              {mtbfLoading
+                ? "Calculando MTBF…"
+                : mtbf?.mtbf_hours !== null && mtbf?.mtbf_hours !== undefined
+                  ? `${fmtHours(mtbf.mtbf_hours)} · ${STATUS_LABEL[mtbf.status || "no_data"].toLowerCase()}`
+                  : "MTBF del año en curso"}
+            </h3>
+          </div>
+          <span className="button-secondary button-sm">
+            {mtbfOpen ? "Ocultar" : "Ver detalle"}
+          </span>
+        </button>
+
+        {mtbfOpen && (
+          <div className="disp-coverage-body">
+            {mtbfError ? <div className="notice-banner notice-error">{mtbfError}</div> : null}
+
+            {!mtbf || mtbfLoading ? (
+              <div className="disp-empty">
+                <p>Consulta el año completo en CloudFleet para calcular el MTBF.</p>
+                <p className="disp-hint">La primera vez puede tardar ~1-2 min descargando todas las órdenes.</p>
+                <button
+                  type="button"
+                  onClick={() => loadMtbf(false)}
+                  disabled={mtbfLoading}
+                >
+                  {mtbfLoading ? "Calculando…" : "Calcular MTBF"}
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="disp-gauge-center" style={{ margin: "1rem 0" }}>
+                  <span
+                    className="disp-gauge-value"
+                    style={{ color: STATUS_COLOR[mtbf.status || "no_data"] }}
+                  >
+                    {fmtHours(mtbf.mtbf_hours)}
+                  </span>
+                  <span className={`availability-badge ${STATUS_BADGE_CLASS[mtbf.status || "no_data"]}`}>
+                    {STATUS_LABEL[mtbf.status || "no_data"]}
+                  </span>
+                  <span className="disp-gauge-target">Meta: 500 h</span>
+                </div>
+                <p className="disp-hint" style={{ textAlign: "center" }}>
+                  {mtbf.intervals_count} intervalos · {mtbf.vehicles_considered} vehículos con ≥2 fallas
+                </p>
+
+                <div className="vehicles-table-shell">
+                  <table className="vehicles-table">
+                    <thead>
+                      <tr>
+                        <th>Flota</th>
+                        <th>MTBF h</th>
+                        <th>Fallas</th>
+                        <th>Vehículos</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.isArray(mtbf.fleets) && mtbf.fleets.length === 0 ? (
+                        <tr>
+                          <td className="table-empty-row" colSpan={4}>
+                            Sin flotas con intervalos calculables.
+                          </td>
+                        </tr>
+                      ) : (
+                        (mtbf.fleets || []).map((f) => (
+                          <tr key={f.customer_id ?? f.customer_name}>
+                            <td>{f.customer_name}</td>
+                            <td>
+                              <span style={{ color: STATUS_COLOR[f.status || "no_data"] }}>
+                                {fmtHours(f.mtbf_hours)}
+                              </span>
+                            </td>
+                            <td>{f.failures}</td>
+                            <td>{f.vehicles_with_failures}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="disp-ranking-actions" style={{ marginTop: "1rem" }}>
+                  <button
+                    type="button"
+                    className="button-secondary button-sm"
+                    onClick={() => loadMtbf(true)}
+                    disabled={mtbfLoading}
+                  >
+                    {mtbfLoading ? "Actualizando…" : "Actualizar"}
+                  </button>
+                </div>
               </>
             )}
           </div>

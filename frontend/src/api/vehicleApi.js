@@ -374,6 +374,14 @@ export async function fetchAvailabilityCoverage({ month }) {
   return parseJsonOrThrow(response, "Error cargando la cobertura CloudFleet");
 }
 
+export async function fetchMtbfSummary({ forceRefresh = false } = {}) {
+  const query = new URLSearchParams();
+  if (forceRefresh) query.set("force_refresh", "true");
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await fetchWithAuth(buildUrl(`/api/v1/disponibilidad/mtbf${suffix}`));
+  return parseJsonOrThrow(response, "Error cargando el MTBF del año");
+}
+
 export async function fetchActiveTallerOrders({ forceRefresh = false } = {}) {
   const query = new URLSearchParams();
   if (forceRefresh) query.set("force_refresh", "true");
