@@ -1513,6 +1513,79 @@ select.control-sm {
   width: 100%;
 }
 
+/* ── Operational alerts ── */
+
+.dash-alerts-card {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+}
+
+.dash-alerts-empty {
+  font-weight: 500;
+}
+
+.dash-alerts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.dash-alert-item {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.dash-alert-item p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.dash-alert-item strong {
+  font-family: "Montserrat", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.dash-alert-severity {
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dash-alert-critical {
+  border-left: 3px solid var(--red);
+}
+
+.dash-alert-critical .dash-alert-severity {
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+  border: 1px solid var(--status-error-border);
+}
+
+.dash-alert-warning {
+  border-left: 3px solid #d18c00;
+}
+
+.dash-alert-warning .dash-alert-severity {
+  background: var(--status-partial-bg);
+  color: var(--status-partial-text);
+  border: 1px solid var(--status-partial-border);
+}
+
 .metric-card strong {
   font-family: "Montserrat", sans-serif;
   font-size: clamp(30px, 4vw, 44px);

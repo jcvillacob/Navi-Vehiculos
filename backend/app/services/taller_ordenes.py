@@ -271,6 +271,15 @@ def _set_cached(payload: dict[str, Any]) -> None:
         )
 
 
+def peek_cached_orders() -> dict[str, Any] | None:
+    """
+    Devuelve el cache vigente de ordenes activas SIN forzar una llamada a
+    CloudFleet. Util para el dashboard, que no debe disparar una consulta de
+    ~55s cuando el cache esta frio.
+    """
+    return _get_cached()
+
+
 def get_active_orders(*, force_refresh: bool = False) -> dict[str, Any]:
     """
     Orquestador on-demand del monitor de ordenes activas.
@@ -340,4 +349,5 @@ def get_active_orders(*, force_refresh: bool = False) -> dict[str, Any]:
 __all__ = [
     "build_active_orders",
     "get_active_orders",
+    "peek_cached_orders",
 ]

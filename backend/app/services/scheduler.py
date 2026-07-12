@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -30,6 +31,7 @@ _CRON_HOUR = 5
 _CRON_MINUTE = 0
 _CLEANUP_INTERVAL_MINUTES = 60
 _TALLER_SWEEP_MINUTES = 5
+_TALLER_PREWARM_MINUTES = 10
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -82,6 +84,24 @@ def start() -> None:
         coalesce=True,
         max_instances=1,
     )
+    scheduler.add_job(
+        _safe_prewarm_taller_orders,
+        trigger=IntervalTrigger(minutes=_TALLER_PREWARM_MINUTES),
+        id="taller_orders_prewarm",
+        name="Pre-warm cache of active taller orders",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _safe_operational_alerts_digest,
+        trigger=CronTrigger(hour=6, minute=0, timezone=_CRON_TZ),
+        id="operational_alerts_digest",
+        name="Daily operational alerts digest",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
     scheduler.start()
     _scheduler = scheduler
 
@@ -126,3 +146,57 @@ def _safe_sweep_taller_grace() -> int:
     except Exception:
         logger.exception("Fallo en sweep de taller grace")
         return 0
+
+
+def _safe_prewarm_taller_orders() -> dict[str, Any] | None:
+    """
+    Wrapper que mantiene caliente el cache de ordenes activas. Elimina los
+    ~55s de primera carga de /ordenes-taller cuando un usuario abre la pagina.
+    """
+    try:
+        from app.services.taller_ordenes import get_active_orders
+
+        result = get_active_orders(force_refresh=True)
+        summary = result.get("summary") or {}
+        logger.info(
+            "Pre-warm ordenes activas: %d ordenes en cache "
+            "(overdue=%d, pending_closure_30d=%d).",
+            summary.get("total_active", 0),
+            summary.get("overdue", 0),
+            summary.get("pending_closure_30d", 0),
+        )
+        return result
+    except Exception:
+        logger.exception("Fallo en pre-warm de ordenes activas")
+        return None
+
+
+def _safe_operational_alerts_digest() -> dict[str, Any] | None:
+    """
+    Wrapper del digest diario de alertas operativas. Corre a las 06:00 Bogota,
+    despues del cron de rendimientos de las 05:00. v1 solo loggea; aqui se
+    enchufaria el envio por SMTP en el futuro.
+    """
+    try:
+        from app.services.operational_alerts import get_operational_alerts
+
+        payload = get_operational_alerts()
+        counts = payload.get("counts") or {}
+        alerts = payload.get("alerts") or []
+        logger.info(
+            "Digest alertas operativas (%s): %d critical, %d warning.",
+            payload.get("month"),
+            counts.get("critical", 0),
+            counts.get("warning", 0),
+        )
+        for alert in alerts:
+            logger.info(
+                " - [%s] %s: %s",
+                alert.get("severity", "?").upper(),
+                alert.get("title"),
+                alert.get("detail"),
+            )
+        return payload
+    except Exception:
+        logger.exception("Fallo en digest de alertas operativas")
+        return None

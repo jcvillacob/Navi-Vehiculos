@@ -12,7 +12,7 @@ import {
 
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
-import { fetchDashboardSummaryV2 } from "../api/vehicleApi";
+import { fetchDashboardAlerts, fetchDashboardSummaryV2 } from "../api/vehicleApi";
 
 const HISTORY_KEY = "navi:lookup-history";
 
@@ -152,6 +152,56 @@ function TrendChart({ data }) {
   );
 }
 
+function OperationalAlerts({ data, loading }) {
+  if (loading) {
+    return (
+      <section className="card dash-alerts-card">
+        <span className="eyebrow">Alertas operativas</span>
+        <p className="support-copy">Cargando alertas...</p>
+      </section>
+    );
+  }
+
+  if (!data) {
+    return null;
+  }
+
+  const count = (data.counts?.critical || 0) + (data.counts?.warning || 0);
+
+  if (count === 0) {
+    return (
+      <section className="notice-banner notice-info dash-alerts-empty">
+        Sin alertas activas
+      </section>
+    );
+  }
+
+  return (
+    <section className="card dash-alerts-card">
+      <header className="dash-recent-header">
+        <div>
+          <span className="eyebrow">Alertas operativas</span>
+          <h3>{count} alerta{count !== 1 ? "s" : ""} activa{count !== 1 ? "s" : ""}</h3>
+        </div>
+      </header>
+      <ul className="dash-alerts-list">
+        {data.alerts.map((alert) => (
+          <li
+            key={alert.key}
+            className={`dash-alert-item ${alert.severity === "critical" ? "dash-alert-critical" : "dash-alert-warning"}`}
+          >
+            <span className="dash-alert-severity">
+              {alert.severity === "critical" ? "Crítica" : "Advertencia"}
+            </span>
+            <strong>{alert.title}</strong>
+            <p>{alert.detail}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default function HomePage() {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -160,6 +210,9 @@ export default function HomePage() {
   const { toasts, pushToast } = useToasts();
   const [history] = useState(loadHistory);
   const navigate = useNavigate();
+
+  const [alerts, setAlerts] = useState(null);
+  const [alertsLoading, setAlertsLoading] = useState(true);
 
   const loadSummary = useCallback(async () => {
     setLoading(true);
@@ -174,9 +227,23 @@ export default function HomePage() {
     }
   }, []);
 
+  const loadAlerts = useCallback(async () => {
+    setAlertsLoading(true);
+    try {
+      const data = await fetchDashboardAlerts();
+      setAlerts(data);
+    } catch {
+      // Silencioso: las alertas no deben romper el Home.
+      setAlerts(null);
+    } finally {
+      setAlertsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadSummary();
-  }, [loadSummary]);
+    loadAlerts();
+  }, [loadSummary, loadAlerts]);
 
   useEffect(() => {
     if (error) pushToast("error", error);
@@ -239,6 +306,9 @@ export default function HomePage() {
       </header>
 
       <ToastStack toasts={toasts} />
+
+      {/* ── Operational alerts ── */}
+      <OperationalAlerts data={alerts} loading={alertsLoading} />
 
       {/* ── Operational KPIs (nuevo) ── */}
       <section className="dash-metrics-grid">

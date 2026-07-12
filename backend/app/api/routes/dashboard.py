@@ -18,6 +18,7 @@ from app.services.availability_dashboard import (
     get_availability_trend,
 )
 from app.services.motor_catalog import get_dashboard_summary
+from app.services.operational_alerts import get_operational_alerts
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -121,3 +122,10 @@ def dashboard_summary_v2(
         last_rendimientos_job=_build_last_job_block(),
         availability_trend=trend,
     )
+
+
+@router.get("/alerts")
+def dashboard_alerts(
+    _user: dict = Depends(require_permission("dashboard.view")),
+) -> dict:
+    return get_operational_alerts()

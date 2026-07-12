@@ -182,6 +182,11 @@ export async function fetchDashboardSummaryV2() {
   return parseJsonOrThrow(response, "Error obteniendo resumen del dashboard");
 }
 
+export async function fetchDashboardAlerts() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/dashboard/alerts"));
+  return parseJsonOrThrow(response, "Error obteniendo alertas operativas");
+}
+
 // ── Rendimientos ─────────────────────────────────────────────────────────────
 
 export async function fetchMonthlyPerformance(params) {
