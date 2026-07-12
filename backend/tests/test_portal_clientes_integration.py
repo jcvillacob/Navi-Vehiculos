@@ -892,3 +892,146 @@ async def test_availability_invalid_month_returns_422(client, monkeypatch):
         params={"month_from": "2026/01", "month_to": "2026-02"},
     )
     assert response.status_code == 422
+
+
+# ── Endpoint /integration/taller-ordenes ──────────────────────────────
+
+
+def _fake_taller_orders_payload() -> dict:
+    """Payload sintetico que simula la salida de get_active_orders."""
+    orders = [
+        {
+            "order_number": "OT-001",
+            "plate": "ABC123",
+            "customer_id": 1,
+            "customer_name": "Cliente Uno",
+            "type": "preventive",
+            "status": "opened",
+            "status_indicator": "on_time",
+            "time_status_text": "En tiempo",
+            "days_elapsed": 2,
+            "pending_closure_days": None,
+            "maintenance_labels": [],
+            "has_labels": False,
+        },
+        {
+            "order_number": "OT-002",
+            "plate": "DEF456",
+            "customer_id": 1,
+            "customer_name": "Cliente Uno",
+            "type": "corrective",
+            "status": "opened",
+            "status_indicator": "overdue",
+            "time_status_text": "Excedido",
+            "days_elapsed": 10,
+            "pending_closure_days": None,
+            "maintenance_labels": [],
+            "has_labels": False,
+        },
+        {
+            "order_number": "OT-003",
+            "plate": "GHI789",
+            "customer_id": 2,
+            "customer_name": "Cliente Dos",
+            "type": "corrective",
+            "status": "ontechnicalcompletion",
+            "status_indicator": "pending_closure",
+            "time_status_text": "Pendiente cierre",
+            "days_elapsed": 5,
+            "pending_closure_days": 10,
+            "maintenance_labels": ["repuesto_especial"],
+            "has_labels": True,
+        },
+    ]
+    return {
+        "generated_at": "2026-07-12T10:00:00",
+        "summary": {
+            "total_active": 3,
+            "on_time": 1,
+            "about_to_expire": 0,
+            "overdue": 1,
+            "pending_closure": 1,
+            "pending_closure_7d": 1,
+            "pending_closure_30d": 0,
+            "con_etiquetas": 1,
+        },
+        "orders": orders,
+    }
+
+
+async def test_taller_ordenes_returns_all_without_customer_id(client, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+    monkeypatch.setattr(
+        integration_export, "get_active_orders", lambda force_refresh=False: _fake_taller_orders_payload()
+    )
+
+    response = await client.get("/api/v1/integration/taller-ordenes", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["generated_at"] == "2026-07-12T10:00:00"
+    assert payload["customer_id"] is None
+    assert len(payload["orders"]) == 3
+    assert payload["summary"]["total_active"] == 3
+    assert payload["summary"]["con_etiquetas"] == 1
+
+    plates = {o["plate"] for o in payload["orders"]}
+    assert plates == {"ABC123", "DEF456", "GHI789"}
+
+
+async def test_taller_ordenes_filters_by_customer_id_and_recalculates_summary(
+    client, monkeypatch
+):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+    monkeypatch.setattr(
+        integration_export, "get_active_orders", lambda force_refresh=False: _fake_taller_orders_payload()
+    )
+
+    response = await client.get(
+        "/api/v1/integration/taller-ordenes",
+        headers=headers,
+        params={"customer_id": 1},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["customer_id"] == 1
+    assert len(payload["orders"]) == 2
+    assert payload["summary"]["total_active"] == 2
+    assert payload["summary"]["on_time"] == 1
+    assert payload["summary"]["overdue"] == 1
+    assert payload["summary"]["pending_closure"] == 0
+    assert payload["summary"]["pending_closure_7d"] == 0
+    assert payload["summary"]["con_etiquetas"] == 0
+
+    response = await client.get(
+        "/api/v1/integration/taller-ordenes",
+        headers=headers,
+        params={"customer_id": 2},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["customer_id"] == 2
+    assert len(payload["orders"]) == 1
+    assert payload["orders"][0]["order_number"] == "OT-003"
+    assert payload["summary"]["total_active"] == 1
+    assert payload["summary"]["pending_closure"] == 1
+    assert payload["summary"]["pending_closure_7d"] == 1
+    assert payload["summary"]["con_etiquetas"] == 1
+
+
+async def test_taller_ordenes_returns_503_on_cloudfleet_error(client, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+
+    def _raise_cloudfleet(*, force_refresh=False):
+        raise integration_export.CloudFleetUnavailableError("CloudFleet caido")
+
+    monkeypatch.setattr(integration_export, "get_active_orders", _raise_cloudfleet)
+
+    response = await client.get("/api/v1/integration/taller-ordenes", headers=headers)
+    assert response.status_code == 503
+    assert "CloudFleet" in response.json()["detail"]

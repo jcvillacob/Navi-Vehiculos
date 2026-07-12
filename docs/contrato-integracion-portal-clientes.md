@@ -459,3 +459,91 @@ puede recorrer el dataset completo incrementando `offset` en cada request.
 | `422` | `month_from` / `month_to` mal formado o `since` no es ISO-8601 | Corregir formato de los parámetros. |
 | `401` | API key inválida/ausente | Revisar rotación de clave. |
 | `503` | `INTEGRATION_API_KEYS` sin configurar | Alertar al equipo de Navi Vehículos. |
+
+---
+
+## 7. Órdenes de taller activas
+
+```
+GET {NAVI_BASE_URL}/api/v1/integration/taller-ordenes
+    ?customer_id=12              (opcional — filtra por cliente)
+    &force_refresh=false         (opcional — default false)
+```
+
+Exporta las órdenes de taller activas que Navi Vehículos lee desde CloudFleet.
+Cada orden viene enriquecida con el cliente asignado localmente y un indicador
+ temporal (`status_indicator`).
+
+### 7.1 Latencia y cache
+
+El monitor mantiene una cache en memoria de 10 minutos. La primera llamada sin
+cache caliente puede tardar aproximadamente **30–60 segundos** porque descarga
+work-orders de CloudFleet en una ventana de ~180 días hacia atrás.
+
+Portal Clientes debe:
+
+- Usar `force_refresh=false` salvo que sepa que necesita datos frescos.
+- Tolerar el warm-up inicial, o consumir el endpoint después de que un scheduler
+  interno haya precalentado la cache.
+
+### 7.2 Respuesta
+
+```json
+{
+  "generated_at": "2026-07-12T10:00:00",
+  "customer_id": null,
+  "summary": {
+    "total_active": 3,
+    "on_time": 1,
+    "about_to_expire": 0,
+    "overdue": 1,
+    "pending_closure": 1,
+    "pending_closure_7d": 1,
+    "pending_closure_30d": 0,
+    "con_etiquetas": 1
+  },
+  "orders": [
+    {
+      "order_number": "OT-001",
+      "plate": "ABC123",
+      "customer_id": 12,
+      "customer_name": "Transportes El Roble",
+      "type": "preventive",
+      "status": "opened",
+      "status_indicator": "on_time",
+      "time_status_text": "En tiempo",
+      "days_elapsed": 2,
+      "pending_closure_days": null,
+      "maintenance_labels": []
+    }
+  ]
+}
+```
+
+Cuando se pasa `customer_id`, la respuesta filtra `orders` y recalcula
+`summary` únicamente sobre ese subconjunto.
+
+Notas sobre los campos clave:
+
+| Campo | Significado |
+|---|---|
+| `orders[].order_number` | Número de orden en CloudFleet. |
+| `orders[].plate` | Placa normalizada del vehículo. |
+| `orders[].customer_id` / `customer_name` | Cliente asignado localmente en Navi Vehículos; puede ser `null` si la placa no tiene asignación. |
+| `orders[].status` | Estado nativo de CloudFleet (`opened`, `ontechnicalcompletion`, etc.). |
+| `orders[].status_indicator` | `on_time`, `about_to_expire`, `overdue` o `pending_closure`. |
+| `orders[].time_status_text` | Etiqueta legible del indicador temporal. |
+| `orders[].days_elapsed` | Días transcurridos desde el inicio de la orden. |
+| `orders[].pending_closure_days` | Días desde la terminación técnica sin cierre administrativo; `null` si no aplica. |
+| `orders[].maintenance_labels` | Etiquetas de mantenimiento asociadas a la orden. |
+| `summary.pending_closure_7d` | Órdenes con cierre administrativo pendiente de más de 7 días. |
+| `summary.pending_closure_30d` | Órdenes con cierre administrativo pendiente de más de 30 días. |
+| `summary.con_etiquetas` | Órdenes que tienen al menos una etiqueta de mantenimiento. |
+
+### 7.3 Errores
+
+| Código | Causa | Acción en Portal Clientes |
+|---|---|---|
+| `422` | `customer_id` menor o igual a 0 | Corregir el parámetro. |
+| `401` | API key inválida/ausente | Revisar rotación de clave. |
+| `503` | CloudFleet no disponible o no configurado; `INTEGRATION_API_KEYS` sin configurar | Reintentar con backoff; alertar al equipo de Navi Vehículos si persiste. |

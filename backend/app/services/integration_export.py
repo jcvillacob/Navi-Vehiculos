@@ -24,6 +24,11 @@ from app.services.availability_store import (
 from app.services.motor_catalog import _database_dsn, _ensure_motor_tables
 from app.services.provider_registry import public_provider_config
 from app.services.rendimientos import _ensure_performance_tables
+from app.services.taller_ordenes import (
+    CloudFleetAuthError,
+    CloudFleetUnavailableError,
+    get_active_orders,
+)
 
 _PASSWORD_MASK = "********"
 
@@ -537,4 +542,66 @@ def export_availability(
             }
             for row in rows
         ],
+    }
+
+
+def _build_taller_summary(orders: list[dict[str, Any]]) -> dict[str, Any]:
+    """Calcula el resumen de ordenes activas sobre un subconjunto dado."""
+    summary = {
+        "total_active": len(orders),
+        "on_time": 0,
+        "about_to_expire": 0,
+        "overdue": 0,
+        "pending_closure": 0,
+        "pending_closure_7d": 0,
+        "pending_closure_30d": 0,
+        "con_etiquetas": 0,
+    }
+    for order in orders:
+        indicator = order.get("status_indicator")
+        if indicator in summary:
+            summary[indicator] += 1  # type: ignore[literal-required]
+        pcd = order.get("pending_closure_days")
+        if isinstance(pcd, int):
+            if pcd > 7:
+                summary["pending_closure_7d"] += 1
+            if pcd > 30:
+                summary["pending_closure_30d"] += 1
+        if order.get("has_labels"):
+            summary["con_etiquetas"] += 1
+    return summary
+
+
+def export_taller_ordenes(
+    *, customer_id: int | None = None, force_refresh: bool = False
+) -> dict[str, Any]:
+    """
+    Exporta las ordenes de taller activas para Portal Clientes.
+
+    Llama al monitor de ordenes activas (`get_active_orders`) y, opcionalmente,
+    filtra por cliente y recalcula el resumen sobre el subconjunto.
+
+    Nota sobre latencia: la primera llamada sin cache caliente puede tardar
+    aproximadamente 30-60 segundos porque descarga work-orders de CloudFleet
+    en una ventana de ~180 dias. Portal Clientes debe usar `force_refresh=false`
+    y tolerar ese warm-up, o consumir el endpoint despues de que un scheduler
+    haya precalentado la cache.
+
+    Errores de CloudFleet (CloudFleetAuthError, CloudFleetUnavailableError) y
+    RuntimeError (configuracion faltante) se propagan para que la ruta los
+    convierta en HTTP 503.
+    """
+    payload = get_active_orders(force_refresh=force_refresh)
+    orders: list[dict[str, Any]] = list(payload.get("orders", []))
+
+    if customer_id is not None:
+        orders = [
+            order for order in orders if order.get("customer_id") == customer_id
+        ]
+
+    return {
+        "generated_at": payload.get("generated_at"),
+        "customer_id": customer_id,
+        "summary": _build_taller_summary(orders),
+        "orders": orders,
     }

@@ -2,9 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.dependencies import require_integration_key
 from app.services.integration_export import (
+    CloudFleetAuthError,
+    CloudFleetUnavailableError,
     build_snapshot,
     export_availability,
     export_customers,
+    export_taller_ordenes,
     export_vehicles,
 )
 
@@ -86,3 +89,26 @@ def get_customers(
         return export_customers(since=since, include_credentials=include_credentials)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/taller-ordenes",
+    description="Ordenes de taller activas en CloudFleet para Portal Clientes",
+)
+def get_taller_ordenes(
+    customer_id: int | None = Query(
+        default=None, gt=0, description="Filtrar por id de cliente"
+    ),
+    force_refresh: bool = Query(
+        default=False, description="Forzar descarga desde CloudFleet"
+    ),
+) -> dict:
+    try:
+        return export_taller_ordenes(
+            customer_id=customer_id, force_refresh=force_refresh
+        )
+    except (CloudFleetAuthError, CloudFleetUnavailableError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"CloudFleet no disponible: {exc}",
+        ) from exc
