@@ -22,6 +22,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.jobs.rendimientos_cron import _run as run_rendimientos_cron
 from app.services.auth_service import cleanup_expired_refresh_tokens
 from app.services.geotab_taller import sweep_expired_grace as _sweep_taller_grace
+from app.services.geotab_taller_sync import reconcile_taller_vehicles_with_geotab as _reconcile_taller_vehicles
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ _CRON_MINUTE = 0
 _CLEANUP_INTERVAL_MINUTES = 60
 _TALLER_SWEEP_MINUTES = 5
 _TALLER_PREWARM_MINUTES = 10
+_TALLER_SYNC_INTERVAL_MINUTES = int(os.getenv("TALLER_SYNC_INTERVAL_MINUTES", "30"))
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -89,6 +91,15 @@ def start() -> None:
         trigger=IntervalTrigger(minutes=_TALLER_PREWARM_MINUTES),
         id="taller_orders_prewarm",
         name="Pre-warm cache of active taller orders",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _safe_geotab_taller_sync,
+        trigger=IntervalTrigger(minutes=_TALLER_SYNC_INTERVAL_MINUTES),
+        id="geotab_taller_sync",
+        name="Sync/reconcile taller geofences with Geotab",
         replace_existing=True,
         coalesce=True,
         max_instances=1,
@@ -199,4 +210,14 @@ def _safe_operational_alerts_digest() -> dict[str, Any] | None:
         return payload
     except Exception:
         logger.exception("Fallo en digest de alertas operativas")
+        return None
+
+
+def _safe_geotab_taller_sync() -> dict[str, Any] | None:
+    """Wrapper que loggea excepciones del job de sincronizacion/conciliacion."""
+    try:
+        stats = _reconcile_taller_vehicles()
+        return stats
+    except Exception:
+        logger.exception("Fallo en job de reconciliacion Geotab")
         return None

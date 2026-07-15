@@ -41,7 +41,7 @@ class Settings:
     geotab_taller_rule_exit: str = os.getenv(
         "GEOTAB_TALLER_RULE_EXIT", "Salida taller - Proyecto"
     ).strip()
-    taller_min_minutes: int = int(os.getenv("TALLER_MIN_MINUTES", "30"))
+    taller_min_minutes: int = int(os.getenv("TALLER_MIN_MINUTES", "10"))
     taller_grace_hours: int = int(os.getenv("TALLER_GRACE_HOURS", "1"))
     taller_in_ttl_days: int = int(os.getenv("TALLER_IN_TTL_DAYS", "30"))
     mapa_snapshot_ttl_seconds: int = int(os.getenv("MAPA_SNAPSHOT_TTL_SECONDS", "60"))

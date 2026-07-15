@@ -167,9 +167,7 @@ export default function MapaPage() {
           <span className="eyebrow">Geocercas</span>
           <h2>Mapa</h2>
           <p>
-            Vehiculos en taller con mas de 30 minutos dentro de la geocerca.
-            Datos en vivo desde Geotab; se actualiza automaticamente cada 10
-            minutos.
+            Vehiculos en taller con mas de 10 minutos dentro de la geocerca.
           </p>
         </div>
         <button
