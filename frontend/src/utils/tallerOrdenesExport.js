@@ -195,5 +195,5 @@ export async function exportTallerOrdenesExcel({ generatedAt, summary, orders })
 
   const today = new Date().toISOString().slice(0, 10);
   const fileName = `Ordenes_Taller_${sanitizeFileName(today)}.xlsx`;
-  XLSX.writeFile(wb, fileName);
+  XLSX.writeFile(wb, fileName, { bookType: "xlsx", cellStyles: true });
 }

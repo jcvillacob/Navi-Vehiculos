@@ -960,7 +960,7 @@ export default function RendimientosPage() {
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, dataSheet, "Rendimientos");
       XLSX.utils.book_append_sheet(workbook, filtersDataSheet, "Filtros");
-      XLSX.writeFile(workbook, buildExportFileName(monthFrom, monthTo));
+      XLSX.writeFile(workbook, buildExportFileName(monthFrom, monthTo), { bookType: "xlsx", cellStyles: true });
 
       pushToast("success", `Excel exportado con ${sortedRows.length} filas.`);
     } catch (err) {

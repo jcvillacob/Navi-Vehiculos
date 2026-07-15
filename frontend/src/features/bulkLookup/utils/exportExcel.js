@@ -155,5 +155,5 @@ export function buildBulkResultsWorkbook(results) {
 export function downloadBulkResultsWorkbook(results) {
   const workbook = buildBulkResultsWorkbook(results);
   const { date, time } = getTimestampParts();
-  XLSX.writeFile(workbook, `navi-consulta-lote-${date}-${time}.xlsx`);
+  XLSX.writeFile(workbook, `navi-consulta-lote-${date}-${time}.xlsx`, { bookType: "xlsx", cellStyles: true });
 }

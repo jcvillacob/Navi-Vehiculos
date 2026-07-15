@@ -727,7 +727,7 @@ export default function CpkCphPage() {
       const dataSheet = buildDataSheet();
       XLSX.utils.book_append_sheet(wb, summarySheet, "Resumen");
       XLSX.utils.book_append_sheet(wb, dataSheet, "CPK CPH");
-      XLSX.writeFile(wb, `cpk_cph_${sanitizeFileName(customerName)}_${month}.xlsx`);
+      XLSX.writeFile(wb, `cpk_cph_${sanitizeFileName(customerName)}_${month}.xlsx`, { bookType: "xlsx", cellStyles: true });
       pushToast("success", "Excel CPK/CPH exportado.");
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message : "No fue posible exportar");

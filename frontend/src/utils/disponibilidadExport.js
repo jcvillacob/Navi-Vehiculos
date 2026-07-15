@@ -334,5 +334,5 @@ export async function exportDisponibilidadExcel({ month, overview, ranking, cove
 
   const today = new Date().toISOString().slice(0, 10);
   const fileName = `Disponibilidad_${sanitizeFileName(formatMonthLabel(month))}_${today}.xlsx`;
-  XLSX.writeFile(wb, fileName);
+  XLSX.writeFile(wb, fileName, { bookType: "xlsx", cellStyles: true });
 }
