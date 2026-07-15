@@ -10,6 +10,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import { validatePasswordStrength } from "./utils/passwordValidation";
 import LoginPage from "./pages/LoginPage";
 import AuditPage from "./pages/AuditPage";
+import BackupsPage from "./pages/BackupsPage";
 import UsersPage from "./pages/UsersPage";
 import RolesPage from "./pages/RolesPage";
 import HomePage from "./pages/HomePage";
@@ -233,6 +234,12 @@ function AppShell() {
                       <small>Logs del sistema</small>
                     </NavLink>
                   </Can>
+                  <Can permission="backups.list">
+                    <NavLink to="/backups">
+                      <span>Backups</span>
+                      <small>Respaldo PostgreSQL</small>
+                    </NavLink>
+                  </Can>
                 </div>
               </div>
             </nav>
@@ -345,6 +352,14 @@ function AppShell() {
                 element={
                   <ProtectedRoute permissions={["audit.view"]}>
                     <AuditPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/backups"
+                element={
+                  <ProtectedRoute permissions={["backups.list"]}>
+                    <BackupsPage />
                   </ProtectedRoute>
                 }
               />

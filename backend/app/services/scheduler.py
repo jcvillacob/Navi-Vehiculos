@@ -21,6 +21,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.jobs.rendimientos_cron import _run as run_rendimientos_cron
 from app.services.auth_service import cleanup_expired_refresh_tokens
+from app.services.backup_service import create_postgres_backup
 from app.services.geotab_taller import sweep_expired_grace as _sweep_taller_grace
 from app.services.geotab_taller_sync import reconcile_all_taller_vehicles_with_geotab as _reconcile_taller_vehicles
 
@@ -34,6 +35,7 @@ _CLEANUP_INTERVAL_MINUTES = 60
 _TALLER_SWEEP_MINUTES = 5
 _TALLER_PREWARM_MINUTES = 10
 _TALLER_SYNC_INTERVAL_MINUTES = int(os.getenv("TALLER_SYNC_INTERVAL_MINUTES", "30"))
+_BACKUP_HOUR = int(os.getenv("BACKUP_HOUR", "2"))
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -112,6 +114,16 @@ def start() -> None:
         replace_existing=True,
         coalesce=True,
         max_instances=1,
+    )
+    scheduler.add_job(
+        _safe_postgres_backup,
+        trigger=CronTrigger(hour=_BACKUP_HOUR, minute=0, timezone=_CRON_TZ),
+        id="postgres_backup_daily",
+        name="Daily PostgreSQL backup",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=2 * 60 * 60,
     )
     scheduler.start()
     _scheduler = scheduler
@@ -225,4 +237,12 @@ def _safe_geotab_taller_sync(database_id: int | None = None) -> dict[str, Any] |
         return stats
     except Exception:
         logger.exception("Fallo en job de reconciliacion Geotab")
+        return None
+
+
+def _safe_postgres_backup() -> dict[str, Any] | None:
+    try:
+        return create_postgres_backup(trigger="daily")
+    except Exception:
+        logger.exception("Fallo en job de backup diario de PostgreSQL")
         return None

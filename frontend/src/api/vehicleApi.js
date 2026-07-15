@@ -170,6 +170,20 @@ export async function fetchAuditLogs(limit = 100, offset = 0) {
   return parseJsonOrThrow(response, "Error cargando logs de auditoria");
 }
 
+// ── Backups PostgreSQL ───────────────────────────────────────────────────────
+
+export async function fetchBackups() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/backups"));
+  return parseJsonOrThrow(response, "Error cargando backups");
+}
+
+export async function createBackup() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/backups"), {
+    method: "POST",
+  });
+  return parseJsonOrThrow(response, "Error creando backup");
+}
+
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
 export async function fetchDashboardSummary() {

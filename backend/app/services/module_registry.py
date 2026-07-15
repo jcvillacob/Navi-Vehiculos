@@ -78,6 +78,12 @@ MODULES: list[dict] = [
         "levels": ["lectura"],
     },
     {
+        "key": "backups",
+        "label": "Backups",
+        "description": "Respaldo y control de copias de la base PostgreSQL.",
+        "levels": ["lectura", "escritura"],
+    },
+    {
         "key": "mapa",
         "label": "Mapa de taller",
         "description": "Mapa de vehículos en taller. Gestión manual de estado.",
@@ -132,6 +138,8 @@ MODULE_CODENAMES: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("roles", "escritura"): ("roles.manage",),
     ("auditoria", "lectura"): ("audit.view",),
+    ("backups", "lectura"): ("backups.list",),
+    ("backups", "escritura"): ("backups.list", "backups.create"),
     ("mapa", "escritura"): ("mapa.taller.manage",),
 }
 
@@ -160,6 +168,8 @@ PERMISSION_DESCRIPTIONS: dict[str, str] = {
     "users.edit": "Editar usuario",
     "roles.manage": "Gestionar roles y permisos",
     "audit.view": "Ver auditoria",
+    "backups.list": "Listar backups de PostgreSQL",
+    "backups.create": "Crear backup de PostgreSQL",
     "engine_lookup.use": "Consultar motor por placa",
     "engine_lookup.batch": "Consultar motores en lote",
     "mapa.taller.manage": "Gestionar estado manual del mapa de taller",

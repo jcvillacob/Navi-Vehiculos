@@ -42,6 +42,7 @@ services:
       - "8000"
     volumes:
       - ./backend:/app
+      - postgres_backups:/backups
     env_file:
       - ./.env
     environment:
@@ -119,6 +120,7 @@ volumes:
     name: navi-vehiculos_postgres_data
   redis_data:
   minio_data:
+  postgres_backups:
 
 networks:
   default:
