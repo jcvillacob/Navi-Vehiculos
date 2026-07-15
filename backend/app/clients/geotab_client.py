@@ -87,15 +87,66 @@ def _device_matches_vin(device: dict, vin: str) -> bool:
     return _normalize_vin(extract_vin(device)) == normalized_vin
 
 
-def _find_device_in_collection(
+def _device_is_active(device: dict) -> bool:
+    """True si el device no esta archivado en Geotab (activeTo en el futuro)."""
+    active_to = device.get("activeTo")
+    if not active_to:
+        return True
+    return _parse_geotab_datetime(active_to) > datetime.now(timezone.utc)
+
+
+def find_matching_devices(
     devices: list[dict], *, plate: str | None = None, vin: str | None = None, plate_prefix: str | None = None
-) -> dict | None:
+) -> list[dict]:
+    """Devuelve TODOS los devices que matchean la placa/VIN.
+
+    Geotab permite placas duplicadas (dos devices con la misma licensePlate/name),
+    por eso el caller necesita ver el conjunto completo para desempatar de forma
+    estable en vez de quedarse con el primero que aparezca en el inventario.
+    """
+    matches: list[dict] = []
     for device in devices:
         if plate and _device_matches_plate(device, plate, plate_prefix=plate_prefix):
-            return device
-        if vin and _device_matches_vin(device, vin):
-            return device
-    return None
+            matches.append(device)
+        elif vin and _device_matches_vin(device, vin):
+            matches.append(device)
+    return matches
+
+
+def _find_device_in_collection(
+    devices: list[dict],
+    *,
+    plate: str | None = None,
+    vin: str | None = None,
+    plate_prefix: str | None = None,
+    preferred_id: str | None = None,
+) -> dict | None:
+    """Resuelve un device por placa/VIN de forma estable ante duplicados.
+
+    Prioridad de desempate cuando hay mas de un match:
+      1. Device activo (no archivado) por encima de archivados. Un binding auto
+         que quedo apuntando a un device archivado se auto-sana: el activo gana
+         aunque sea el `preferred_id`.
+      2. Dentro del grupo elegido, `preferred_id`: el device que ya venia
+         usandose (evita saltar entre duplicados del mismo estado).
+      3. Orden del inventario (deterministico dentro del cache).
+    """
+    matches = find_matching_devices(devices, plate=plate, vin=vin, plate_prefix=plate_prefix)
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+
+    active_matches = [device for device in matches if _device_is_active(device)]
+    pool = active_matches or matches
+
+    normalized_preferred = str(preferred_id or "").strip()
+    if normalized_preferred:
+        for device in pool:
+            if str(device.get("id") or "").strip() == normalized_preferred:
+                return device
+
+    return pool[0]
 
 
 def _get_all_devices(client) -> list[dict]:

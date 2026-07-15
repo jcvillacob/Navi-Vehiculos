@@ -39,7 +39,9 @@ from app.clients.frotcom_client import (
     list_vehicles as list_frotcom_vehicles,
 )
 from app.clients.geotab_client import (
+    _device_is_active,
     _find_device_in_collection,
+    find_matching_devices,
     get_authenticated_client,
     get_cached_devices,
     get_geotab_month_range,
@@ -785,21 +787,47 @@ class GeotabMonthlyPerformanceProvider:
         resolve_s += time.perf_counter() - resolve_start
 
         for target in targets:
+            duplicate_warning: str | None = None
             try:
                 bound_id, is_manual = _select_binding(bindings=bindings, target=target)
                 if is_manual:
                     device_id = bound_id
                     resolved_via_binding += 1
                 else:
+                    plate_prefix = target.provider_config.get("plate_prefix")
+                    matches = find_matching_devices(
+                        devices, plate=target.plate, plate_prefix=plate_prefix
+                    )
+                    # Geotab conserva los devices archivados (cada reemplazo de
+                    # equipo crea uno nuevo y archiva el viejo, misma placa). El
+                    # desempate prefiere el device activo y, ante empate, el que
+                    # ya venia usandose (bound_id) para no saltar a un duplicado.
                     device = _find_device_in_collection(
                         devices,
                         plate=target.plate,
-                        plate_prefix=target.provider_config.get("plate_prefix"),
+                        plate_prefix=plate_prefix,
+                        preferred_id=bound_id,
                     )
                     resolved_id = str(device.get("id") or "").strip() if device else None
                     device_id = resolved_id or bound_id
                     if device is not None:
                         api_resolved_count += 1
+                    # Solo avisamos si queda ambiguedad REAL: 2+ devices activos
+                    # con la misma placa. Un activo + archivados se resuelve solo.
+                    active_matches = [d for d in matches if _device_is_active(d)]
+                    if len(active_matches) > 1:
+                        ids = ", ".join(sorted(str(d.get("id") or "").strip() for d in active_matches))
+                        duplicate_warning = (
+                            f"Geotab tiene {len(active_matches)} dispositivos activos con la placa "
+                            f"{target.plate} ({ids}); se uso {device_id}. Fija el binding manual si es el equivocado."
+                        )
+                        _logger.warning(
+                            "Geotab placa con multiples activos %s [%s]: devices=%s usado=%s",
+                            target.plate,
+                            sample.database_name or "",
+                            ids,
+                            device_id,
+                        )
 
                 if not device_id:
                     binding_updates.append(
@@ -840,6 +868,8 @@ class GeotabMonthlyPerformanceProvider:
                         to_date=to_date,
                         previous_record=previous_records.get((target.customer_database_id, target.plate)),
                     )
+                    if duplicate_warning:
+                        record.warnings = [duplicate_warning, *record.warnings]
                     rows.append(record)
                 except Exception as exc:
                     rows.append(
