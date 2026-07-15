@@ -22,7 +22,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.jobs.rendimientos_cron import _run as run_rendimientos_cron
 from app.services.auth_service import cleanup_expired_refresh_tokens
 from app.services.geotab_taller import sweep_expired_grace as _sweep_taller_grace
-from app.services.geotab_taller_sync import reconcile_taller_vehicles_with_geotab as _reconcile_taller_vehicles
+from app.services.geotab_taller_sync import reconcile_all_taller_vehicles_with_geotab as _reconcile_taller_vehicles
 
 logger = logging.getLogger(__name__)
 
@@ -213,10 +213,15 @@ def _safe_operational_alerts_digest() -> dict[str, Any] | None:
         return None
 
 
-def _safe_geotab_taller_sync() -> dict[str, Any] | None:
-    """Wrapper que loggea excepciones del job de sincronizacion/conciliacion."""
+def _safe_geotab_taller_sync(database_id: int | None = None) -> dict[str, Any] | None:
+    """Wrapper del sync; sin id procesa todas las databases Geotab registradas."""
     try:
-        stats = _reconcile_taller_vehicles()
+        if database_id is None:
+            stats = _reconcile_taller_vehicles()
+        else:
+            from app.services.geotab_taller_sync import reconcile_taller_vehicles_with_geotab
+
+            stats = reconcile_taller_vehicles_with_geotab(database_id)
         return stats
     except Exception:
         logger.exception("Fallo en job de reconciliacion Geotab")

@@ -3074,6 +3074,42 @@ def _sibling_database_ids(conn: psycopg.Connection, database_id: int) -> list[in
     return [int(r["id"]) for r in rows] if rows else [database_id]
 
 
+def get_geotab_database_scope(database_id: int) -> tuple[int, ...]:
+    """IDs locales que representan la misma database fisica de Geotab."""
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT connection_type FROM customer_databases WHERE id = %s;",
+                (database_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise ValueError("La database no existe.")
+        if row["connection_type"] != "geotab":
+            raise ValueError("La database no es de tipo Geotab.")
+        return tuple(_sibling_database_ids(conn, database_id))
+
+
+def list_geotab_taller_sync_targets() -> list[dict[str, Any]]:
+    """Una fila por database fisica Geotab habilitada para el scheduler."""
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (LOWER(cd.database_name))
+                       cd.id, cd.database_name
+                FROM customer_databases cd
+                INNER JOIN customers c ON c.id = cd.customer_id
+                WHERE cd.connection_type = 'geotab'
+                  AND c.is_active
+                ORDER BY LOWER(cd.database_name), cd.id;
+                """
+            )
+            return list(cur.fetchall())
+
+
 def _list_rules_for_database(database_id: int) -> list[GeotabRuleRecord]:
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)

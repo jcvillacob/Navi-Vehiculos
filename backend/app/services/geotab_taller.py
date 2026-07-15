@@ -332,6 +332,7 @@ def resolve_vehicle(
     *,
     device_name: str | None,
     vin: str | None,
+    database_ids: tuple[int, ...] | None = None,
 ) -> dict[str, Any] | None:
     """
     Resuelve el vehiculo en `vehicle_motor_assignments`:
@@ -344,13 +345,27 @@ def resolve_vehicle(
     `client_name`, `motor` (engine_name). None si no hay match.
 
     device_id NO se usa para matchear: se repite entre DBs de Geotab y por
-    eso mismo el matching se hace por VIN/placa.
+    eso mismo el matching se hace por VIN/placa. Cuando `database_ids` se
+    indica (la reconciliacion por polling), el match queda acotado a esas
+    databases Geotab. El webhook no conoce la database origen y conserva el
+    comportamiento global.
     """
     identifier = _normalize_identifier(device_name or vin)
     if not identifier:
         return None
 
     _ensure_motor_tables_safe()
+
+    scope_sql = ""
+    scope_params: tuple[Any, ...] = ()
+    if database_ids:
+        scope_sql = """
+                  AND (
+                      a.customer_database_id = ANY(%s)
+                      OR a.geotab_customer_database_id = ANY(%s)
+                  )
+        """
+        scope_params = (list(database_ids), list(database_ids))
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         with conn.cursor(row_factory=dict_row) as cur:
@@ -364,9 +379,10 @@ def resolve_vehicle(
                 LEFT JOIN customers c ON c.id = a.customer_id
                 LEFT JOIN motor_catalog m ON m.technical_number = a.technical_number
                 WHERE a.vin ILIKE %s
+                {scope_sql}
                 LIMIT 1;
-                """,
-                (identifier,),
+                """.format(scope_sql=scope_sql),
+                (identifier, *scope_params),
             )
             row = cur.fetchone()
             if row is not None:
@@ -382,9 +398,10 @@ def resolve_vehicle(
                 LEFT JOIN customers c ON c.id = a.customer_id
                 LEFT JOIN motor_catalog m ON m.technical_number = a.technical_number
                 WHERE a.plate = UPPER(%s)
+                {scope_sql}
                 LIMIT 1;
-                """,
-                (identifier,),
+                """.format(scope_sql=scope_sql),
+                (identifier, *scope_params),
             )
             row = cur.fetchone()
             if row is not None:

@@ -34,17 +34,9 @@ def sync_db():
 
 @pytest.fixture
 def mock_geotab_api():
-    with patch("app.services.geotab_taller_sync.load_geotab_config") as mock_config, \
-         patch("app.services.geotab_taller_sync.get_authenticated_client") as mock_auth, \
+    with patch("app.services.geotab_taller_sync.get_authenticated_client") as mock_auth, \
          patch("app.services.geotab_taller_sync.get_cached_devices") as mock_devices, \
          patch("app.services.geotab_taller_sync.multi_call_with_retry") as mock_multicall:
-        
-        cfg = MagicMock()
-        cfg.username = "test_user"
-        cfg.password = "test_pass"
-        cfg.database = "test_db"
-        mock_config.return_value = cfg
-        
         api = MagicMock()
         mock_auth.return_value = api
         
@@ -113,7 +105,7 @@ def test_reconcile_missed_entry(sync_db, mock_geotab_api):
     ]
     
     # 3. Execute reconciliation
-    stats = reconcile_taller_vehicles_with_geotab()
+    stats = reconcile_taller_vehicles_with_geotab(did)
     
     # 4. Assertions
     assert stats["active_exceptions_found"] == 1
@@ -193,7 +185,7 @@ def test_reconcile_missed_exit(sync_db, mock_geotab_api):
     ]
     
     # 4. Execute reconciliation
-    stats = reconcile_taller_vehicles_with_geotab()
+    stats = reconcile_taller_vehicles_with_geotab(did)
     
     # 5. Assertions
     assert stats["active_exceptions_found"] == 0
@@ -254,7 +246,7 @@ def test_reconcile_ignores_ninguna_category(sync_db, mock_geotab_api):
     ]
     
     # 3. Execute reconciliation
-    stats = reconcile_taller_vehicles_with_geotab()
+    stats = reconcile_taller_vehicles_with_geotab(did)
     
     # 4. Assertions
     assert stats["ignored_category"] == 1
@@ -324,7 +316,7 @@ def test_reconcile_respects_manual_entries(sync_db, mock_geotab_api):
     ]
     
     # 4. Execute reconciliation
-    stats = reconcile_taller_vehicles_with_geotab()
+    stats = reconcile_taller_vehicles_with_geotab(did)
     
     # 5. Assertions: manual entry should NOT be changed
     state_after = _read_state("TLK240")

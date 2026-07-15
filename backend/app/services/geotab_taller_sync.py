@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 import mygeotab
 
-from app.core.config import load_geotab_config, settings
+from app.core.config import settings
 from app.clients.geotab_client import get_authenticated_client, get_cached_devices, multi_call_with_retry
 from app.services.geotab_taller import (
     apply_enter,
@@ -12,6 +12,11 @@ from app.services.geotab_taller import (
     _redis_client,
     _read_state,
     _KEY_ACTIVE_SET,
+)
+from app.services.motor_catalog import (
+    get_geotab_config_for_database,
+    get_geotab_database_scope,
+    list_geotab_taller_sync_targets,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,12 +28,14 @@ _UTC = timezone.utc
 VALID_ZONE_TYPE_IDS = {"bD", "b6"}
 TALLER_RULE_ID = "aD6IJFudHx06EXirc7yXxrQ"
 
-def reconcile_taller_vehicles_with_geotab() -> dict[str, Any]:
+def reconcile_taller_vehicles_with_geotab(
+    database_id: int,
+) -> dict[str, Any]:
     """
     Job de reconciliacion periodico (fallback) que sincroniza el estado local
     en Redis con los eventos de geocercas en vivo de Geotab.
     """
-    logger.info("Iniciando Job de reconciliacion Geotab Fallback...")
+    logger.info("Iniciando Job de reconciliacion Geotab Fallback (database_id=%s)...", database_id)
     stats = {
         "geotab_exceptions_fetched": 0,
         "active_exceptions_found": 0,
@@ -39,10 +46,13 @@ def reconcile_taller_vehicles_with_geotab() -> dict[str, Any]:
     }
 
     try:
-        cfg = load_geotab_config()
-        if not cfg.username or not cfg.password or not cfg.database:
-            logger.warning("Credenciales de Geotab no configuradas. Omitiendo reconciliacion.")
-            return stats
+        # Siempre se resuelve desde Navi: no usa GEOTAB_* del entorno. Esto
+        # garantiza que solo consulte databases registradas como Geotab y
+        # acota los vehiculos a la database fisica correspondiente.
+        cfg, _ = get_geotab_config_for_database(database_id)
+        database_scope = get_geotab_database_scope(database_id)
+        stats["database"] = cfg.database
+        stats["database_id"] = database_id
 
         api = get_authenticated_client(cfg.username, cfg.password, cfg.database)
 
@@ -113,7 +123,9 @@ def reconcile_taller_vehicles_with_geotab() -> dict[str, Any]:
             device_name = dev.get("name")
             vin = dev.get("vin")
 
-            vehicle = resolve_vehicle(device_name=device_name, vin=vin)
+            vehicle = resolve_vehicle(
+                device_name=device_name, vin=vin, database_ids=database_scope
+            )
             if not vehicle:
                 continue
 
@@ -197,8 +209,12 @@ def reconcile_taller_vehicles_with_geotab() -> dict[str, Any]:
                 # Intentar buscar la excepcion del dispositivo mapeado localmente
                 for dev_id, ex in latest_exceptions_by_device.items():
                     dev = devices_by_id.get(dev_id)
-                    if dev and resolve_vehicle(device_name=dev.get("name"), vin=dev.get("vin")):
-                        v_match = resolve_vehicle(device_name=dev.get("name"), vin=dev.get("vin"))
+                    if dev and resolve_vehicle(
+                        device_name=dev.get("name"), vin=dev.get("vin"), database_ids=database_scope
+                    ):
+                        v_match = resolve_vehicle(
+                            device_name=dev.get("name"), vin=dev.get("vin"), database_ids=database_scope
+                        )
                         if v_match and v_match["plate"].upper() == lp:
                             active_to = ex.get("activeTo")
                             if isinstance(active_to, datetime) and active_to.year != 1900:
@@ -215,6 +231,24 @@ def reconcile_taller_vehicles_with_geotab() -> dict[str, Any]:
 
     logger.info("Fin del Job de reconciliacion Geotab. Estadisticas: %s", stats)
     return stats
+
+
+def reconcile_all_taller_vehicles_with_geotab() -> dict[str, Any]:
+    """Ejecuta una reconciliacion por cada database fisica Geotab registrada.
+
+    No considera conexiones Artimo/Frotcom/etc. y deduplica las filas locales
+    que comparten el mismo nombre de database Geotab.
+    """
+    runs: list[dict[str, Any]] = []
+    for target in list_geotab_taller_sync_targets():
+        database_id = int(target["id"])
+        stats = reconcile_taller_vehicles_with_geotab(database_id)
+        runs.append(stats)
+    return {
+        "databases_processed": len(runs),
+        "errors": sum(int(run.get("errors", 0)) for run in runs),
+        "runs": runs,
+    }
 
 def _resolve_taller_zone(api: mygeotab.API, lat: float | None, lng: float | None) -> tuple[str | None, str | None]:
     """
