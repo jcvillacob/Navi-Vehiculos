@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { fetchVehicleFicha, fetchVehicleTelemetry } from "../api/vehicleApi";
 
@@ -114,7 +114,7 @@ function TelemetryPair({ label, value }) {
   );
 }
 
-function TelemetryCard({ plate }) {
+function TelemetryCard({ plate, onVerificationChange }) {
   const [telemetry, setTelemetry] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -122,11 +122,19 @@ function TelemetryCard({ plate }) {
   const loadTelemetry = () => {
     setLoading(true);
     setError("");
+    onVerificationChange?.({ state: "checking" });
     fetchVehicleTelemetry(plate)
-      .then((data) => setTelemetry(data))
+      .then((data) => {
+        setTelemetry(data);
+        onVerificationChange?.({
+          state: data?.available ? "confirmed" : "unavailable",
+          reason: data?.reason || null,
+        });
+      })
       .catch((err) => {
         setTelemetry(null);
         setError(err instanceof Error ? err.message : "Error consultando Geotab");
+        onVerificationChange?.({ state: "error" });
       })
       .finally(() => setLoading(false));
   };
@@ -260,15 +268,19 @@ function TelemetryCard({ plate }) {
 
 export default function VehicleFichaPage() {
   const { placa } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [ficha, setFicha] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [telemetryVerification, setTelemetryVerification] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError("");
     setFicha(null);
+    setTelemetryVerification(null);
 
     fetchVehicleFicha(placa)
       .then((data) => {
@@ -303,30 +315,72 @@ export default function VehicleFichaPage() {
   }
 
   const master = ficha?.master ?? {};
+  const hasGeotabConfiguration =
+    String(master.database_connection_type || "").toLowerCase() === "geotab" &&
+    Boolean(master.database_name);
+  const geotabStatus = telemetryVerification?.state === "confirmed"
+    ? {
+      label: "Telemetría confirmada",
+      className: "db-status-connected",
+      dotClass: "db-status-dot-ok",
+      title: "El dispositivo respondió desde la base Geotab asignada al cliente",
+    }
+    : telemetryVerification?.state === "checking"
+      ? {
+        label: "Verificando telemetría",
+        className: "db-status-disconnected",
+        dotClass: "db-status-dot-warn",
+        title: "Consultando el dispositivo en Geotab",
+      }
+      : telemetryVerification?.state === "unavailable" || telemetryVerification?.state === "error"
+        ? {
+          label: "Telemetría no confirmada",
+          className: "db-status-not-found",
+          dotClass: "db-status-dot-error",
+          title: "La última consulta no pudo confirmar telemetría para este vehículo",
+        }
+        : hasGeotabConfiguration
+          ? {
+            label: "Geotab configurado",
+            className: "ficha-geotab-configured",
+            dotClass: "ficha-geotab-dot-configured",
+            title: "Tiene una base Geotab asignada; consulta la telemetría para confirmar el dispositivo",
+          }
+          : null;
+
+  const handleBack = () => {
+    const returnTo = location.state?.returnTo || "/disponibilidad";
+    navigate(returnTo, { replace: true, state: location.state || null });
+  };
 
   return (
-    <section className="panel">
-      <header className="page-header">
-        <span className="eyebrow">Vehículo</span>
-        <h2>{ficha?.plate}</h2>
-        <div className="ficha-header-chips">
-          {master.client_name ? (
-            <span className="status" title="Cliente">
-              {master.client_name}
-            </span>
-          ) : null}
-          {master.category ? (
-            <span className="status" title="Categoría">
-              {master.category}
-            </span>
-          ) : null}
-          {master.geotab_status ? (
-            <span className={`status ${master.geotab_status === "connected" ? "db-status-connected" : "db-status-disconnected"}`} title="Estado Geotab">
-              <span className={`db-status-dot ${master.geotab_status === "connected" ? "db-status-dot-ok" : "db-status-dot-warn"}`} aria-hidden="true" />
-              {master.geotab_status}
-            </span>
-          ) : null}
+    <section className="panel vehicle-ficha-page">
+      <header className="page-header page-header-row">
+        <div>
+          <span className="eyebrow">Vehículo</span>
+          <h2>{ficha?.plate}</h2>
+          <div className="ficha-header-chips">
+            {master.client_name ? (
+              <span className="status" title="Cliente">
+                {master.client_name}
+              </span>
+            ) : null}
+            {master.category ? (
+              <span className="status" title="Categoría">
+                {master.category}
+              </span>
+            ) : null}
+            {geotabStatus ? (
+              <span className={`status ${geotabStatus.className}`} title={geotabStatus.title}>
+                <span className={`db-status-dot ${geotabStatus.dotClass}`} aria-hidden="true" />
+                {geotabStatus.label}
+              </span>
+            ) : null}
+          </div>
         </div>
+        <button type="button" className="button-secondary ficha-back-button" onClick={handleBack}>
+          ← Volver a {location.state?.returnLabel || "Disponibilidad"}
+        </button>
       </header>
 
       <article className="card">
@@ -410,7 +464,7 @@ export default function VehicleFichaPage() {
         )}
       </article>
 
-      <TelemetryCard plate={ficha?.plate} />
+      <TelemetryCard plate={ficha?.plate} onVerificationChange={setTelemetryVerification} />
 
       <div className="ficha-cards-grid">
         <article className="card">

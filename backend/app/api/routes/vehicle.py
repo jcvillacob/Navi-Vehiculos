@@ -24,6 +24,7 @@ from app.services.motor_catalog import (
     assign_vehicle_database,
     backfill_geotab_device_ids,
     check_all_geotab_connections,
+    get_connection_calendar,
     get_connection_stats,
     get_vehicle_assignment,
     list_vehicle_assignments,
@@ -258,6 +259,19 @@ def vehicle_connection_stats(
     _user: dict = Depends(require_permission("rendimientos.view")),
 ) -> list[dict]:
     return get_connection_stats(month)
+
+
+@router.get(
+    "/connection-calendar",
+    description="Status de conexion diario de una placa en un rango de meses",
+)
+def vehicle_connection_calendar(
+    plate: str = Query(..., min_length=1, max_length=32, description="Placa del vehiculo"),
+    month_from: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="Mes inicial YYYY-MM"),
+    month_to: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="Mes final YYYY-MM"),
+    _user: dict = Depends(require_permission("rendimientos.view")),
+) -> dict:
+    return get_connection_calendar(plate, month_from, month_to)
 
 
 @router.get("/{plate}", response_model=VehicleAssignmentRecord)

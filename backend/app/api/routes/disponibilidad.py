@@ -28,10 +28,11 @@ _MONTH_PATTERN = r"^\d{4}-\d{2}$"
 @router.get("/overview", response_model=AvailabilityOverviewResponse)
 def get_overview(
     month: str = Query(..., pattern=_MONTH_PATTERN, description="Mes YYYY-MM"),
+    customer_id: int | None = Query(default=None, gt=0, description="Filtrar por flota"),
     _user: dict = Depends(require_permission("rendimientos.view")),
 ) -> AvailabilityOverviewResponse:
     """Resumen agregado del mes: disponibilidad global + por flota (cliente)."""
-    data = get_availability_overview(month)
+    data = get_availability_overview(month, customer_id=customer_id)
     return AvailabilityOverviewResponse(**data)
 
 
@@ -39,10 +40,11 @@ def get_overview(
 def get_ranking(
     month: str = Query(..., pattern=_MONTH_PATTERN, description="Mes YYYY-MM"),
     customer_id: int | None = Query(default=None, gt=0, description="Filtrar por flota"),
-    limit: int = Query(default=20, ge=1, le=200),
+    limit: int = Query(default=20, ge=1, le=5000),
     order: str = Query(default="worst", pattern=r"^(worst|best)$"),
     include_no_orders: bool = Query(default=False, description="Incluir placas sin ordenes (100%)"),
     plate_search: str | None = Query(default=None, max_length=32, description="Filtra el ranking por placa (substring)"),
+    availability_status: str | None = Query(default=None, pattern=r"^(good|warning|critical|no_data)$"),
     _user: dict = Depends(require_permission("rendimientos.view")),
 ) -> AvailabilityRankingResponse:
     """Ranking de vehiculos por disponibilidad (peor o mejor estado)."""
@@ -53,6 +55,7 @@ def get_ranking(
         order=order,
         include_no_orders=include_no_orders,
         plate_search=plate_search,
+        availability_status=availability_status,
     )
     return AvailabilityRankingResponse(
         month=month,
@@ -77,10 +80,11 @@ def get_trend(
 @router.get("/coverage", response_model=AvailabilityCoverageResponse)
 def get_coverage(
     month: str = Query(..., pattern=_MONTH_PATTERN, description="Mes YYYY-MM"),
+    customer_id: int | None = Query(default=None, gt=0, description="Filtrar por flota"),
     _user: dict = Depends(require_permission("rendimientos.view")),
 ) -> AvailabilityCoverageResponse:
     """Reconciliacion de cobertura CloudFleet: placas cubiertas vs no cubiertas."""
-    data = get_cloudfleet_coverage(month)
+    data = get_cloudfleet_coverage(month, customer_id=customer_id)
     return AvailabilityCoverageResponse(**data)
 
 

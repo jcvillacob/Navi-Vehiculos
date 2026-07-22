@@ -4833,6 +4833,116 @@ select.control-sm {
 .conn-pct-bad .conn-pct-fill { background: #c52b2b; }
 .conn-pct-bad .conn-pct-label { color: #c52b2b; }
 
+/* Popover calendario de conexion (heatmap estilo GitHub) */
+.conn-cal-popover {
+  position: fixed;
+  transform: translateY(-100%);
+  z-index: 1200;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  padding: 12px 14px;
+  font-family: var(--font-body);
+  pointer-events: none;
+}
+.conn-cal-popover[data-flip="down"] { transform: none; }
+
+.conn-cal-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.conn-cal-header strong {
+  font-size: 13px;
+  color: var(--black);
+  letter-spacing: 0.02em;
+}
+
+.conn-cal-pct {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.conn-cal-loading {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.conn-cal-grid-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.conn-cal-months {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 3px;
+}
+
+.conn-cal-month {
+  width: 11px;
+  font-size: 9px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: visible;
+}
+
+.conn-cal-grid {
+  display: flex;
+  gap: 3px;
+}
+
+.conn-cal-week {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.conn-cal-day {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: #ebedf0;
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+.conn-cal-day.cal-c { background: #2f8c2f; }
+.conn-cal-day.cal-d { background: #c52b2b; }
+.conn-cal-day.cal-nf { background: #b9bfc4; }
+.conn-cal-day.cal-e { background: #d18c00; }
+.conn-cal-day.cal-empty { background: #ebedf0; }
+.conn-cal-day.cal-void { background: transparent; }
+
+.conn-cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.conn-cal-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.conn-cal-note {
+  margin-top: 6px;
+  font-size: 9px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
 /* Availability % badge */
 .availability-badge {
   display: inline-block;
@@ -7040,10 +7150,21 @@ select.control-sm {
 
 .disp-charts-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 0.9fr) 1.3fr 1.2fr;
   gap: 16px;
   margin-top: 16px;
-  align-items: start;
+  align-items: stretch;
+}
+
+.disp-charts-grid--primary {
+  grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr);
+}
+
+.disp-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(340px, 1fr) minmax(0, 2fr);
+  gap: 16px;
+  margin-top: 16px;
+  align-items: stretch;
 }
 
 .disp-chart-card {
@@ -7051,6 +7172,9 @@ select.control-sm {
   flex-direction: column;
   gap: 12px;
   padding: 18px 20px;
+  height: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .disp-chart-head {
@@ -7075,6 +7199,81 @@ select.control-sm {
   position: relative;
   display: flex;
   justify-content: center;
+}
+
+.disp-distribution-wrap {
+  position: relative;
+  min-height: 200px;
+}
+
+.disp-distribution-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.disp-distribution-center strong {
+  font-family: var(--font-heading);
+  font-size: 30px;
+  line-height: 1;
+  color: var(--text);
+}
+
+.disp-distribution-center span {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.disp-distribution-legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 12px;
+}
+
+.disp-distribution-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: inherit;
+  text-align: left;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.disp-distribution-item:hover {
+  background: rgba(53, 69, 80, 0.05);
+}
+
+.disp-distribution-item.is-active {
+  color: var(--text);
+  background: rgba(53, 69, 80, 0.08);
+  border-color: rgba(53, 69, 80, 0.22);
+}
+
+.disp-distribution-item i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.disp-distribution-item strong {
+  color: var(--text);
+  font-size: 11px;
 }
 
 .disp-gauge-center {
@@ -7115,9 +7314,42 @@ select.control-sm {
   font-weight: 700;
 }
 
+.disp-scale {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.disp-scale span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.disp-scale i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
 .disp-ranking-card {
-  margin-top: 16px;
+  margin-top: 0;
   padding: 18px 20px;
+  min-width: 0;
+}
+
+.disp-ranking-table-shell {
+  max-height: min(720px, 70vh);
+}
+
+.disp-ranking-table-shell .vehicles-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .disp-ranking-title {
@@ -7244,8 +7476,33 @@ select.control-sm {
   border-radius: var(--radius-sm);
 }
 
+.disp-recalc-scope {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.disp-recalc-scope legend {
+  padding: 0 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.disp-recalc-customers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 8px;
+  max-height: 240px;
+  margin-top: 6px;
+  overflow-y: auto;
+}
+
 @media (max-width: 1100px) {
-  .disp-charts-grid {
+  .disp-charts-grid,
+  .disp-detail-grid {
     grid-template-columns: 1fr;
   }
   .disp-kpi-grid {
@@ -7256,6 +7513,12 @@ select.control-sm {
 @media (max-width: 640px) {
   .disp-kpi-grid {
     grid-template-columns: 1fr;
+  }
+  .disp-recalc-customers {
+    grid-template-columns: 1fr;
+  }
+  .disp-ranking-table-shell {
+    max-height: none;
   }
 }
 
@@ -7796,6 +8059,26 @@ select.control-sm {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
+}
+
+.vehicle-ficha-page > .card,
+.vehicle-ficha-page .ficha-cards-grid > .card {
+  padding: 20px;
+}
+
+.ficha-back-button {
+  align-self: start;
+  white-space: nowrap;
+}
+
+.ficha-geotab-configured {
+  background: var(--status-soft-bg);
+  color: var(--status-soft-text);
+  border: 1px solid var(--status-soft-border);
+}
+
+.ficha-geotab-dot-configured {
+  background: var(--status-soft-text);
 }
 
 .ficha-plate-link {

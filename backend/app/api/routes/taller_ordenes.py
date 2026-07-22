@@ -17,8 +17,9 @@ router = APIRouter(prefix="/taller-ordenes", tags=["taller-ordenes"])
     summary="Ordenes de taller activas (CloudFleet)",
     description=(
         "Devuelve las ordenes de trabajo activas de CloudFleet enriquecidas con "
-        "flota local, dias transcurridos e indicador temporal. Cacheado en memoria "
-        "10 minutos; usar force_refresh=true para invalidar el cache."
+        "flota local, dias transcurridos e indicador temporal. Solo incluye "
+        "vehiculos de Flota Administrada o Experiencia Superior. Cacheado en "
+        "memoria 10 minutos; usar force_refresh=true para invalidar el cache."
     ),
 )
 def get_active_taller_orders(

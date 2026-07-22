@@ -12,7 +12,7 @@ sobre el namespace de `app.services.rendimientos_jobs`.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -23,6 +23,7 @@ from app.schemas.vehicle import (
     PerformanceCalculationJob,
 )
 from app.services import rendimientos_jobs as jobs
+from app.services import availability_store
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -101,6 +102,67 @@ def test_request_availability_only_defaults():
 
     req_true = MonthlyPerformanceCalculateRequest(month="2026-06", availability_only=True)
     assert req_true.availability_only is True
+
+
+def test_count_availability_targets_only_counts_eligible_vehicles(monkeypatch):
+    """El progreso del job usa el mismo alcance de cliente/categoria."""
+    captured: dict[str, Any] = {}
+
+    class CaptureCursor:
+        def execute(self, sql: str, params=None):
+            captured["sql"] = sql
+            captured["params"] = list(params or [])
+
+        def fetchone(self):
+            return (2,)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class CaptureConn:
+        def cursor(self, *args, **kwargs):
+            return CaptureCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(jobs, "db_conn", lambda *args, **kwargs: CaptureConn())
+
+    total = jobs._count_availability_targets(
+        MonthlyPerformanceCalculateRequest(month="2026-06")
+    )
+
+    assert total == 2
+    assert "JOIN customers c ON c.id = a.customer_id" in captured["sql"]
+    assert "COALESCE(a.category, c.category, 'Ninguna') = ANY(%s)" in captured["sql"]
+    assert ["Flota Administrada", "Experiencia Superior"] in captured["params"]
+
+
+def test_historical_work_orders_are_requested_in_valid_windows(monkeypatch):
+    """Un backfill largo nunca supera el limite de 180 dias de CloudFleet."""
+    calls: list[tuple[datetime, datetime]] = []
+
+    def fake_list_work_orders(config, *, updated_at_from, updated_at_to):
+        calls.append((updated_at_from, updated_at_to))
+        return [{"number": f"ORDER-{len(calls)}"}]
+
+    monkeypatch.setattr(availability_store, "list_work_orders", fake_list_work_orders)
+    start = datetime(2025, 10, 1)
+    end = datetime(2026, 7, 23)
+    orders = availability_store._list_work_orders_in_windows(
+        object(), updated_at_from=start, updated_at_to=end
+    )
+
+    assert len(orders) == len(calls) == 2
+    assert calls[0][0] == start
+    assert calls[-1][1] == end
+    assert all(window_end - window_start <= timedelta(days=170) for window_start, window_end in calls)
 
 
 # ── run_job availability_only ───────────────────────────────────────────────

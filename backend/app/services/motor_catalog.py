@@ -4634,3 +4634,38 @@ def get_connection_stats(month: str) -> list[dict[str, Any]]:
         })
 
     return stats
+
+
+def get_connection_calendar(
+    plate: str, month_from: str, month_to: str
+) -> dict[str, Any]:
+    """Return per-day connection status for a plate across an inclusive month range.
+
+    month_from / month_to son 'YYYY-MM'. Devuelve una fila por dia registrado en
+    vehicle_connection_log. Usa el indice UNIQUE(plate, check_date) para el rango.
+    """
+    if month_from > month_to:
+        month_from, month_to = month_to, month_from
+    start = f"{month_from}-01"
+    end = f"{month_to}-01"  # exclusivo: +1 mes en el WHERE
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT check_date, status
+                FROM vehicle_connection_log
+                WHERE plate = %s
+                  AND check_date >= %s::date
+                  AND check_date < (%s::date + INTERVAL '1 month')
+                ORDER BY check_date;
+                """,
+                (plate, start, end),
+            )
+            days = [
+                {"date": row["check_date"].isoformat(), "status": row["status"]}
+                for row in cur.fetchall()
+            ]
+
+    return {"plate": plate, "days": days}

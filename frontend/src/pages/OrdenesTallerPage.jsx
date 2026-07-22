@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { fetchActiveTallerOrders } from "../api/vehicleApi";
+import { SortButton } from "../components/SortButton";
 import { exportTallerOrdenesExcel } from "../utils/tallerOrdenesExport";
 
 const INDICATOR_OPTIONS = [
@@ -33,6 +34,71 @@ const SUMMARY_KEYS = [
   { key: "pending_closure", label: "Pendiente cierre" },
   { key: "con_etiquetas", label: "Con etiquetas" },
 ];
+
+const TABLE_COLUMNS = [
+  ["order_number", "Orden"],
+  ["plate", "Placa"],
+  ["fleet", "Flota"],
+  ["type", "Tipo"],
+  ["status", "Estado"],
+  ["status_indicator", "Indicador"],
+  ["pending_closure_days", "Cierre pendiente"],
+  ["days_elapsed", "Días"],
+  ["maintenance_labels", "Etiquetas"],
+];
+
+function sortableValue(order, key) {
+  const value = order?.[key];
+  if (Array.isArray(value)) return value.join(", ");
+  if (key === "status_indicator") return INDICATOR_LABEL[value] || value;
+  return value;
+}
+
+function sortOrders(rows, sort) {
+  if (!sort?.key || !sort?.dir) return rows;
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => {
+      const leftValue = sortableValue(left.row, sort.key);
+      const rightValue = sortableValue(right.row, sort.key);
+      const leftEmpty = leftValue === null || leftValue === undefined || leftValue === "";
+      const rightEmpty = rightValue === null || rightValue === undefined || rightValue === "";
+      if (leftEmpty || rightEmpty) {
+        if (leftEmpty && rightEmpty) return left.index - right.index;
+        return leftEmpty ? 1 : -1;
+      }
+      const comparison = typeof leftValue === "number" && typeof rightValue === "number"
+        ? leftValue - rightValue
+        : String(leftValue).localeCompare(String(rightValue), "es", {
+          numeric: true,
+          sensitivity: "base",
+        });
+      return comparison === 0
+        ? left.index - right.index
+        : sort.dir === "asc" ? comparison : -comparison;
+    })
+    .map(({ row }) => row);
+}
+
+function summarizeOrders(rows) {
+  const result = {
+    total_active: rows.length,
+    on_time: 0,
+    about_to_expire: 0,
+    overdue: 0,
+    pending_closure: 0,
+    pending_closure_7d: 0,
+    pending_closure_30d: 0,
+    con_etiquetas: 0,
+  };
+  rows.forEach((order) => {
+    if (order.status_indicator in result) result[order.status_indicator] += 1;
+    if (Number(order.pending_closure_days) > 7) result.pending_closure_7d += 1;
+    if (Number(order.pending_closure_days) > 30) result.pending_closure_30d += 1;
+    if (order.maintenance_labels?.length) result.con_etiquetas += 1;
+  });
+  return result;
+}
 
 function formatMinutesAgo(isoTimestamp) {
   if (!isoTimestamp) return "";
@@ -76,7 +142,10 @@ export default function OrdenesTallerPage() {
 
   const [indicatorFilter, setIndicatorFilter] = useState("");
   const [fleetFilter, setFleetFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [plateFilter, setPlateFilter] = useState("");
+  const [tableSort, setTableSort] = useState({ key: null, dir: null });
   const [exporting, setExporting] = useState(false);
 
   const orders = data?.orders ?? [];
@@ -91,6 +160,16 @@ export default function OrdenesTallerPage() {
     return Array.from(names).sort((a, b) => a.localeCompare(b));
   }, [orders]);
 
+  const types = useMemo(
+    () => Array.from(new Set(orders.map((order) => order.type).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")),
+    [orders],
+  );
+
+  const statuses = useMemo(
+    () => Array.from(new Set(orders.map((order) => order.status).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")),
+    [orders],
+  );
+
   const filteredOrders = useMemo(() => {
     const normalizedPlate = plateFilter.trim().toUpperCase();
     return orders.filter((order) => {
@@ -100,12 +179,19 @@ export default function OrdenesTallerPage() {
       if (fleetFilter && (order.fleet || "Sin flota") !== fleetFilter) {
         return false;
       }
+      if (typeFilter && order.type !== typeFilter) return false;
+      if (statusFilter && order.status !== statusFilter) return false;
       if (normalizedPlate && !(order.plate || "").toUpperCase().includes(normalizedPlate)) {
         return false;
       }
       return true;
     });
-  }, [orders, indicatorFilter, fleetFilter, plateFilter]);
+  }, [orders, indicatorFilter, fleetFilter, typeFilter, statusFilter, plateFilter]);
+
+  const visibleOrders = useMemo(
+    () => sortOrders(filteredOrders, tableSort),
+    [filteredOrders, tableSort],
+  );
 
   const handleRefresh = () => {
     load({ forceRefresh: true });
@@ -117,8 +203,8 @@ export default function OrdenesTallerPage() {
     try {
       await exportTallerOrdenesExcel({
         generatedAt: data.generated_at,
-        summary,
-        orders: filteredOrders,
+        summary: summarizeOrders(visibleOrders),
+        orders: visibleOrders,
       });
     } finally {
       setExporting(false);
@@ -189,13 +275,29 @@ export default function OrdenesTallerPage() {
             onChange={(e) => setPlateFilter(e.target.value)}
           />
         </label>
-        {indicatorFilter || fleetFilter || plateFilter ? (
+        <label className="disp-field">
+          <span>Tipo</span>
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+            <option value="">Todos los tipos</option>
+            {types.map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
+        </label>
+        <label className="disp-field">
+          <span>Estado</span>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="">Todos los estados</option>
+            {statuses.map((status) => <option key={status} value={status}>{status}</option>)}
+          </select>
+        </label>
+        {indicatorFilter || fleetFilter || typeFilter || statusFilter || plateFilter ? (
           <button
             type="button"
             className="button-secondary button-sm"
             onClick={() => {
               setIndicatorFilter("");
               setFleetFilter("");
+              setTypeFilter("");
+              setStatusFilter("");
               setPlateFilter("");
             }}
           >
@@ -249,15 +351,14 @@ export default function OrdenesTallerPage() {
           <table className="vehicles-table">
             <thead>
               <tr>
-                <th>Orden</th>
-                <th>Placa</th>
-                <th>Flota</th>
-                <th>Tipo</th>
-                <th>Estado</th>
-                <th>Indicador</th>
-                <th>Cierre pendiente</th>
-                <th>Días</th>
-                <th>Etiquetas</th>
+                {TABLE_COLUMNS.map(([key, label]) => (
+                  <th key={key}>
+                    <div className="th-content">
+                      <span>{label}</span>
+                      <SortButton columnKey={key} currentSort={tableSort} onSortChange={setTableSort} />
+                    </div>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -276,7 +377,7 @@ export default function OrdenesTallerPage() {
                   </td>
                 </tr>
               ) : (
-                filteredOrders.map((order) => (
+                visibleOrders.map((order) => (
                   <tr key={order.order_number}>
                     <td>
                       <strong>{order.order_number}</strong>

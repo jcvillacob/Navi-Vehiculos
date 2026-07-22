@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -7,9 +7,8 @@ import {
   Cell,
   Line,
   LineChart,
-  PolarAngleAxis,
-  RadialBar,
-  RadialBarChart,
+  Pie,
+  PieChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -18,7 +17,13 @@ import {
 } from "recharts";
 
 import Can from "../components/Can";
-import { manualAssignVehicle } from "../api/vehicleApi";
+import { SortButton } from "../components/SortButton";
+import {
+  fetchAvailabilityCoverage,
+  fetchAvailabilityOverview,
+  fetchAvailabilityRanking,
+  manualAssignVehicle,
+} from "../api/vehicleApi";
 import { useAvailabilityDashboard } from "../features/availability/hooks/useAvailabilityDashboard";
 import { exportDisponibilidadExcel } from "../utils/disponibilidadExport";
 
@@ -44,12 +49,42 @@ const STATUS_LABEL = {
   no_data: "Sin datos",
 };
 
-const BREAKDOWN_LABEL = {
-  calculated: "Calculados",
-  no_orders: "Sin órdenes",
-  not_in_cloudfleet: "No en CloudFleet",
-  error: "Error",
+const STATUS_FILTER_LABEL = {
+  good: "Óptimos",
+  warning: "Advertencia",
+  critical: "Críticos",
+  no_data: "Sin datos",
 };
+
+const RANKING_SORT_LABEL = {
+  plate: "Placa",
+  customer_name: "Flota",
+  availability_pct: "Disponibilidad",
+  h_no_disp: "Horas no disponibles",
+  mttr_hours: "MTTR",
+  orders_considered: "Órdenes",
+};
+
+function sortRankingRows(rows, sort) {
+  if (!sort?.key || !sort?.dir) return rows;
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => {
+      const leftValue = left.row[sort.key];
+      const rightValue = right.row[sort.key];
+      const leftEmpty = leftValue === null || leftValue === undefined || leftValue === "";
+      const rightEmpty = rightValue === null || rightValue === undefined || rightValue === "";
+      if (leftEmpty || rightEmpty) {
+        if (leftEmpty && rightEmpty) return left.index - right.index;
+        return leftEmpty ? 1 : -1;
+      }
+      const comparison = typeof leftValue === "number" && typeof rightValue === "number"
+        ? leftValue - rightValue
+        : String(leftValue).localeCompare(String(rightValue), "es", { numeric: true, sensitivity: "base" });
+      return comparison === 0 ? left.index - right.index : sort.dir === "asc" ? comparison : -comparison;
+    })
+    .map(({ row }) => row);
+}
 
 function fmtPct(value) {
   if (value === null || value === undefined) return "—";
@@ -84,20 +119,38 @@ function shortMonthLabel(month) {
   return names[mon - 1] || month;
 }
 
-function GaugeTooltip() {
-  return null;
+function TrendMonthTick({ x, y, payload, selectedLabel }) {
+  const selected = payload?.value === selectedLabel;
+  return (
+    <text
+      x={x}
+      y={y + 12}
+      textAnchor="middle"
+      fill={selected ? "#ee2e2f" : "#667781"}
+      fontSize={11}
+      fontWeight={selected ? 700 : 400}
+    >
+      {payload?.value}
+    </text>
+  );
 }
 
 export default function DisponibilidadPage() {
+  const location = useLocation();
+  const restoredFilters = location.state?.availabilityFilters || {};
   const {
     month,
     setMonth,
+    monthFrom,
+    setMonthFrom,
+    monthTo,
+    setMonthTo,
     selectedCustomerId,
     setSelectedCustomerId,
     plateSearch,
     setPlateSearch,
-    rankingOrder,
-    setRankingOrder,
+    availabilityStatusFilter,
+    setAvailabilityStatusFilter,
     includeNoOrders,
     setIncludeNoOrders,
     customers,
@@ -117,9 +170,19 @@ export default function DisponibilidadPage() {
     recalcError,
     refreshAll,
     loadMtbf,
-  } = useAvailabilityDashboard();
+  } = useAvailabilityDashboard(restoredFilters);
 
   const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const [rankingSort, setRankingSort] = useState(
+    restoredFilters.rankingSort?.key && restoredFilters.rankingSort?.dir
+      ? restoredFilters.rankingSort
+      : { key: "availability_pct", dir: "asc" },
+  );
+  const [recalcOpen, setRecalcOpen] = useState(false);
+  const [recalcMonth, setRecalcMonth] = useState(month);
+  const [recalcCustomerIds, setRecalcCustomerIds] = useState([]);
+  const [activeRecalcMonth, setActiveRecalcMonth] = useState(month);
   const [coverageOpen, setCoverageOpen] = useState(false);
   const [mtbfOpen, setMtbfOpen] = useState(false);
   const [registerModalOpen, setRegisterModalOpen] = useState(false);
@@ -131,10 +194,14 @@ export default function DisponibilidadPage() {
   const overall = overview?.overall ?? null;
   const fleets = overview?.fleets ?? [];
 
-  const selectedFleet = useMemo(
-    () => fleets.find((f) => f.customer_id === selectedCustomerId) || null,
-    [fleets, selectedCustomerId],
-  );
+  const selectedFleet = useMemo(() => {
+    const fleet = fleets.find((f) => f.customer_id === selectedCustomerId);
+    if (fleet) return fleet;
+    const customer = customers.find((c) => c.id === selectedCustomerId);
+    return customer ? { customer_id: customer.id, customer_name: customer.name } : null;
+  }, [fleets, customers, selectedCustomerId]);
+
+  const scopedAvailability = selectedCustomerId ? selectedFleet : overall;
 
   const noDataCount = useMemo(() => {
     const b = overall?.status_breakdown || {};
@@ -143,16 +210,21 @@ export default function DisponibilidadPage() {
 
   const prevPct = useMemo(() => {
     if (!trend?.labels?.length || !Array.isArray(trend.availability_pct)) return null;
-    const idx = trend.labels.length - 2;
-    if (idx < 0) return null;
-    return trend.availability_pct[idx] ?? null;
-  }, [trend]);
+    const selectedIndex = trend.labels.indexOf(month);
+    if (selectedIndex <= 0) return null;
+    return trend.availability_pct[selectedIndex - 1] ?? null;
+  }, [trend, month]);
+
+  const previousTrendMonth = useMemo(() => {
+    const selectedIndex = trend?.labels?.indexOf(month) ?? -1;
+    return selectedIndex > 0 ? trend.labels[selectedIndex - 1] : null;
+  }, [trend, month]);
 
   const availabilityDelta = useMemo(() => {
-    const current = overall?.availability_pct;
+    const current = scopedAvailability?.availability_pct;
     if (current === null || current === undefined || prevPct === null || prevPct === undefined) return null;
     return Number(current) - Number(prevPct);
-  }, [overall?.availability_pct, prevPct]);
+  }, [scopedAvailability?.availability_pct, prevPct]);
 
   const fleetChartData = useMemo(
     () =>
@@ -172,15 +244,33 @@ export default function DisponibilidadPage() {
   const trendData = useMemo(() => {
     if (!trend) return [];
     return trend.labels.map((label, idx) => ({
+      month: label,
       label: monthLabel(label),
       pct: trend.availability_pct[idx],
     }));
   }, [trend]);
 
-  const gaugeData = useMemo(() => {
-    const pct = overall?.availability_pct;
-    return [{ name: "disp", value: pct ?? 0, fill: STATUS_COLOR[overall?.status || "no_data"] }];
-  }, [overall]);
+  const distributionData = useMemo(() => {
+    const source = selectedCustomerId
+      ? selectedFleet?.availability_breakdown
+      : overall?.availability_breakdown;
+    return [
+      { key: "good", name: "Óptimos", value: source?.good || 0, fill: STATUS_COLOR.good },
+      { key: "warning", name: "Advertencia", value: source?.warning || 0, fill: STATUS_COLOR.warning },
+      { key: "critical", name: "Críticos", value: source?.critical || 0, fill: STATUS_COLOR.critical },
+      { key: "no_data", name: "Sin datos", value: source?.no_data || 0, fill: STATUS_COLOR.no_data },
+    ];
+  }, [overall?.availability_breakdown, selectedCustomerId, selectedFleet]);
+
+  const distributionTotal = useMemo(
+    () => distributionData.reduce((total, item) => total + item.value, 0),
+    [distributionData],
+  );
+
+  const sortedRanking = useMemo(
+    () => sortRankingRows(ranking, rankingSort),
+    [ranking, rankingSort],
+  );
 
   const handleFleetClick = (data) => {
     const cid = data?.customer_id ?? data?.payload?.customer_id;
@@ -188,13 +278,96 @@ export default function DisponibilidadPage() {
     setSelectedCustomerId((prev) => (prev === cid ? null : cid));
   };
 
+  const handleAvailabilityStatusClick = (status) => {
+    if (!status) return;
+    setAvailabilityStatusFilter((current) => (current === status ? null : status));
+  };
+
+  const handleTrendClick = (state) => {
+    const selectedMonth =
+      state?.activePayload?.[0]?.payload?.month ||
+      trendData.find((point) => point.label === state?.activeLabel)?.month;
+    if (selectedMonth && selectedMonth !== month) setMonth(selectedMonth);
+  };
+
+  const handleMonthFromChange = (value) => {
+    if (!value) return;
+    setMonthFrom(value);
+    if (value > monthTo) setMonthTo(value);
+    if (month < value || month > monthTo) setMonth(value);
+  };
+
+  const handleMonthToChange = (value) => {
+    if (!value) return;
+    const nextFrom = value < monthFrom ? value : monthFrom;
+    setMonthFrom(nextFrom);
+    setMonthTo(value);
+    setMonth(value);
+  };
+
+  const openRecalcModal = () => {
+    setRecalcMonth(month);
+    setRecalcCustomerIds([]);
+    setRecalcOpen(true);
+  };
+
+  const handleRecalculate = async (event) => {
+    event.preventDefault();
+    setActiveRecalcMonth(recalcMonth);
+    const started = await recalculate({ month: recalcMonth, customerIds: recalcCustomerIds });
+    if (started) setRecalcOpen(false);
+  };
+
+  const toggleRecalcCustomer = (customerId) => {
+    setRecalcCustomerIds((current) =>
+      current.includes(customerId)
+        ? current.filter((id) => id !== customerId)
+        : [...current, customerId],
+    );
+  };
+
   const jobProgress = job && typeof job.progress_pct === "number" ? Math.round(job.progress_pct) : null;
 
   const handleExport = async () => {
     if (exporting) return;
     setExporting(true);
+    setExportError("");
     try {
-      await exportDisponibilidadExcel({ month, overview, ranking, coverage });
+      const [exportOverview, exportRanking, exportCoverage] = await Promise.all([
+        fetchAvailabilityOverview({ month, customer_id: selectedCustomerId }),
+        fetchAvailabilityRanking({
+          month,
+          customer_id: selectedCustomerId,
+          limit: 5000,
+          order: "worst",
+          include_no_orders: includeNoOrders,
+          plate_search: plateSearch,
+          availability_status: availabilityStatusFilter,
+        }),
+        fetchAvailabilityCoverage({ month, customer_id: selectedCustomerId }),
+      ]);
+      await exportDisponibilidadExcel({
+        month,
+        monthFrom,
+        monthTo,
+        overview: exportOverview,
+        ranking: sortRankingRows(exportRanking, rankingSort),
+        trend,
+        coverage: exportCoverage,
+        filters: {
+          fleetName: selectedFleet?.customer_name || "Todas las flotas",
+          plateSearch: plateSearch.trim(),
+          sortLabel: rankingSort.key
+            ? `${RANKING_SORT_LABEL[rankingSort.key]} (${rankingSort.dir === "asc" ? "ascendente" : "descendente"})`
+            : "Orden predeterminado",
+          includeNoOrders,
+          availabilityStatusLabel: availabilityStatusFilter
+            ? STATUS_FILTER_LABEL[availabilityStatusFilter]
+            : "Todos",
+        },
+      });
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "No fue posible exportar la disponibilidad");
     } finally {
       setExporting(false);
     }
@@ -275,15 +448,11 @@ export default function DisponibilidadPage() {
         </div>
 
         <div className="disp-toolbar">
-          <label className="disp-field">
-            <span>Mes</span>
-            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-          </label>
           <button
             type="button"
             className="button-secondary"
             onClick={handleExport}
-            disabled={loadingOverview || exporting}
+            disabled={loadingOverview || loadingDetail || exporting}
             title="Exportar disponibilidad a Excel"
           >
             {exporting ? "Exportando…" : "Exportar"}
@@ -291,9 +460,9 @@ export default function DisponibilidadPage() {
           <Can permission="rendimientos.refresh">
             <button
               type="button"
-              onClick={recalculate}
+              onClick={openRecalcModal}
               disabled={isRecalculating}
-              title="Reprocesa la disponibilidad de todo el mes desde CloudFleet"
+              title="Configurar un nuevo recálculo"
             >
               {isRecalculating
                 ? `Recalculando${jobProgress !== null ? ` ${jobProgress}%` : "..."}`
@@ -304,6 +473,14 @@ export default function DisponibilidadPage() {
       </header>
 
       <div className="disp-filters">
+        <label className="disp-field">
+          <span>Mes desde</span>
+          <input type="month" value={monthFrom} max={monthTo} onChange={(e) => handleMonthFromChange(e.target.value)} />
+        </label>
+        <label className="disp-field">
+          <span>Mes hasta</span>
+          <input type="month" value={monthTo} min={monthFrom} onChange={(e) => handleMonthToChange(e.target.value)} />
+        </label>
         <label className="disp-field">
           <span>Flota</span>
           <select
@@ -327,13 +504,24 @@ export default function DisponibilidadPage() {
             onChange={(e) => setPlateSearch(e.target.value)}
           />
         </label>
-        {selectedCustomerId || plateSearch ? (
+        {availabilityStatusFilter ? (
+          <button
+            type="button"
+            className="button-secondary button-sm disp-active-filter"
+            onClick={() => setAvailabilityStatusFilter(null)}
+            title="Quitar filtro de estado"
+          >
+            Estado: {STATUS_FILTER_LABEL[availabilityStatusFilter]} ×
+          </button>
+        ) : null}
+        {selectedCustomerId || plateSearch || availabilityStatusFilter ? (
           <button
             type="button"
             className="button-secondary button-sm"
             onClick={() => {
               setSelectedCustomerId(null);
               setPlateSearch("");
+              setAvailabilityStatusFilter(null);
             }}
           >
             Limpiar filtros
@@ -342,20 +530,23 @@ export default function DisponibilidadPage() {
       </div>
 
       {error ? <div className="notice-banner notice-error">{error}</div> : null}
+      {exportError ? <div className="notice-banner notice-error">{exportError}</div> : null}
       {recalcError ? <div className="notice-banner notice-error">{recalcError}</div> : null}
       {registerSuccess ? <div className="notice-banner notice-info">{registerSuccess}</div> : null}
       {isRecalculating ? (
         <div className="notice-banner notice-soft">
-          Recalculando disponibilidad para {monthLabel(month)}. El panel se actualizará al terminar.
+          Recalculando disponibilidad para {monthLabel(activeRecalcMonth)}. El panel se actualizará al terminar.
         </div>
       ) : null}
 
       {/* KPIs */}
       <div className="disp-kpi-grid">
         <article className="card metric-card">
-          <span className="eyebrow">Disponibilidad global</span>
-          <strong style={{ color: STATUS_COLOR[overall?.status || "no_data"] }}>
-            {loadingOverview ? "…" : fmtPct(overall?.availability_pct)}
+          <span className="eyebrow">
+            {selectedFleet ? "Disponibilidad de flota" : "Disponibilidad global"}
+          </span>
+          <strong style={{ color: STATUS_COLOR[scopedAvailability?.status || "no_data"] }}>
+            {loadingOverview ? "…" : fmtPct(scopedAvailability?.availability_pct)}
           </strong>
           <p>
             {monthLabel(month)}
@@ -372,7 +563,7 @@ export default function DisponibilidadPage() {
                 }}
               >
                 {availabilityDelta > 0 ? "▲" : availabilityDelta < 0 ? "▼" : "●"}{" "}
-                {`${availabilityDelta > 0 ? "+" : ""}${availabilityDelta.toFixed(1)} pts vs ${shortMonthLabel(trend?.labels?.[trend.labels.length - 2])}`}
+                {`${availabilityDelta > 0 ? "+" : ""}${availabilityDelta.toFixed(1)} pts vs ${shortMonthLabel(previousTrendMonth)}`}
               </span>
             )}
           </p>
@@ -411,61 +602,133 @@ export default function DisponibilidadPage() {
       </div>
 
       {/* Charts */}
-      <div className="disp-charts-grid">
+      <div className="disp-charts-grid disp-charts-grid--primary">
         <article className="card disp-chart-card disp-gauge-card">
-          <span className="eyebrow">Disponibilidad del mes</span>
-          <div className="disp-gauge-wrap">
+          <div className="disp-chart-head">
+            <span className="eyebrow">Distribución del mes</span>
+            <small className="disp-hint">
+              Clic para filtrar · {selectedFleet ? selectedFleet.customer_name : "Global"}
+            </small>
+          </div>
+          <div className="disp-distribution-wrap">
             <ResponsiveContainer width="100%" height={200}>
-              <RadialBarChart
-                innerRadius="78%"
-                outerRadius="100%"
-                data={gaugeData}
-                startAngle={210}
-                endAngle={-30}
-              >
-                <PolarAngleAxis type="number" domain={[0, 100]} angleAxisId={0} tick={false} />
-                <RadialBar background dataKey="value" cornerRadius={12} angleAxisId={0} />
-                <Tooltip content={<GaugeTooltip />} />
-              </RadialBarChart>
+              <PieChart>
+                <Pie
+                  data={distributionData}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={58}
+                  outerRadius={82}
+                  paddingAngle={distributionTotal ? 2 : 0}
+                  stroke="none"
+                  onClick={(entry) => handleAvailabilityStatusClick(entry?.key ?? entry?.payload?.key)}
+                  style={{ cursor: "pointer" }}
+                >
+                  {distributionData.map((entry) => (
+                    <Cell
+                      key={entry.key}
+                      fill={entry.fill}
+                      fillOpacity={availabilityStatusFilter && availabilityStatusFilter !== entry.key ? 0.25 : 1}
+                      stroke={availabilityStatusFilter === entry.key ? "#354550" : "none"}
+                      strokeWidth={availabilityStatusFilter === entry.key ? 2 : 0}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(value, name) => [`${value} vehículos`, name]} />
+              </PieChart>
             </ResponsiveContainer>
-            <div className="disp-gauge-center">
-              <span className="disp-gauge-value" style={{ color: STATUS_COLOR[overall?.status || "no_data"] }}>
-                {fmtPct(overall?.availability_pct)}
-              </span>
-              <span className={`availability-badge ${STATUS_BADGE_CLASS[overall?.status || "no_data"]}`}>
-                {STATUS_LABEL[overall?.status || "no_data"]}
-              </span>
-              <span className="disp-gauge-target">Meta: 96%</span>
+            <div className="disp-distribution-center">
+              <strong>{distributionTotal}</strong>
+              <span>vehículos</span>
             </div>
           </div>
-          <div className="disp-breakdown">
-            {Object.entries(overall?.status_breakdown || {}).map(([key, count]) => (
-              <span key={key} className="disp-breakdown-chip">
-                <strong>{count}</strong> {BREAKDOWN_LABEL[key] || key}
-              </span>
+          <div className="disp-distribution-legend">
+            {distributionData.map((item) => (
+              <button
+                type="button"
+                key={item.key}
+                className={`disp-distribution-item${availabilityStatusFilter === item.key ? " is-active" : ""}`}
+                onClick={() => handleAvailabilityStatusClick(item.key)}
+                aria-pressed={availabilityStatusFilter === item.key}
+              >
+                <i style={{ background: item.fill }} />
+                <span>{item.name}</span>
+                <strong>{item.value}</strong>
+              </button>
             ))}
           </div>
         </article>
 
+        <article className="card disp-chart-card disp-trend-card">
+          <div className="disp-chart-head">
+            <span className="eyebrow">Tendencia</span>
+            <small className="disp-hint">
+              Clic en un mes · Activo: {monthLabel(month)} · {selectedFleet ? selectedFleet.customer_name : "Global"}
+            </small>
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart
+              data={trendData}
+              margin={{ left: 16, right: 38, top: 26, bottom: 12 }}
+              onClick={handleTrendClick}
+              style={{ cursor: "pointer" }}
+            >
+              <CartesianGrid stroke="rgba(53,69,80,0.08)" />
+              <XAxis
+                dataKey="label"
+                fontSize={11}
+                height={34}
+                tickMargin={10}
+                padding={{ left: 10, right: 10 }}
+                tick={(props) => (
+                  <TrendMonthTick {...props} selectedLabel={monthLabel(month)} />
+                )}
+              />
+              <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} fontSize={11} width={46} tickMargin={6} />
+              <Tooltip formatter={(value) => (value === null ? "Sin datos" : `${Number(value).toFixed(1)}%`)} />
+              <ReferenceLine
+                x={monthLabel(month)}
+                stroke="#ee2e2f"
+                strokeWidth={10}
+                strokeOpacity={0.08}
+              />
+              <ReferenceLine y={96} stroke="#354550" strokeDasharray="4 4" label={{ value: "Meta 96%", position: "insideTopRight", fontSize: 10, fill: "#354550" }} />
+              <Line
+                type="monotone"
+                dataKey="pct"
+                stroke="#ee2e2f"
+                strokeWidth={2.5}
+                dot={(props) => (
+                  <circle
+                    cx={props.cx}
+                    cy={props.cy}
+                    r={props.payload.month === month ? 6 : 3.5}
+                    fill={props.payload.month === month ? "#ee2e2f" : "#fff"}
+                    stroke="#ee2e2f"
+                    strokeWidth={2}
+                  />
+                )}
+                connectNulls
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </article>
+      </div>
+
+      <div className="disp-detail-grid">
         <article className="card disp-chart-card">
           <div className="disp-chart-head">
             <span className="eyebrow">Disponibilidad por flota</span>
-            <small className="disp-hint">Clic en una barra para filtrar</small>
+            <small className="disp-hint">Clic para combinar este filtro</small>
           </div>
           {fleetChartData.length === 0 ? (
             <p className="disp-empty">Sin datos de flotas para {monthLabel(month)}.</p>
           ) : (
-            <ResponsiveContainer width="100%" height={Math.max(200, fleetChartData.length * 34)}>
+            <ResponsiveContainer width="100%" height={Math.max(240, fleetChartData.length * 34)}>
               <BarChart data={fleetChartData} layout="vertical" margin={{ left: 8, right: 16 }}>
                 <CartesianGrid horizontal={false} stroke="rgba(53,69,80,0.08)" />
                 <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} fontSize={11} />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  width={110}
-                  fontSize={11}
-                  tickFormatter={(v) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)}
-                />
+                <YAxis type="category" dataKey="name" width={110} fontSize={11} tickFormatter={(v) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)} />
                 <Tooltip
                   formatter={(value, _n, p) => {
                     const mttr = p.payload.mttr_hours;
@@ -477,42 +740,18 @@ export default function DisponibilidadPage() {
                 <ReferenceLine x={97} stroke="#354550" strokeDasharray="4 4" label={{ value: "Meta 97%", position: "top", fontSize: 10, fill: "#354550" }} />
                 <Bar dataKey="pct" radius={[0, 6, 6, 0]} onClick={handleFleetClick} cursor="pointer">
                   {fleetChartData.map((entry) => (
-                    <Cell
-                      key={entry.customer_id ?? entry.name}
-                      fill={STATUS_COLOR[entry.status] || STATUS_COLOR.no_data}
-                      fillOpacity={selectedCustomerId && selectedCustomerId !== entry.customer_id ? 0.35 : 1}
-                    />
+                    <Cell key={entry.customer_id ?? entry.name} fill={STATUS_COLOR[entry.status] || STATUS_COLOR.no_data} fillOpacity={selectedCustomerId && selectedCustomerId !== entry.customer_id ? 0.35 : 1} />
                   ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           )}
-        </article>
-
-        <article className="card disp-chart-card">
-          <div className="disp-chart-head">
-            <span className="eyebrow">Tendencia</span>
-            <small className="disp-hint">{selectedFleet ? selectedFleet.customer_name : "Global"}</small>
+          <div className="disp-scale" aria-label="Escala de disponibilidad">
+            <span><i style={{ background: STATUS_COLOR.critical }} />Crítica &lt; 96%</span>
+            <span><i style={{ background: STATUS_COLOR.warning }} />Advertencia 96–96.9%</span>
+            <span><i style={{ background: STATUS_COLOR.good }} />Óptima ≥ 97%</span>
           </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={trendData} margin={{ left: 0, right: 12, top: 8 }}>
-              <CartesianGrid stroke="rgba(53,69,80,0.08)" />
-              <XAxis dataKey="label" fontSize={11} />
-              <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} fontSize={11} width={38} />
-              <Tooltip formatter={(value) => (value === null ? "Sin datos" : `${Number(value).toFixed(1)}%`)} />
-              <ReferenceLine y={96} stroke="#354550" strokeDasharray="4 4" label={{ value: "Meta 96%", position: "right", fontSize: 10, fill: "#354550" }} />
-              <Line
-                type="monotone"
-                dataKey="pct"
-                stroke="#ee2e2f"
-                strokeWidth={2.5}
-                dot={{ r: 3 }}
-                connectNulls
-              />
-            </LineChart>
-          </ResponsiveContainer>
         </article>
-      </div>
 
       {/* Ranking */}
       <article className="card disp-ranking-card">
@@ -520,8 +759,8 @@ export default function DisponibilidadPage() {
           <div>
             <span className="eyebrow">Ranking de vehículos</span>
             <h3 className="disp-ranking-title">
-              {rankingOrder === "worst" ? "Peor estado" : "Mejor estado"}
-              {selectedFleet ? ` · ${selectedFleet.customer_name}` : ""}
+              Vehículos{selectedFleet ? ` · ${selectedFleet.customer_name}` : ""}
+              {availabilityStatusFilter ? ` · ${STATUS_FILTER_LABEL[availabilityStatusFilter]}` : ""}
             </h3>
           </div>
           <div className="disp-ranking-actions">
@@ -538,27 +777,29 @@ export default function DisponibilidadPage() {
                 Ver todas
               </button>
             ) : null}
-            <button
-              type="button"
-              className="button-secondary button-sm"
-              onClick={() => setRankingOrder((o) => (o === "worst" ? "best" : "worst"))}
-            >
-              {rankingOrder === "worst" ? "Ver mejores" : "Ver peores"}
-            </button>
           </div>
         </div>
 
-        <div className="vehicles-table-shell">
+        <div className="vehicles-table-shell disp-ranking-table-shell">
           <table className="vehicles-table">
             <thead>
               <tr>
                 <th>#</th>
-                <th>Placa</th>
-                <th>Flota</th>
-                <th>Disponibilidad</th>
-                <th>Horas no disp.</th>
-                <th>MTTR</th>
-                <th>Órdenes</th>
+                {[
+                  ["plate", "Placa"],
+                  ["customer_name", "Flota"],
+                  ["availability_pct", "Disponibilidad"],
+                  ["h_no_disp", "Horas no disp."],
+                  ["mttr_hours", "MTTR"],
+                  ["orders_considered", "Órdenes"],
+                ].map(([key, label]) => (
+                  <th key={key}>
+                    <div className="th-content">
+                      <span>{label}</span>
+                      <SortButton columnKey={key} currentSort={rankingSort} onSortChange={setRankingSort} />
+                    </div>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -573,11 +814,28 @@ export default function DisponibilidadPage() {
                   </td>
                 </tr>
               ) : (
-                ranking.map((v, idx) => (
+                sortedRanking.map((v, idx) => (
                   <tr key={v.plate}>
                     <td>{idx + 1}</td>
                     <td>
-                      <Link to={`/vehiculo/${v.plate}`} className="ficha-plate-link">
+                      <Link
+                        to={`/vehiculo/${v.plate}`}
+                        className="ficha-plate-link"
+                        state={{
+                          returnTo: "/disponibilidad",
+                          returnLabel: "Disponibilidad",
+                          availabilityFilters: {
+                            month,
+                            monthFrom,
+                            monthTo,
+                            selectedCustomerId,
+                            plateSearch,
+                            availabilityStatusFilter,
+                            includeNoOrders,
+                            rankingSort,
+                          },
+                        }}
+                      >
                         <strong>{v.plate}</strong>
                       </Link>
                     </td>
@@ -587,7 +845,7 @@ export default function DisponibilidadPage() {
                         {fmtPct(v.availability_pct)}
                       </span>
                     </td>
-                    <td>{Number(v.h_no_disp).toFixed(1)} h</td>
+                    <td>{v.availability_pct === null ? "—" : `${Number(v.h_no_disp).toFixed(1)} h`}</td>
                     <td>{fmtMttr(v.mttr_hours)}</td>
                     <td>{v.orders_considered}</td>
                   </tr>
@@ -597,6 +855,7 @@ export default function DisponibilidadPage() {
           </table>
         </div>
       </article>
+      </div>
 
       {/* Cobertura CloudFleet */}
       <article className="card disp-coverage-card">
@@ -820,6 +1079,83 @@ export default function DisponibilidadPage() {
           </div>
         )}
       </article>
+
+      {recalcOpen && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setRecalcOpen(false);
+          }}
+        >
+          <section className="card modal-card modal-card--popover" role="dialog" aria-modal="true" aria-label="Recalcular disponibilidad">
+            <header className="modal-header">
+              <div className="modal-heading">
+                <span className="eyebrow">Procesar CloudFleet</span>
+                <h3>Recalcular disponibilidad</h3>
+              </div>
+              <button type="button" className="icon-button modal-close-button" onClick={() => setRecalcOpen(false)}>
+                Cerrar
+              </button>
+            </header>
+
+            <p className="support-copy modal-support-copy">
+              Este periodo y estas flotas solo aplican al recálculo; no cambiarán los filtros del tablero.
+            </p>
+
+            <form className="register-form" onSubmit={handleRecalculate}>
+              {recalcError ? <div className="notice-banner notice-error">{recalcError}</div> : null}
+              <div className="form-field">
+                <label htmlFor="availability-recalc-month">Mes a recalcular</label>
+                <input
+                  id="availability-recalc-month"
+                  type="month"
+                  value={recalcMonth}
+                  onChange={(event) => setRecalcMonth(event.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <fieldset className="disp-recalc-scope">
+                <legend>Flotas</legend>
+                <label className="client-picker-option">
+                  <input
+                    type="checkbox"
+                    checked={recalcCustomerIds.length === 0}
+                    onChange={() => setRecalcCustomerIds([])}
+                  />
+                  <span>
+                    Todas las flotas
+                    <small>Procesa la disponibilidad completa del mes.</small>
+                  </span>
+                </label>
+                <div className="disp-recalc-customers">
+                  {customers.map((customer) => (
+                    <label className="client-picker-option" key={customer.id}>
+                      <input
+                        type="checkbox"
+                        checked={recalcCustomerIds.includes(customer.id)}
+                        onChange={() => toggleRecalcCustomer(customer.id)}
+                      />
+                      <span>{customer.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <div className="actions-row modal-actions">
+                <button type="submit" disabled={isRecalculating || !recalcMonth}>
+                  {isRecalculating ? "Recalculando…" : "Iniciar recálculo"}
+                </button>
+                <button type="button" className="button-secondary" onClick={() => setRecalcOpen(false)}>
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
 
       {registerModalOpen && registerItem && (
         <RegisterUnmatchedModal

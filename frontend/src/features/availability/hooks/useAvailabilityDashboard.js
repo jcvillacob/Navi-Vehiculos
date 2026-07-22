@@ -16,8 +16,22 @@ function currentMonth() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function addMonths(month, delta) {
+  const [year, mon] = month.split("-").map(Number);
+  const index = year * 12 + (mon - 1) + delta;
+  const [nextYear, nextMonth] = [Math.floor(index / 12), index % 12];
+  return `${nextYear}-${String(nextMonth + 1).padStart(2, "0")}`;
+}
+
+function monthsInRange(monthFrom, monthTo) {
+  if (!isValidMonth(monthFrom) || !isValidMonth(monthTo)) return TREND_MONTHS;
+  const [fromYear, fromMonth] = monthFrom.split("-").map(Number);
+  const [toYear, toMonth] = monthTo.split("-").map(Number);
+  return Math.max(1, Math.min(24, (toYear - fromYear) * 12 + toMonth - fromMonth + 1));
+}
+
 const TREND_MONTHS = 6;
-const RANKING_LIMIT = 25;
+const RANKING_LIMIT = 5000;
 const POLL_INTERVAL_MS = 2500;
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
 const SYSTEM_CUSTOMER = "__navitrans_system__";
@@ -33,12 +47,28 @@ function isValidMonth(value) {
  * - recalculate() dispara el job existente de rendimientos con
  *   compute_availability=true y hace polling hasta que termina, luego refresca.
  */
-export function useAvailabilityDashboard() {
-  const [month, setMonth] = useState(currentMonth);
-  const [selectedCustomerId, setSelectedCustomerId] = useState(null);
-  const [plateSearch, setPlateSearch] = useState("");
-  const [rankingOrder, setRankingOrder] = useState("worst");
-  const [includeNoOrders, setIncludeNoOrders] = useState(false);
+export function useAvailabilityDashboard(initialFilters = {}) {
+  const defaultMonth = currentMonth();
+  const initialMonth = isValidMonth(initialFilters.month) ? initialFilters.month : defaultMonth;
+  const initialMonthFrom = isValidMonth(initialFilters.monthFrom)
+    ? initialFilters.monthFrom
+    : addMonths(defaultMonth, -(TREND_MONTHS - 1));
+  const initialMonthTo = isValidMonth(initialFilters.monthTo) ? initialFilters.monthTo : defaultMonth;
+  const [month, setMonth] = useState(initialMonth);
+  const [monthFrom, setMonthFrom] = useState(initialMonthFrom);
+  const [monthTo, setMonthTo] = useState(initialMonthTo);
+  const [selectedCustomerId, setSelectedCustomerId] = useState(
+    Number.isInteger(initialFilters.selectedCustomerId) ? initialFilters.selectedCustomerId : null,
+  );
+  const [plateSearch, setPlateSearch] = useState(
+    typeof initialFilters.plateSearch === "string" ? initialFilters.plateSearch : "",
+  );
+  const [availabilityStatusFilter, setAvailabilityStatusFilter] = useState(
+    ["good", "warning", "critical", "no_data"].includes(initialFilters.availabilityStatusFilter)
+      ? initialFilters.availabilityStatusFilter
+      : null,
+  );
+  const [includeNoOrders, setIncludeNoOrders] = useState(initialFilters.includeNoOrders !== false);
 
   const [customers, setCustomers] = useState([]);
   const [overview, setOverview] = useState(null);
@@ -125,13 +155,14 @@ export function useAvailabilityDashboard() {
           month,
           customer_id: selectedCustomerId,
           limit: RANKING_LIMIT,
-          order: rankingOrder,
+          order: "worst",
           include_no_orders: includeNoOrders,
           plate_search: plateSearch,
+          availability_status: availabilityStatusFilter,
         }),
         fetchAvailabilityTrend({
-          month_to: month,
-          months: TREND_MONTHS,
+          month_to: monthTo,
+          months: monthsInRange(monthFrom, monthTo),
           customer_id: selectedCustomerId,
         }),
       ]);
@@ -142,7 +173,7 @@ export function useAvailabilityDashboard() {
     } finally {
       setLoadingDetail(false);
     }
-  }, [month, selectedCustomerId, plateSearch, rankingOrder, includeNoOrders]);
+  }, [month, monthFrom, monthTo, selectedCustomerId, plateSearch, availabilityStatusFilter, includeNoOrders]);
 
   useEffect(() => {
     loadOverview();
@@ -168,16 +199,15 @@ export function useAvailabilityDashboard() {
 
   useEffect(() => stopPolling, [stopPolling]);
 
-  const recalculate = useCallback(async () => {
-    if (!isValidMonth(month)) {
+  const recalculate = useCallback(async ({ month: requestedMonth = month, customerIds = [] } = {}) => {
+    if (!isValidMonth(requestedMonth)) {
       setRecalcError("Selecciona un mes válido");
-      return;
+      return false;
     }
     setRecalcError("");
-    // Recalcular reprocesa el mes completo; los filtros de flota/placa solo afectan la vista.
     const payload = {
-      month,
-      customer_ids: [],
+      month: requestedMonth,
+      customer_ids: customerIds,
       compute_availability: true,
       availability_only: true,
       force_recalculate: false,
@@ -200,8 +230,10 @@ export function useAvailabilityDashboard() {
           setRecalcError(err.message || "Error consultando el job");
         }
       }, POLL_INTERVAL_MS);
+      return true;
     } catch (err) {
       setRecalcError(err.message || "No fue posible iniciar el recalculo");
+      return false;
     }
   }, [month, stopPolling, refreshAll]);
 
@@ -211,12 +243,16 @@ export function useAvailabilityDashboard() {
     // filtros
     month,
     setMonth,
+    monthFrom,
+    setMonthFrom,
+    monthTo,
+    setMonthTo,
     selectedCustomerId,
     setSelectedCustomerId,
     plateSearch,
     setPlateSearch,
-    rankingOrder,
-    setRankingOrder,
+    availabilityStatusFilter,
+    setAvailabilityStatusFilter,
     includeNoOrders,
     setIncludeNoOrders,
     // datos

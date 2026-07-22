@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import Can from "../components/Can";
 import ColumnSelectorDrawer from "../components/ColumnSelectorDrawer";
@@ -11,6 +13,7 @@ import {
   cancelPerformanceJob,
   fetchActivePerformanceJobs,
   fetchAdhocFilterOptions,
+  fetchConnectionCalendar,
   fetchConnectionStats,
   fetchMonthlyAvailability,
   fetchMonthlyPerformance,
@@ -246,7 +249,147 @@ function FilterDropdown({ label, options, selected, onChange }) {
   );
 }
 
+const CAL_STATUS_CLASS = {
+  connected: "cal-c",
+  disconnected: "cal-d",
+  not_found: "cal-nf",
+  error: "cal-e",
+};
+const CAL_MONTH_NAMES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+
+// Construye columnas semanales (lunes arriba) que cubren [from-01 .. fin de to].
+// Cada celda: { date, status } o null (fuera de rango). Dias sin registro = status null.
+function buildCalendarWeeks(days, from, to) {
+  const statusByDate = new Map((days || []).map((d) => [d.date, d.status]));
+  const [fy, fm] = from.split("-").map(Number);
+  const [ty, tm] = to.split("-").map(Number);
+  const rangeStart = new Date(fy, fm - 1, 1);
+  const rangeEnd = new Date(ty, tm, 0); // dia 0 del mes siguiente = ultimo dia de `to`
+
+  // Alinea el inicio al lunes de su semana (getDay: 0=Dom..6=Sab -> lunes=1).
+  const gridStart = new Date(rangeStart);
+  const dow = (gridStart.getDay() + 6) % 7; // 0=lunes
+  gridStart.setDate(gridStart.getDate() - dow);
+
+  const weeks = [];
+  let cursor = new Date(gridStart);
+  let connected = 0;
+  let checked = 0;
+  while (cursor <= rangeEnd) {
+    const week = [];
+    let weekMonth = null;
+    for (let i = 0; i < 7; i += 1) {
+      if (cursor < rangeStart || cursor > rangeEnd) {
+        week.push(null);
+      } else {
+        const iso = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+        const status = statusByDate.get(iso) || null;
+        if (status === "connected") { connected += 1; checked += 1; }
+        else if (status === "disconnected") { checked += 1; }
+        if (weekMonth === null) weekMonth = cursor.getMonth();
+        week.push({ date: iso, status });
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    weeks.push({ cells: week, month: weekMonth });
+  }
+  return { weeks, connected, checked };
+}
+
+function ConnectionCalendarPopover({ popover }) {
+  if (!popover) return null;
+  const { plate, rect, days, loading } = popover;
+
+  const from = popover.from;
+  const to = popover.to;
+  const { weeks, connected, checked } = loading || !days
+    ? { weeks: [], connected: 0, checked: 0 }
+    : buildCalendarWeeks(days, from, to);
+
+  // Ancho: 11px celda + 3px gap por semana, + padding lateral (~28px).
+  // Piso de 240px para que el encabezado y la leyenda (4 items) no se
+  // apilen cuando el rango es corto (pocas semanas). Se limita al viewport;
+  // el grid interno hace scroll-x si excede.
+  const gridWidth = weeks.length > 0 ? weeks.length * 14 - 3 + 28 : 260;
+  const contentWidth = Math.max(240, gridWidth);
+  const width = Math.min(contentWidth, window.innerWidth - 16);
+
+  // Posicion: arriba de la celda, centrado; con clamp para no salir de viewport.
+  const left = Math.min(
+    Math.max(8, rect.left + rect.width / 2 - width / 2),
+    window.innerWidth - width - 8
+  );
+  // Flip: si no hay espacio arriba (filas bajo el header sticky), abre abajo.
+  const flipDown = rect.top < 260;
+  const top = flipDown ? rect.bottom + 8 : rect.top - 8;
+
+  // Etiquetas de mes: muestra abreviatura en la primera semana de cada mes.
+  let lastMonth = null;
+  const monthLabels = weeks.map((w) => {
+    if (w.month !== null && w.month !== lastMonth) {
+      lastMonth = w.month;
+      return CAL_MONTH_NAMES[w.month];
+    }
+    return "";
+  });
+
+  const pct = checked > 0 ? Math.round((connected / checked) * 1000) / 10 : 0;
+
+  return createPortal(
+    <div
+      className="conn-cal-popover"
+      data-flip={flipDown ? "down" : "up"}
+      style={{ left: `${left}px`, top: `${top}px`, width: `${width}px` }}
+      role="tooltip"
+    >
+      <div className="conn-cal-header">
+        <strong>{plate}</strong>
+        {!loading && <span className="conn-cal-pct">{connected}/{checked} dias · {pct}%</span>}
+      </div>
+      {loading ? (
+        <div className="conn-cal-loading">Cargando…</div>
+      ) : days && days.length === 0 ? (
+        <div className="conn-cal-loading">Sin registros de conexion</div>
+      ) : (
+        <>
+          <div className="conn-cal-grid-wrap">
+            <div className="conn-cal-months">
+              {monthLabels.map((label, i) => (
+                <span key={i} className="conn-cal-month">{label}</span>
+              ))}
+            </div>
+            <div className="conn-cal-grid">
+              {weeks.map((w, wi) => (
+                <div key={wi} className="conn-cal-week">
+                  {w.cells.map((cell, ci) => (
+                    <span
+                      key={ci}
+                      className={`conn-cal-day ${cell ? (CAL_STATUS_CLASS[cell.status] || "cal-empty") : "cal-void"}`}
+                      title={cell ? `${cell.date}: ${cell.status || "sin dato"}` : ""}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="conn-cal-legend">
+            <span className="conn-cal-legend-item"><span className="conn-cal-day cal-c" /> Conectado</span>
+            <span className="conn-cal-legend-item"><span className="conn-cal-day cal-d" /> Desconectado</span>
+            <span className="conn-cal-legend-item"><span className="conn-cal-day cal-nf" /> No hallado</span>
+            <span className="conn-cal-legend-item"><span className="conn-cal-day cal-e" /> Fallo al medir</span>
+            <span className="conn-cal-legend-item"><span className="conn-cal-day cal-empty" /> Sin medir</span>
+          </div>
+          <div className="conn-cal-note">% = días conectados sobre días medidos (conectado + desconectado). Los días amarillos/grises no cuentan.</div>
+        </>
+      )}
+    </div>,
+    document.body
+  );
+}
+
 export default function RendimientosPage() {
+  const location = useLocation();
+  const restoredFilters = location.state?.rendimientosFilters || {};
   const { toasts, pushToast } = useToasts();
 
   // ── Calculation controls (header) ──
@@ -277,27 +420,42 @@ export default function RendimientosPage() {
   const pollingCancelledRef = useRef(false);
 
   // ── Table range controls ──
-  const [monthFrom, setMonthFrom] = useState(getCurrentMonth);
-  const [monthTo, setMonthTo] = useState(getCurrentMonth);
+  const [monthFrom, setMonthFrom] = useState(
+    /^\d{4}-\d{2}$/.test(restoredFilters.monthFrom || "") ? restoredFilters.monthFrom : getCurrentMonth(),
+  );
+  const [monthTo, setMonthTo] = useState(
+    /^\d{4}-\d{2}$/.test(restoredFilters.monthTo || "") ? restoredFilters.monthTo : getCurrentMonth(),
+  );
   const [loading, setLoading] = useState(false);
   const [payload, setPayload] = useState({ month: getCurrentMonth(), summary: null, rows: [] });
-  const [filters, setFilters] = useState({
-    status: "",
-    client: "",
-    category: "",
-    motorGroup: "",
-    plateSearch: ""
-  });
+  const [filters, setFilters] = useState(() => ({
+    status: restoredFilters.filters?.status || "",
+    client: restoredFilters.filters?.client || "",
+    category: restoredFilters.filters?.category || "",
+    motorGroup: restoredFilters.filters?.motorGroup || "",
+    plateSearch: restoredFilters.filters?.plateSearch || "",
+  }));
   const [connStats, setConnStats] = useState({});
+  // Popover de calendario de conexion (heatmap estilo GitHub). UN solo popover
+  // compartido posicionado en la celda con hover; nunca uno por fila.
+  const [calPopover, setCalPopover] = useState(null); // { plate, rect, days, loading }
+  const calCacheRef = useRef(new Map()); // key `plate|from|to` -> days[]
+  const calHoverRef = useRef(null); // placa con hover activo (guard anti-stale)
+  const calTimerRef = useRef(null); // debounce timer
   const [availabilityByPlate, setAvailabilityByPlate] = useState({});
   const [recentJobs, setRecentJobs] = useState([]);
   const [recentJobsLoading, setRecentJobsLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [columnSelectorOpen, setColumnSelectorOpen] = useState(false);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(
+    Number.isInteger(restoredFilters.page) && restoredFilters.page > 0 ? restoredFilters.page : 1,
+  );
+  const [pageSize, setPageSize] = useState(
+    Number.isInteger(restoredFilters.pageSize) ? restoredFilters.pageSize : 25,
+  );
   const [historyPage, setHistoryPage] = useState(1);
   const [historyPageSize, setHistoryPageSize] = useState(10);
+  const skipInitialSortResetRef = useRef(Number.isInteger(restoredFilters.page));
 
   const defaultVisibleColumns = useMemo(() => RENDIMIENTOS_COLUMNS.map((c) => c.key), []);
   const validColumnKeys = useMemo(() => new Set(RENDIMIENTOS_COLUMNS.map((c) => c.key)), []);
@@ -351,6 +509,10 @@ export default function RendimientosPage() {
   );
 
   useEffect(() => {
+    if (skipInitialSortResetRef.current) {
+      skipInitialSortResetRef.current = false;
+      return;
+    }
     setPage(1);
   }, [savedSort?.key, savedSort?.dir]);
 
@@ -614,6 +776,52 @@ export default function RendimientosPage() {
       });
   }, [monthFrom, monthTo]);
 
+  // --- Popover calendario de conexion (lazy + cache + debounce) ---
+  const handleConnCellEnter = useCallback((plate, event) => {
+    if (!plate) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const from = monthFrom <= monthTo ? monthFrom : monthTo;
+    const to = monthFrom <= monthTo ? monthTo : monthFrom;
+    const cacheKey = `${plate}|${from}|${to}`;
+    calHoverRef.current = plate;
+
+    if (calTimerRef.current) clearTimeout(calTimerRef.current);
+
+    const cached = calCacheRef.current.get(cacheKey);
+    if (cached) {
+      setCalPopover({ plate, rect, from, to, days: cached, loading: false });
+      return;
+    }
+
+    calTimerRef.current = setTimeout(() => {
+      // Re-chequea el hover: pudo moverse antes del debounce.
+      if (calHoverRef.current !== plate) return;
+      setCalPopover({ plate, rect, from, to, days: null, loading: true });
+      fetchConnectionCalendar(plate, from, to)
+        .then((data) => {
+          const days = data?.days || [];
+          calCacheRef.current.set(cacheKey, days);
+          // Solo aplica si sigue siendo la placa con hover (anti-stale).
+          if (calHoverRef.current !== plate) return;
+          setCalPopover({ plate, rect, from, to, days, loading: false });
+        })
+        .catch(() => {
+          if (calHoverRef.current !== plate) return;
+          setCalPopover({ plate, rect, from, to, days: [], loading: false });
+        });
+    }, 200);
+  }, [monthFrom, monthTo]);
+
+  const handleConnCellLeave = useCallback(() => {
+    calHoverRef.current = null;
+    if (calTimerRef.current) clearTimeout(calTimerRef.current);
+    setCalPopover(null);
+  }, []);
+
+  useEffect(() => () => {
+    if (calTimerRef.current) clearTimeout(calTimerRef.current);
+  }, []);
+
   const clientOptions = useMemo(() => {
     const subset = filterRows(payload.rows, filters, "client");
     return buildOptions(subset, (row) => row.client_name);
@@ -630,22 +838,25 @@ export default function RendimientosPage() {
   }, [filters, payload.rows]);
 
   useEffect(() => {
+    if (loading || payload.rows.length === 0) return;
     if (filters.client && !clientOptions.includes(filters.client)) {
       setFilters((current) => ({ ...current, client: "" }));
     }
-  }, [clientOptions, filters.client]);
+  }, [clientOptions, filters.client, loading, payload.rows.length]);
 
   useEffect(() => {
+    if (loading || payload.rows.length === 0) return;
     if (filters.category && !categoryOptions.includes(filters.category)) {
       setFilters((current) => ({ ...current, category: "" }));
     }
-  }, [categoryOptions, filters.category]);
+  }, [categoryOptions, filters.category, loading, payload.rows.length]);
 
   useEffect(() => {
+    if (loading || payload.rows.length === 0) return;
     if (filters.motorGroup && !motorGroupOptions.includes(filters.motorGroup)) {
       setFilters((current) => ({ ...current, motorGroup: "" }));
     }
-  }, [filters.motorGroup, motorGroupOptions]);
+  }, [filters.motorGroup, motorGroupOptions, loading, payload.rows.length]);
 
   const filteredRows = useMemo(() => filterRows(payload.rows, filters), [filters, payload.rows]);
   const statusCounts = useMemo(() => {
@@ -683,9 +894,10 @@ export default function RendimientosPage() {
   }, [sortedRows, page, pageSize]);
 
   useEffect(() => {
+    if (loading || payload.rows.length === 0) return;
     const maxPage = Math.max(1, Math.ceil(sortedRows.length / pageSize));
     if (page > maxPage) setPage(1);
-  }, [sortedRows.length, pageSize, page]);
+  }, [sortedRows.length, pageSize, page, loading, payload.rows.length]);
 
   const visibleSummary = useMemo(() => {
     const totals = filteredRows.reduce(
@@ -693,16 +905,29 @@ export default function RendimientosPage() {
         accumulator.kms += row.kms_ecm || 0;
         accumulator.hours += row.hours_ecm || 0;
         accumulator.gallons += row.fuel_gallons || 0;
+        // KPG/GPH solo deben sumar filas con ambos valores presentes: una fila
+        // con kms_ecm pero sin fuel_gallons (status "partial") no debe aportar
+        // km al numerador sin aportar galones al denominador (infla el promedio).
+        if (row.fuel_gallons > 0 && row.kms_ecm != null) {
+          accumulator.kpgKms += row.kms_ecm;
+          accumulator.kpgGallons += row.fuel_gallons;
+        }
+        if (row.hours_ecm > 0 && row.fuel_gallons != null) {
+          accumulator.gphGallons += row.fuel_gallons;
+          accumulator.gphHours += row.hours_ecm;
+        }
         return accumulator;
       },
-      { kms: 0, hours: 0, gallons: 0 }
+      { kms: 0, hours: 0, gallons: 0, kpgKms: 0, kpgGallons: 0, gphGallons: 0, gphHours: 0 }
     );
 
     return {
-      ...totals,
+      kms: totals.kms,
+      hours: totals.hours,
+      gallons: totals.gallons,
       vehicles: filteredRows.length,
-      kpg: totals.gallons > 0 ? totals.kms / totals.gallons : 0,
-      gph: totals.hours > 0 ? totals.gallons / totals.hours : 0
+      kpg: totals.kpgGallons > 0 ? totals.kpgKms / totals.kpgGallons : 0,
+      gph: totals.gphHours > 0 ? totals.gphGallons / totals.gphHours : 0
     };
   }, [filteredRows]);
 
@@ -1075,6 +1300,7 @@ export default function RendimientosPage() {
       </header>
 
       <ToastStack toasts={toasts} />
+      <ConnectionCalendarPopover popover={calPopover} />
 
       <section className="rendimientos-summary-grid">
         <article className="card metric-card">
@@ -1293,7 +1519,23 @@ export default function RendimientosPage() {
                         if (col.key === "plate") {
                           return (
                             <td key={col.key} data-label={col.label}>
-                              <strong>{row.plate}</strong>
+                              <Link
+                                to={`/vehiculo/${row.plate}`}
+                                className="ficha-plate-link"
+                                state={{
+                                  returnTo: "/rendimientos",
+                                  returnLabel: "Rendimientos",
+                                  rendimientosFilters: {
+                                    monthFrom,
+                                    monthTo,
+                                    filters,
+                                    page,
+                                    pageSize,
+                                  },
+                                }}
+                              >
+                                <strong>{row.plate}</strong>
+                              </Link>
                             </td>
                           );
                         }
@@ -1311,22 +1553,23 @@ export default function RendimientosPage() {
                         }
                         if (col.key === "conn_pct") {
                           const cs = connStats[row.plate];
+                          const hasData = cs && cs.days_checked > 0;
                           return (
-                            <td key={col.key} data-label={col.label}>
-                              {!cs || cs.days_checked <= 0 ? (
+                            <td
+                              key={col.key}
+                              data-label={col.label}
+                              onMouseEnter={hasData ? (e) => handleConnCellEnter(row.plate, e) : undefined}
+                              onMouseLeave={hasData ? handleConnCellLeave : undefined}
+                            >
+                              {!hasData ? (
                                 <span className="conn-pct-badge conn-pct-none">--</span>
                               ) : (
                                 (() => {
                                   const level = cs.connection_pct >= 80 ? "good" : cs.connection_pct >= 50 ? "warn" : "bad";
                                   const alert = cs.consecutive_disconnected >= 3;
-                                  const unresolved = [];
-                                  if (cs.days_not_found) unresolved.push(`${cs.days_not_found} no encontrado`);
-                                  if (cs.days_error) unresolved.push(`${cs.days_error} error`);
-                                  const unresolvedLabel = unresolved.length ? ` | ${unresolved.join(", ")}` : "";
                                   return (
                                     <span
                                       className={`conn-pct-badge conn-pct-${level}${alert ? " conn-pct-alert" : ""}`}
-                                      title={`${cs.days_connected}/${cs.days_checked} dias medidos conectado${alert ? ` | ${cs.consecutive_disconnected} dias seguidos desconectado` : ""}${unresolvedLabel}`}
                                     >
                                       <span className="conn-pct-bar">
                                         <span className="conn-pct-fill" style={{ width: `${cs.connection_pct}%` }} />

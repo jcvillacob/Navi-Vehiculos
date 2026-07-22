@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import time as dt_time, timedelta
+from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable, Protocol
 
 from app.clients.artimo_client import (
@@ -27,6 +28,8 @@ from app.clients.frotcom_client import (
     FrotcomAuthError,
     FrotcomConfig,
     FrotcomTripOdometers,
+    build_chronometer_map as build_frotcom_chronometer_map,
+    estimate_hourmeter_end_from_chronometer,
     find_vehicle_id_by_plate as find_frotcom_vehicle_id_by_plate,
     find_first_reading as find_frotcom_first_reading,
     find_last_reading as find_frotcom_last_reading,
@@ -922,6 +925,8 @@ def _calculate_frotcom_vehicle_record(
     range_start_utc,
     range_end_utc,
     previous_record: MonthlyPerformanceRecord | None,
+    chronometer_lookup: Callable[[], float | None] | None = None,
+    now_utc: datetime | None = None,
 ) -> MonthlyPerformanceRecord:
     warnings: list[str] = []
 
@@ -1046,12 +1051,57 @@ def _calculate_frotcom_vehicle_record(
     except (TypeError, ValueError):
         kms_gps = None
 
+    # Fallback de horometro: reconstruccion desde el chronometer del vehiculo
+    # (/v2/vehicles, en horas) restando las horas de motor de los viajes
+    # posteriores al mes. Solo aplica cuando vehicleCanInfo no dio horometro;
+    # es un estimado y sus warnings lo dejan explicito.
+    if horo_end is None and chronometer_lookup is not None:
+        chronometer = None
+        try:
+            chronometer = chronometer_lookup()
+        except FrotcomAuthError:
+            raise
+        except Exception as exc:
+            warnings.append(f"No fue posible leer el chronometer del vehiculo en Frotcom: {exc}")
+        if chronometer is not None:
+            reference_now = now_utc or datetime.now(timezone.utc)
+            try:
+                estimated_end, chrono_warnings = estimate_hourmeter_end_from_chronometer(
+                    config, vehicle_id, chronometer, range_end_utc, reference_now
+                )
+            except FrotcomAuthError:
+                raise
+            except Exception as exc:
+                estimated_end, chrono_warnings = None, [
+                    f"No fue posible estimar el horometro con el chronometer de Frotcom: {exc}"
+                ]
+            warnings.extend(chrono_warnings)
+            if estimated_end is not None:
+                horo_end = estimated_end
+                warnings.append(
+                    "Horometro final estimado: chronometer actual del vehiculo menos horas de viajes posteriores al mes."
+                )
+                if horo_start is None:
+                    if trip_odos.engine_hours is not None:
+                        horo_start = horo_end - trip_odos.engine_hours
+                        warnings.append(
+                            "Horometro inicial estimado restando las horas de motor de los viajes del mes."
+                        )
+                    elif trip_odos.trip_count == 0:
+                        horo_start = horo_end
+                        warnings.append("Sin viajes en el mes: horometro inicial igual al final.")
+
     hours_gps = hours_from_seconds(summary.get("drivingTimeSeconds") if isinstance(summary, dict) else None)
     hours_ecm = (
         max(0.0, horo_end - horo_start)
         if horo_start is not None and horo_end is not None
         else None
     )
+    if hours_ecm is None and trip_odos.engine_hours is not None:
+        hours_ecm = trip_odos.engine_hours
+        warnings.append(
+            "Horas de motor del mes tomadas de los viajes de Frotcom (conduccion + ralenti)."
+        )
     if hours_ecm is None:
         warnings.append("No se pudo determinar el horometro CAN de Frotcom para el mes.")
 
@@ -1124,13 +1174,42 @@ class FrotcomMonthlyPerformanceProvider:
 
         df_iso, dt_iso, month_start, month_end = get_frotcom_month_range(year, month_number)
         range_start_utc, range_end_utc = get_frotcom_month_range_utc_bounds(year, month_number)
+        now_utc = datetime.now(timezone.utc)
 
         rows: list[MonthlyPerformanceRecord] = []
         binding_updates: list[BindingUpsert] = []
-        prepared_targets: list[tuple[PerformanceTarget, FrotcomConfig, str]] = []
+        prepared_targets: list[tuple[PerformanceTarget, FrotcomConfig, str, Callable[[], float | None]]] = []
 
         vehicles_cache: dict[tuple[str, str, str], list[dict]] = {}
         vehicles_list_failures: dict[tuple[str, str, str], str] = {}
+
+        # Chronometer por vehiculo, resuelto de forma perezosa: solo se consulta
+        # /v2/vehicles cuando el calculo necesita el fallback de horometro y la
+        # lista no se descargo ya para resolver placas. Cache propio para no
+        # contaminar vehicles_list_failures (que bloquea la resolucion de placas).
+        chronometer_maps: dict[tuple[str, str, str], dict[str, float]] = {}
+        chronometer_lock = threading.Lock()
+
+        def _make_chronometer_lookup(
+            config: FrotcomConfig, vehicle_id: str
+        ) -> Callable[[], float | None]:
+            def _lookup() -> float | None:
+                key = config.cache_key()
+                with chronometer_lock:
+                    mapping = chronometer_maps.get(key)
+                    if mapping is None:
+                        vehicles = vehicles_cache.get(key)
+                        if vehicles is None:
+                            try:
+                                vehicles = list_frotcom_vehicles(config)
+                                vehicles_cache[key] = vehicles
+                            except Exception:
+                                vehicles = []
+                        mapping = build_frotcom_chronometer_map(vehicles)
+                        chronometer_maps[key] = mapping
+                return mapping.get(str(vehicle_id).strip())
+
+            return _lookup
 
         def _notify_target_done():
             if on_target_done is not None:
@@ -1255,7 +1334,9 @@ class FrotcomMonthlyPerformanceProvider:
                 )
             )
 
-            prepared_targets.append((target, config, vehicle_id))
+            prepared_targets.append(
+                (target, config, vehicle_id, _make_chronometer_lookup(config, vehicle_id))
+            )
 
         try:
             configured_workers = int(os.getenv("FROTCOM_MAX_WORKERS", "4"))
@@ -1264,9 +1345,9 @@ class FrotcomMonthlyPerformanceProvider:
         max_workers = max(1, min(configured_workers, 8, len(prepared_targets) or 1))
 
         def _calculate_prepared(
-            item: tuple[PerformanceTarget, FrotcomConfig, str],
+            item: tuple[PerformanceTarget, FrotcomConfig, str, Callable[[], float | None]],
         ) -> MonthlyPerformanceRecord:
-            target, config, vehicle_id = item
+            target, config, vehicle_id, chronometer_lookup = item
             return _calculate_frotcom_vehicle_record(
                 target=target,
                 config=config,
@@ -1279,27 +1360,32 @@ class FrotcomMonthlyPerformanceProvider:
                 range_start_utc=range_start_utc,
                 range_end_utc=range_end_utc,
                 previous_record=previous_records.get((target.customer_database_id, target.plate)),
+                chronometer_lookup=chronometer_lookup,
+                now_utc=now_utc,
             )
 
         # Ejecutamos una placa de cada juego de credenciales como preflight. Si
         # la autenticacion falla, evitamos disparar el resto del grupo. Las
         # placas restantes si se procesan concurrentemente.
         prepared_by_credentials: dict[
-            tuple[str, str, str], list[tuple[PerformanceTarget, FrotcomConfig, str]]
+            tuple[str, str, str],
+            list[tuple[PerformanceTarget, FrotcomConfig, str, Callable[[], float | None]]],
         ] = {}
         for item in prepared_targets:
             prepared_by_credentials.setdefault(item[1].cache_key(), []).append(item)
 
-        parallel_targets: list[tuple[PerformanceTarget, FrotcomConfig, str]] = []
+        parallel_targets: list[
+            tuple[PerformanceTarget, FrotcomConfig, str, Callable[[], float | None]]
+        ] = []
         for credential_targets in prepared_by_credentials.values():
             first_item, *remaining_items = credential_targets
-            first_target, _first_config, first_vehicle_id = first_item
+            first_target, _first_config, first_vehicle_id, _first_lookup = first_item
             try:
                 rows.append(_calculate_prepared(first_item))
                 parallel_targets.extend(remaining_items)
                 _notify_target_done()
             except FrotcomAuthError as exc:
-                for failed_target, _failed_config, failed_vehicle_id in credential_targets:
+                for failed_target, _failed_config, failed_vehicle_id, _failed_lookup in credential_targets:
                     rows.append(
                         _build_status_record(
                             target=failed_target,
@@ -1329,7 +1415,7 @@ class FrotcomMonthlyPerformanceProvider:
                 for item in parallel_targets
             }
             for future in as_completed(futures):
-                target, config, vehicle_id = futures[future]
+                target, config, vehicle_id, _lookup = futures[future]
                 try:
                     rows.append(future.result())
                 except FrotcomAuthError as exc:

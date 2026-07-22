@@ -42,11 +42,39 @@ _SOURCE_CLOUDFLEET = "cloudfleet"
 # para clientes reales, por lo que se excluye de todas las queries del modulo.
 _SYSTEM_CUSTOMER_NAME = "__navitrans_system__"
 
+# La disponibilidad es un producto exclusivo para vehiculos cuya categoria
+# efectiva (override del vehiculo o categoria heredada del cliente) pertenece
+# a uno de estos dos programas.
+AVAILABILITY_CATEGORIES = ("Flota Administrada", "Experiencia Superior")
+
 # Dias hacia atras que miramos en `updatedAt` al consultar work-orders.
 # Captura ordenes abiertas viejas que no fueron tocadas durante el mes pero
 # siguen restando disponibilidad, sin depender de que updatedAt caiga dentro
 # del rango del mes.
 _ORDER_LOOKBACK_DAYS = 90
+_ORDER_WINDOW_DAYS = 170
+
+
+def _list_work_orders_in_windows(
+    config: Any,
+    *,
+    updated_at_from: datetime,
+    updated_at_to: datetime,
+) -> list[dict[str, Any]]:
+    """Consulta CloudFleet en ventanas menores a su limite de 180 dias."""
+    orders: list[dict[str, Any]] = []
+    window_start = updated_at_from
+    while window_start < updated_at_to:
+        window_end = min(window_start + timedelta(days=_ORDER_WINDOW_DAYS), updated_at_to)
+        orders.extend(
+            list_work_orders(
+                config,
+                updated_at_from=window_start,
+                updated_at_to=window_end,
+            )
+        )
+        window_start = window_end
+    return orders
 
 
 def _ensure_availability_table() -> None:
@@ -269,16 +297,16 @@ def _load_plates_for_customers(
     customer_ids: list[int],
 ) -> list[AvailabilityTarget]:
     """
-    Devuelve TODAS las placas asignadas a los customers indicados
-    (sin filtro por provider, a diferencia de la fase de rendimientos).
-    Si la lista es vacia, devuelve todas las placas.
-
-    Excluye placas asignadas al customer interno `__navitrans_system__`
-    (rendimientos ad-hoc). Las placas con `customer_id` NULL siguen entrando.
+    Devuelve las placas con cliente cuya categoria efectiva sea Flota
+    Administrada o Experiencia Superior. Si customer_ids esta vacio, abarca
+    todos los clientes elegibles.
     """
     params: list[Any] = []
-    where = ["1 = 1", "(c.name IS NULL OR c.name <> %s)"]
-    params.append(_SYSTEM_CUSTOMER_NAME)
+    where = [
+        "c.name <> %s",
+        "COALESCE(a.category, c.category, 'Ninguna') = ANY(%s)",
+    ]
+    params.extend([_SYSTEM_CUSTOMER_NAME, list(AVAILABILITY_CATEGORIES)])
     if customer_ids:
         where.append("a.customer_id = ANY(%s)")
         params.append(sorted({int(c) for c in customer_ids}))
@@ -289,7 +317,7 @@ def _load_plates_for_customers(
                 f"""
                 SELECT DISTINCT a.plate
                 FROM vehicle_motor_assignments a
-                LEFT JOIN customers c ON c.id = a.customer_id
+                JOIN customers c ON c.id = a.customer_id
                 WHERE {" AND ".join(where)}
                 ORDER BY a.plate ASC;
                 """,
@@ -399,7 +427,7 @@ def run_availability_phase(
     )
     try:
         vehicles = list_vehicles(config)
-        orders = list_work_orders(
+        orders = _list_work_orders_in_windows(
             config,
             updated_at_from=updated_at_from,
             updated_at_to=updated_at_to,
@@ -424,6 +452,18 @@ def run_availability_phase(
             dropped,
             len(orders),
             len(deduped_orders),
+        )
+
+    # El mismo lote alimenta el monitor de Ordenes taller. Es una actualizacion
+    # no critica: si el cache falla, el calculo mensual debe poder continuar.
+    try:
+        from app.services.taller_ordenes import refresh_cache_from_orders
+
+        refresh_cache_from_orders(deduped_orders, now=datetime.now())
+    except Exception:
+        _logger.exception(
+            "Disponibilidad %s: no fue posible actualizar el cache de Ordenes taller.",
+            month,
         )
 
     # Deteccion bidireccional: placas CloudFleet que no existen localmente.

@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 
 import { listVehicleAssignments } from "../../../api/vehicleApi";
 
-export function useVehicleAssignments() {
+export function useVehicleAssignments(initialSearch = "") {
   const [loading, setLoading] = useState(false);
   const [vehicles, setVehicles] = useState([]);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(typeof initialSearch === "string" ? initialSearch : "");
 
   const loadVehicles = async (nextSearch = search) => {
     setLoading(true);

@@ -70,6 +70,12 @@ def test_overview_grouping_and_global_metrics(monkeypatch):
     assert overall["status"] == "critical"
     assert overall["status_breakdown"]["calculated"] == 4
     assert overall["status_breakdown"]["not_in_cloudfleet"] == 1
+    assert overall["availability_breakdown"] == {
+        "good": 2,
+        "warning": 0,
+        "critical": 2,
+        "no_data": 1,
+    }
     assert overall["critical_fleets"] == 1
 
     fleets = overview["fleets"]
@@ -193,6 +199,33 @@ def test_ranking_include_no_orders(monkeypatch):
             assert r["orders_considered"] == 0
 
 
+def test_ranking_filters_by_availability_scale_including_no_data(monkeypatch):
+    rows = [
+        _row("GOOD01", 1, "Flota A", "calculated", 98.0, 720.0, 14.4),
+        _row("WARN01", 1, "Flota A", "calculated", 96.5, 720.0, 25.2),
+        _row("BAD001", 1, "Flota A", "calculated", 90.0, 720.0, 72.0),
+        _row("NOORD1", 1, "Flota A", "no_orders", 100.0, 720.0, 0.0),
+        _row("NOCF01", 1, "Flota A", "not_in_cloudfleet", None, None, None),
+        _row("ERROR1", 1, "Flota A", "error", None, None, None),
+    ]
+    monkeypatch.setattr(
+        "app.services.availability_dashboard._fetch_month_rows",
+        lambda month, customer_id=None: rows,
+    )
+
+    good = dashboard.get_vehicle_ranking(
+        "2026-06", include_no_orders=True, availability_status="good", limit=20
+    )
+    assert [row["plate"] for row in good] == ["GOOD01", "NOORD1"]
+
+    no_data = dashboard.get_vehicle_ranking(
+        "2026-06", availability_status="no_data", limit=20
+    )
+    assert [row["plate"] for row in no_data] == ["NOCF01", "ERROR1"]
+    assert all(row["availability_pct"] is None for row in no_data)
+    assert all(row["status"] == "no_data" for row in no_data)
+
+
 def test_ranking_exposes_mttr_and_orders_closed(monkeypatch):
     """Los items del ranking exponen mttr_hours y orders_closed."""
     rows = [
@@ -280,8 +313,8 @@ def test_trend_three_months_with_middle_data(monkeypatch):
         lambda *, month_from, month_to: rows,
     )
     monkeypatch.setattr(
-        "app.services.availability_dashboard._plates_for_customer",
-        lambda customer_id: {"T01"},
+        "app.services.availability_dashboard._eligible_plates",
+        lambda customer_id=None: {"T01"},
     )
 
     trend = dashboard.get_availability_trend("2026-06", months=3)
@@ -318,8 +351,8 @@ def test_trend_filters_by_customer_plates(monkeypatch):
         lambda *, month_from, month_to: rows,
     )
     monkeypatch.setattr(
-        "app.services.availability_dashboard._plates_for_customer",
-        lambda customer_id: {"OWN01"},
+        "app.services.availability_dashboard._eligible_plates",
+        lambda customer_id=None: {"OWN01"},
     )
 
     trend = dashboard.get_availability_trend("2026-06", months=3, customer_id=7)
@@ -387,14 +420,6 @@ def test_coverage_summary_and_uncovered_lists(monkeypatch):
         "app.services.availability_dashboard._fetch_month_rows",
         lambda month, customer_id=None: rows,
     )
-    monkeypatch.setattr(
-        "app.services.availability_dashboard.list_unmatched_cloudfleet",
-        lambda month: [
-            {"code": "QLM001", "cost_center": "Taller Norte", "last_seen_at": None},
-            {"code": "QLM002", "cost_center": None, "last_seen_at": None},
-        ],
-    )
-
     coverage = dashboard.get_cloudfleet_coverage("2026-06")
 
     assert coverage["month"] == "2026-06"
@@ -406,34 +431,34 @@ def test_coverage_summary_and_uncovered_lists(monkeypatch):
     assert summary["uncovered"] == 3
     assert summary["error"] == 1
     assert summary["coverage_pct"] == round(3 / 7 * 100.0, 1)
-    assert summary["cloudfleet_only"] == 2
+    assert summary["cloudfleet_only"] == 0
 
     fleets = coverage["fleets"]
     assert [f["customer_name"] for f in fleets] == ["Flota A", "Flota B"]
     assert fleets[0]["total"] == 3
+    assert fleets[0]["covered"] == 1
     assert fleets[0]["uncovered"] == 2
+    assert fleets[0]["error"] == 0
     assert fleets[0]["coverage_pct"] == round(1 / 3 * 100.0, 1)
     assert fleets[1]["total"] == 4
+    assert fleets[1]["covered"] == 2
     assert fleets[1]["uncovered"] == 1
-    assert fleets[1]["coverage_pct"] == round(3 / 4 * 100.0, 1)
+    assert fleets[1]["error"] == 1
+    assert fleets[1]["coverage_pct"] == round(2 / 4 * 100.0, 1)
 
     plates = coverage["uncovered_plates"]
     assert [p["plate"] for p in plates] == ["A02", "A03", "B04"]
     assert all(p["customer_name"] in {"Flota A", "Flota B"} for p in plates)
 
     unmatched = coverage["cloudfleet_unmatched"]
-    assert len(unmatched) == 2
-    assert unmatched[0]["code"] == "QLM001"
-    assert unmatched[0]["cost_center"] == "Taller Norte"
-    assert unmatched[1]["code"] == "QLM002"
-    assert unmatched[1]["cost_center"] is None
+    assert unmatched == []
 
 
 # ── _fetch_month_rows query ─────────────────────────────────────────────────
 
 
-def test_fetch_month_rows_query_excludes_system_customer(monkeypatch):
-    """El SQL generado por _fetch_month_rows excluye al customer sistema."""
+def test_fetch_month_rows_query_only_includes_eligible_categories(monkeypatch):
+    """El SQL exige cliente real y categoria efectiva elegible."""
     captured: dict[str, Any] = {}
 
     class FakeCursor:
@@ -472,4 +497,6 @@ def test_fetch_month_rows_query_excludes_system_customer(monkeypatch):
     dashboard._fetch_month_rows("2026-06")
 
     assert "__navitrans_system__" in captured["params"]
-    assert "(c.name IS NULL OR c.name <> %s)" in captured["sql"]
+    assert ["Flota Administrada", "Experiencia Superior"] in captured["params"]
+    assert "JOIN customers c ON c.id = a.customer_id" in captured["sql"]
+    assert "COALESCE(a.category, c.category, 'Ninguna') = ANY(%s)" in captured["sql"]

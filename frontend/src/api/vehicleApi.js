@@ -350,8 +350,9 @@ export async function deleteCpkCphReport(reportId) {
 
 // ── Disponibilidad (dashboard) ────────────────────────────────────────────────
 
-export async function fetchAvailabilityOverview({ month }) {
+export async function fetchAvailabilityOverview({ month, customer_id = null }) {
   const query = new URLSearchParams({ month });
+  if (customer_id) query.set("customer_id", String(customer_id));
   const response = await fetchWithAuth(buildUrl(`/api/v1/disponibilidad/overview?${query.toString()}`));
   return parseJsonOrThrow(response, "Error cargando el resumen de disponibilidad");
 }
@@ -363,6 +364,7 @@ export async function fetchAvailabilityRanking({
   order = "worst",
   include_no_orders = false,
   plate_search = null,
+  availability_status = null,
 }) {
   const query = new URLSearchParams({ month, limit: String(limit), order });
   if (customer_id) query.set("customer_id", String(customer_id));
@@ -370,6 +372,7 @@ export async function fetchAvailabilityRanking({
   if (plate_search && plate_search.trim()) {
     query.set("plate_search", plate_search.trim().toUpperCase());
   }
+  if (availability_status) query.set("availability_status", availability_status);
   const response = await fetchWithAuth(buildUrl(`/api/v1/disponibilidad/ranking?${query.toString()}`));
   const data = await parseJsonOrThrow(response, "Error cargando el ranking de vehiculos");
   return Array.isArray(data?.items) ? data.items : [];
@@ -382,8 +385,9 @@ export async function fetchAvailabilityTrend({ month_to, months = 6, customer_id
   return parseJsonOrThrow(response, "Error cargando la tendencia de disponibilidad");
 }
 
-export async function fetchAvailabilityCoverage({ month }) {
+export async function fetchAvailabilityCoverage({ month, customer_id = null }) {
   const query = new URLSearchParams({ month });
+  if (customer_id) query.set("customer_id", String(customer_id));
   const response = await fetchWithAuth(buildUrl(`/api/v1/disponibilidad/coverage?${query.toString()}`));
   return parseJsonOrThrow(response, "Error cargando la cobertura CloudFleet");
 }
@@ -633,6 +637,17 @@ export async function checkVehicleConnections() {
 export async function fetchConnectionStats(month) {
   const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/connection-stats?month=${month}`));
   return parseJsonOrThrow(response, "Error obteniendo estadisticas de conexion");
+}
+
+export async function fetchConnectionCalendar(plate, monthFrom, monthTo) {
+  const normalizedPlate = (plate || "").trim().toUpperCase();
+  const params = new URLSearchParams({
+    plate: normalizedPlate,
+    month_from: monthFrom,
+    month_to: monthTo,
+  });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/connection-calendar?${params}`));
+  return parseJsonOrThrow(response, "Error obteniendo calendario de conexion");
 }
 
 export async function fetchVehicleFicha(plate) {

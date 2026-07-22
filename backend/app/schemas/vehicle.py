@@ -795,6 +795,7 @@ class AvailabilityFleet(BaseModel):
     availability_pct: float | None = Field(default=None, description="Disponibilidad agregada de la flota")
     status: str = Field(default="no_data", description="good | warning | critical | no_data")
     status_breakdown: dict[str, int] = Field(default_factory=dict, description="Conteo por calculation_status")
+    availability_breakdown: dict[str, int] = Field(default_factory=dict, description="Conteo por escala de disponibilidad")
     mttr_hours: float | None = Field(default=None, description="MTTR ponderado de la flota (horas)")
     orders_closed: int = Field(default=0, description="Ordenes cerradas en el mes que alimentan el MTTR")
     mttr_status: str = Field(default="no_data", description="good | warning | critical | no_data")
@@ -807,6 +808,7 @@ class AvailabilityOverall(BaseModel):
     availability_pct: float | None = Field(default=None)
     status: str = Field(default="no_data")
     status_breakdown: dict[str, int] = Field(default_factory=dict)
+    availability_breakdown: dict[str, int] = Field(default_factory=dict)
     critical_fleets: int = Field(default=0, description="Flotas en estado critico")
     fleet_count: int = Field(default=0, description="Total de flotas con datos")
     mttr_hours: float | None = Field(default=None, description="MTTR ponderado global (horas)")
@@ -825,10 +827,14 @@ class AvailabilityRankingItem(BaseModel):
     plate: str
     customer_id: int | None = Field(default=None)
     customer_name: str = Field(...)
-    availability_pct: float = Field(...)
+    availability_pct: float | None = Field(default=None)
     h_no_disp: float = Field(default=0.0)
     h_total: float = Field(default=0.0)
     orders_considered: int = Field(default=0)
+    calculation_status: str = Field(
+        default="calculated",
+        description="calculated | no_orders | not_in_cloudfleet | error",
+    )
     status: str = Field(default="no_data")
     mttr_hours: float | None = Field(default=None, description="MTTR de la placa en horas")
     orders_closed: int = Field(default=0, description="Ordenes cerradas de la placa")
@@ -853,7 +859,9 @@ class AvailabilityCoverageFleet(BaseModel):
     customer_id: int | None = Field(default=None, description="Id del cliente")
     customer_name: str = Field(..., description="Nombre del cliente/flota")
     total: int = Field(default=0, description="Placas del cliente en el mes")
+    covered: int = Field(default=0, description="Placas con calculo o sin ordenes")
     uncovered: int = Field(default=0, description="Placas del cliente no cubiertas")
+    error: int = Field(default=0, description="Placas con error de calculo")
     coverage_pct: float | None = Field(default=None, description="Porcentaje de cobertura del cliente")
 
 

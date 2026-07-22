@@ -21,18 +21,21 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
+from psycopg.rows import dict_row
+
 from app.clients.cloudfleet_client import (
     CloudFleetAuthError,
     CloudFleetUnavailableError,
     list_work_orders,
 )
 from app.core.config import load_cloudfleet_config
+from app.core.db import db_conn
 from app.services.availability import (
     _normalize_plate,
     _parse_utc_to_local,
     dedupe_work_orders,
 )
-from app.services.taller_ordenes import _load_plate_customer_map
+from app.services.availability_store import AVAILABILITY_CATEGORIES, _SYSTEM_CUSTOMER_NAME
 
 _logger = logging.getLogger(__name__)
 
@@ -228,6 +231,32 @@ def _set_cached(payload: dict[str, Any]) -> None:
         _MTBF_CACHE[_cache_key()] = (time.time() + _CACHE_TTL_SECONDS, payload)
 
 
+def _load_eligible_plate_customer_map() -> dict[str, dict[str, Any]]:
+    """Mapa local limitado al alcance comercial del modulo Disponibilidad."""
+    with db_conn(row_factory=dict_row) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT a.plate, a.customer_id, c.name AS customer_name
+                FROM vehicle_motor_assignments a
+                JOIN customers c ON c.id = a.customer_id
+                WHERE c.name <> %s
+                  AND COALESCE(a.category, c.category, 'Ninguna') = ANY(%s);
+                """,
+                (_SYSTEM_CUSTOMER_NAME, list(AVAILABILITY_CATEGORIES)),
+            )
+            rows = cur.fetchall()
+
+    return {
+        normalized: {
+            "customer_id": row.get("customer_id"),
+            "customer_name": row.get("customer_name"),
+        }
+        for row in rows
+        if (normalized := _normalize_plate(row.get("plate")))
+    }
+
+
 def _fetch_year_work_orders(config: Any, *, year: int, now: datetime) -> list[dict[str, Any]]:
     """
     Descarga las work-orders del año troceando por updatedAt en ventanas de
@@ -302,7 +331,12 @@ def get_mtbf_summary(*, force_refresh: bool = False) -> dict[str, Any]:
             len(deduped_orders),
         )
 
-    plate_customer_map = _load_plate_customer_map()
+    plate_customer_map = _load_eligible_plate_customer_map()
+    deduped_orders = [
+        order
+        for order in deduped_orders
+        if _normalize_plate(order.get("vehicleCode")) in plate_customer_map
+    ]
 
     result = compute_mtbf(deduped_orders, plate_customer_map, year=year, now=now)
     _set_cached(result)

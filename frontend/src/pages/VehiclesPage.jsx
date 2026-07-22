@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import * as XLSX from "xlsx-js-style";
 
 import Can from "../components/Can";
@@ -150,6 +150,8 @@ function DbConnectionBadge({ vehicle, result, checking }) {
 }
 
 export default function VehiclesPage() {
+  const location = useLocation();
+  const restoredFilters = location.state?.vehiclesFilters || {};
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [loadingAttachmentPlates, setLoadingAttachmentPlates] = useState(() => new Set());
@@ -158,17 +160,25 @@ export default function VehiclesPage() {
   const [selectedPlates, setSelectedPlates] = useState(() => new Set());
   const [refreshingPlates, setRefreshingPlates] = useState(new Set());
   const [checkingConnections, setCheckingConnections] = useState(false);
-  const [connectionResults, setConnectionResults] = useState({});
-  const [filterClient, setFilterClient] = useState([]);
-  const [filterCategory, setFilterCategory] = useState([]);
-  const [filterMotor, setFilterMotor] = useState([]);
-  const [filterDatabase, setFilterDatabase] = useState([]);
-  const [filterConnection, setFilterConnection] = useState([]);
+  const [connectionResults, setConnectionResults] = useState(
+    restoredFilters.connectionResults && typeof restoredFilters.connectionResults === "object"
+      ? restoredFilters.connectionResults
+      : {},
+  );
+  const [filterClient, setFilterClient] = useState(Array.isArray(restoredFilters.filterClient) ? restoredFilters.filterClient : []);
+  const [filterCategory, setFilterCategory] = useState(Array.isArray(restoredFilters.filterCategory) ? restoredFilters.filterCategory : []);
+  const [filterMotor, setFilterMotor] = useState(Array.isArray(restoredFilters.filterMotor) ? restoredFilters.filterMotor : []);
+  const [filterDatabase, setFilterDatabase] = useState(Array.isArray(restoredFilters.filterDatabase) ? restoredFilters.filterDatabase : []);
+  const [filterConnection, setFilterConnection] = useState(Array.isArray(restoredFilters.filterConnection) ? restoredFilters.filterConnection : []);
   const [savingCategoryPlates, setSavingCategoryPlates] = useState(() => new Set());
   const [savingVocacionalPlates, setSavingVocacionalPlates] = useState(() => new Set());
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
-  const [sort, setSort] = useState({ key: null, dir: null });
+  const [page, setPage] = useState(Number.isInteger(restoredFilters.page) && restoredFilters.page > 0 ? restoredFilters.page : 1);
+  const [pageSize, setPageSize] = useState(Number.isInteger(restoredFilters.pageSize) ? restoredFilters.pageSize : 25);
+  const [sort, setSort] = useState(
+    restoredFilters.sort?.key && restoredFilters.sort?.dir
+      ? restoredFilters.sort
+      : { key: null, dir: null },
+  );
   const [openFilterKey, setOpenFilterKey] = useState(null);
   // Solo la fila en edicion monta un <select> nativo; las demas muestran el badge.
   // Asi evitamos cientos de selects nativos en el DOM (coste de paint + hit-testing).
@@ -177,7 +187,8 @@ export default function VehiclesPage() {
   const [reprocessSkipGeotab, setReprocessSkipGeotab] = useState(false);
   const selectAllRef = useRef(null);
   const detailRequestRef = useRef(0);
-  const { loading, vehicles, error, search, setSearch, loadVehicles, patchVehicle } = useVehicleAssignments();
+  const skipInitialSortResetRef = useRef(Number.isInteger(restoredFilters.page));
+  const { loading, vehicles, error, search, setSearch, loadVehicles, patchVehicle } = useVehicleAssignments(restoredFilters.search);
   const { customers, loading: customersLoading } = useCustomersCatalog();
   const { motors, loading: motorsLoading } = useMotorsCatalog();
   const { toasts, pushToast } = useToasts();
@@ -292,18 +303,25 @@ export default function VehiclesPage() {
   }, [vehicles, filterClient, filterMotor]);
 
   useEffect(() => {
+    if (loading || vehicles.length === 0) return;
     setFilterClient((current) => current.filter((name) => clientOptions.includes(name)));
-  }, [clientOptions]);
+  }, [clientOptions, loading, vehicles.length]);
 
   useEffect(() => {
+    if (loading || vehicles.length === 0) return;
     setFilterMotor((current) => current.filter((name) => motorOptions.includes(name)));
-  }, [motorOptions]);
+  }, [motorOptions, loading, vehicles.length]);
 
   useEffect(() => {
+    if (loading || vehicles.length === 0) return;
     setFilterDatabase((current) => current.filter((name) => databaseOptions.includes(name)));
-  }, [databaseOptions]);
+  }, [databaseOptions, loading, vehicles.length]);
 
   useEffect(() => {
+    if (skipInitialSortResetRef.current) {
+      skipInitialSortResetRef.current = false;
+      return;
+    }
     setPage(1);
   }, [sort.key, sort.dir]);
 
@@ -333,12 +351,9 @@ export default function VehiclesPage() {
 
   const activeColumns = useMemo(() => {
     const byKey = new Map(VEHICLE_COLUMNS.map((col) => [col.key, col]));
-    const ordered = visibleColumns
+    return visibleColumns
       .map((key) => byKey.get(key))
       .filter((col) => Boolean(col));
-    const known = new Set(visibleColumns);
-    const missing = VEHICLE_COLUMNS.filter((col) => !known.has(col.key));
-    return [...ordered, ...missing];
   }, [visibleColumns]);
 
   const sortedVehicles = useMemo(() => {
@@ -1017,7 +1032,26 @@ export default function VehiclesPage() {
                       if (col.key === "plate") {
                         return (
                           <td key={col.key} data-label={col.label}>
-                            <Link to={`/vehiculo/${vehicle.plate}`} className="ficha-plate-link">
+                            <Link
+                              to={`/vehiculo/${vehicle.plate}`}
+                              className="ficha-plate-link"
+                              state={{
+                                returnTo: "/vehiculos",
+                                returnLabel: "Vehículos",
+                                vehiclesFilters: {
+                                  search,
+                                  filterClient,
+                                  filterCategory,
+                                  filterMotor,
+                                  filterDatabase,
+                                  filterConnection,
+                                  connectionResults,
+                                  page,
+                                  pageSize,
+                                  sort,
+                                },
+                              }}
+                            >
                               <strong>{vehicle.plate}</strong>
                             </Link>
                           </td>

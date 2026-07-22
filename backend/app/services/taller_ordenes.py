@@ -31,7 +31,7 @@ from app.services.availability import (
     _parse_utc_to_local,
     dedupe_work_orders,
 )
-from app.services.availability_store import _SYSTEM_CUSTOMER_NAME
+from app.services.availability_store import AVAILABILITY_CATEGORIES, _SYSTEM_CUSTOMER_NAME
 
 _logger = logging.getLogger(__name__)
 
@@ -210,9 +210,8 @@ def _load_plate_customer_map() -> dict[str, dict[str, Any]]:
     """
     Carga un mapa placa_normalizada -> {customer_id, customer_name} desde la DB.
 
-    Usa vehicle_motor_assignments + customers, excluyendo el customer interno
-    del sistema (__navitrans_system__) y dejando customer_id = None cuando no
-    hay match.
+    Usa el mismo universo de Disponibilidad: solo vehiculos cuya categoria
+    efectiva sea Flota Administrada o Experiencia Superior.
     """
     result: dict[str, dict[str, Any]] = {}
     with db_conn(row_factory=dict_row) as conn:
@@ -223,11 +222,12 @@ def _load_plate_customer_map() -> dict[str, dict[str, Any]]:
                        a.customer_id,
                        c.name AS customer_name
                 FROM vehicle_motor_assignments a
-                LEFT JOIN customers c ON c.id = a.customer_id
-                WHERE c.name IS NULL OR c.name <> %s
+                JOIN customers c ON c.id = a.customer_id
+                WHERE c.name <> %s
+                  AND COALESCE(a.category, c.category, 'Ninguna') = ANY(%s)
                 ORDER BY a.plate;
                 """,
-                (_SYSTEM_CUSTOMER_NAME,),
+                (_SYSTEM_CUSTOMER_NAME, list(AVAILABILITY_CATEGORIES)),
             )
             rows = cur.fetchall()
 
@@ -245,6 +245,18 @@ def _load_plate_customer_map() -> dict[str, dict[str, Any]]:
         }
 
     return result
+
+
+def _filter_eligible_orders(
+    orders: list[dict[str, Any]],
+    plate_customer_map: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Conserva unicamente ordenes de placas elegibles para Disponibilidad."""
+    return [
+        order
+        for order in orders
+        if _normalize_plate(order.get("vehicleCode")) in plate_customer_map
+    ]
 
 
 def _cache_key() -> str:
@@ -278,6 +290,33 @@ def peek_cached_orders() -> dict[str, Any] | None:
     ~55s cuando el cache esta frio.
     """
     return _get_cached()
+
+
+def refresh_cache_from_orders(
+    orders: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """
+    Renueva el monitor usando un lote ya descargado de CloudFleet.
+
+    Disponibilidad usa esta entrada para mantener ambos modulos sincronizados
+    sin realizar una segunda consulta de work-orders.
+    """
+    reference_now = now or datetime.now()
+    plate_customer_map = _load_plate_customer_map()
+    deduped_orders = dedupe_work_orders(orders)
+    eligible_orders = _filter_eligible_orders(deduped_orders, plate_customer_map)
+    dropped = len(deduped_orders) - len(eligible_orders)
+    if dropped:
+        _logger.info(
+            "Monitor ordenes activas: se excluyeron %d ordenes de vehiculos "
+            "fuera de Flota Administrada/Experiencia Superior.",
+            dropped,
+        )
+    result = build_active_orders(eligible_orders, plate_customer_map, now=reference_now)
+    _set_cached(result)
+    return result
 
 
 def get_active_orders(*, force_refresh: bool = False) -> dict[str, Any]:
@@ -328,8 +367,6 @@ def get_active_orders(*, force_refresh: bool = False) -> dict[str, Any]:
             f"Error inesperado consultando CloudFleet: {exc}"
         ) from exc
 
-    plate_customer_map = _load_plate_customer_map()
-
     deduped_orders = dedupe_work_orders(orders)
     dropped = len(orders) - len(deduped_orders)
     if dropped:
@@ -341,13 +378,12 @@ def get_active_orders(*, force_refresh: bool = False) -> dict[str, Any]:
             len(deduped_orders),
         )
 
-    result = build_active_orders(deduped_orders, plate_customer_map, now=now)
-    _set_cached(result)
-    return result
+    return refresh_cache_from_orders(deduped_orders, now=now)
 
 
 __all__ = [
     "build_active_orders",
     "get_active_orders",
     "peek_cached_orders",
+    "refresh_cache_from_orders",
 ]

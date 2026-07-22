@@ -23,11 +23,11 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.services.availability_store import (
+    AVAILABILITY_CATEGORIES,
     _SOURCE_CLOUDFLEET,
     _SYSTEM_CUSTOMER_NAME,
     _ensure_availability_table,
     list_monthly_availability,
-    list_unmatched_cloudfleet,
 )
 from app.core.db import db_conn
 
@@ -44,9 +44,6 @@ MTTR_WARNING = 48.0
 # Estados cuyo h_total cuenta para el denominador de disponibilidad.
 _HOURS_STATUSES = ("calculated", "no_orders")
 _ALL_STATUSES = ("calculated", "no_orders", "not_in_cloudfleet", "error")
-
-_UNASSIGNED_LABEL = "Sin cliente"
-
 
 def _classify(pct: float | None) -> str:
     """good / warning / critical segun los umbrales de flota."""
@@ -74,6 +71,10 @@ def _empty_breakdown() -> dict[str, int]:
     return {status: 0 for status in _ALL_STATUSES}
 
 
+def _empty_availability_breakdown() -> dict[str, int]:
+    return {status: 0 for status in ("good", "warning", "critical", "no_data")}
+
+
 def _pct_from_hours(h_total: float, h_no_disp: float) -> float | None:
     if h_total <= 0:
         return None
@@ -93,11 +94,19 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     mttr_weighted_numerator = 0.0
     mttr_closed_orders = 0
     breakdown = _empty_breakdown()
+    availability_breakdown = _empty_availability_breakdown()
     for row in rows:
         vehicle_count += 1
         status = row.get("calculation_status")
         if status in breakdown:
             breakdown[status] += 1
+        row_pct = row.get("project_availability_pct")
+        availability_status = (
+            _classify(float(row_pct))
+            if status in _HOURS_STATUSES and row_pct is not None
+            else "no_data"
+        )
+        availability_breakdown[availability_status] += 1
         if status in _HOURS_STATUSES and row.get("h_total") is not None:
             h_total += float(row["h_total"])
             h_no_disp += float(row.get("h_no_disp") or 0.0)
@@ -121,6 +130,7 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "availability_pct": pct,
         "status": _classify(pct),
         "status_breakdown": breakdown,
+        "availability_breakdown": availability_breakdown,
         "mttr_hours": mttr_hours,
         "orders_closed": mttr_closed_orders,
         "mttr_status": _classify_mttr(mttr_hours),
@@ -129,16 +139,21 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _fetch_month_rows(month: str, *, customer_id: int | None = None) -> list[dict[str, Any]]:
     """
-    Filas de disponibilidad del mes cruzadas con cliente. Una fila por placa con
-    asignacion conocida (INNER JOIN con vehicle_motor_assignments).
+    Filas del mes con cliente y categoria efectiva elegible para este modulo.
     """
     _ensure_availability_table()
     where = [
         "mva.period_month = %s",
         "mva.source = %s",
-        "(c.name IS NULL OR c.name <> %s)",
+        "c.name <> %s",
+        "COALESCE(a.category, c.category, 'Ninguna') = ANY(%s)",
     ]
-    params: list[Any] = [month, _SOURCE_CLOUDFLEET, _SYSTEM_CUSTOMER_NAME]
+    params: list[Any] = [
+        month,
+        _SOURCE_CLOUDFLEET,
+        _SYSTEM_CUSTOMER_NAME,
+        list(AVAILABILITY_CATEGORIES),
+    ]
     if customer_id is not None:
         where.append("a.customer_id = %s")
         params.append(customer_id)
@@ -155,25 +170,25 @@ def _fetch_month_rows(month: str, *, customer_id: int | None = None) -> list[dic
                        mva.mttr_hours,
                        mva.orders_closed,
                        a.customer_id,
-                       COALESCE(c.name, %s) AS customer_name
+                       c.name AS customer_name
                 FROM monthly_vehicle_availability mva
                 JOIN vehicle_motor_assignments a ON a.plate = mva.plate
-                LEFT JOIN customers c ON c.id = a.customer_id
+                JOIN customers c ON c.id = a.customer_id
                 WHERE {" AND ".join(where)}
                 ORDER BY mva.plate ASC;
                 """,
-                [_UNASSIGNED_LABEL, *params],
+                params,
             )
             return [dict(row) for row in cur.fetchall()]
 
 
-def get_availability_overview(month: str) -> dict[str, Any]:
+def get_availability_overview(month: str, *, customer_id: int | None = None) -> dict[str, Any]:
     """
     Resumen del mes: agregado global + por flota (cliente).
     Las flotas se devuelven ordenadas por disponibilidad ascendente (peores
     primero); las flotas sin pct calculable van al final.
     """
-    rows = _fetch_month_rows(month)
+    rows = _fetch_month_rows(month, customer_id=customer_id)
 
     fleets_rows: dict[Any, dict[str, Any]] = {}
     for row in rows:
@@ -218,6 +233,7 @@ def get_vehicle_ranking(
     order: str = "worst",
     include_no_orders: bool = False,
     plate_search: str | None = None,
+    availability_status: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Ranking de vehiculos por disponibilidad.
@@ -232,23 +248,36 @@ def get_vehicle_ranking(
     Si `plate_search` tiene texto, filtra las placas cuyo valor contenga ese
     substring (case-insensitive). Vacio o None no aplica filtro de placa.
     """
-    allowed_statuses = {"calculated"}
-    if include_no_orders:
-        allowed_statuses.add("no_orders")
+    if availability_status == "no_data":
+        allowed_statuses = {"not_in_cloudfleet", "error"}
+    else:
+        allowed_statuses = {"calculated"}
+        if include_no_orders:
+            allowed_statuses.add("no_orders")
 
     rows = [
         row
         for row in _fetch_month_rows(month, customer_id=customer_id)
         if row.get("calculation_status") in allowed_statuses
-        and row.get("project_availability_pct") is not None
     ]
+
+    if availability_status and availability_status != "no_data":
+        rows = [
+            row
+            for row in rows
+            if row.get("project_availability_pct") is not None
+            and _classify(float(row["project_availability_pct"])) == availability_status
+        ]
+    elif availability_status != "no_data":
+        rows = [row for row in rows if row.get("project_availability_pct") is not None]
 
     normalized_search = (plate_search or "").strip().upper()
     if normalized_search:
         rows = [row for row in rows if normalized_search in str(row.get("plate", "")).upper()]
 
     def _rank(row: dict[str, Any]) -> tuple[int, float]:
-        pct = float(row["project_availability_pct"])
+        raw_pct = row.get("project_availability_pct")
+        pct = float(raw_pct) if raw_pct is not None else 0.0
         # 'calculated' siempre tiene prioridad sobre 'no_orders' dentro del
         # mismo sentido de ordenamiento; en 'best' las no_orders quedan al final.
         status_rank = 0 if row.get("calculation_status") == "calculated" else 1
@@ -257,17 +286,24 @@ def get_vehicle_ranking(
         return (status_rank, pct)
 
     rows.sort(key=_rank)
-    limited = rows[: max(1, min(limit, 200))]
+    limited = rows[: max(1, min(limit, 5000))]
     return [
         {
             "plate": row["plate"],
             "customer_id": row.get("customer_id"),
             "customer_name": row.get("customer_name"),
-            "availability_pct": round(float(row["project_availability_pct"]), 3),
+            "availability_pct": round(float(row["project_availability_pct"]), 3)
+            if row.get("project_availability_pct") is not None
+            else None,
             "h_no_disp": round(float(row.get("h_no_disp") or 0.0), 3),
             "h_total": round(float(row.get("h_total") or 0.0), 3),
             "orders_considered": int(row.get("orders_considered") or 0),
-            "status": _classify(float(row["project_availability_pct"])),
+            "calculation_status": row.get("calculation_status") or "calculated",
+            "status": _classify(
+                float(row["project_availability_pct"])
+                if row.get("project_availability_pct") is not None
+                else None
+            ),
             "mttr_hours": round(float(row["mttr_hours"]), 3) if row.get("mttr_hours") is not None else None,
             "orders_closed": int(row.get("orders_closed") or 0),
         }
@@ -275,12 +311,12 @@ def get_vehicle_ranking(
     ]
 
 
-def get_cloudfleet_coverage(month: str) -> dict[str, Any]:
+def get_cloudfleet_coverage(month: str, *, customer_id: int | None = None) -> dict[str, Any]:
     """
     Reconciliacion de cobertura CloudFleet para el mes: cuantas placas tienen
     datos calculados vs cuantas no estan en CloudFleet.
     """
-    rows = _fetch_month_rows(month)
+    rows = _fetch_month_rows(month, customer_id=customer_id)
 
     total = len(rows)
     covered = 0
@@ -313,34 +349,34 @@ def get_cloudfleet_coverage(month: str) -> dict[str, Any]:
                 "customer_id": key,
                 "customer_name": row.get("customer_name"),
                 "total": 0,
+                "covered": 0,
                 "uncovered": 0,
+                "error": 0,
             },
         )
         bucket["total"] += 1
+        if status in _HOURS_STATUSES:
+            bucket["covered"] += 1
         if status == "not_in_cloudfleet":
             bucket["uncovered"] += 1
+        elif status == "error":
+            bucket["error"] += 1
 
     coverage_pct = round(covered / total * 100.0, 1) if total > 0 else None
 
-    cloudfleet_unmatched = list_unmatched_cloudfleet(month)
-    cloudfleet_unmatched_payload = [
-        {
-            "code": item["code"],
-            "cost_center": item["cost_center"],
-            "last_seen_at": item["last_seen_at"].isoformat()
-            if item.get("last_seen_at")
-            else None,
-        }
-        for item in cloudfleet_unmatched
-    ]
+    # Los vehiculos que solo existen en CloudFleet no tienen cliente/categoria
+    # local verificable y, por definicion, quedan fuera de este modulo.
+    cloudfleet_unmatched_payload: list[dict[str, Any]] = []
 
     fleets = [
         {
             "customer_id": bucket["customer_id"],
             "customer_name": bucket["customer_name"],
             "total": bucket["total"],
+            "covered": bucket["covered"],
             "uncovered": bucket["uncovered"],
-            "coverage_pct": round((bucket["total"] - bucket["uncovered"]) / bucket["total"] * 100.0, 1)
+            "error": bucket["error"],
+            "coverage_pct": round(bucket["covered"] / bucket["total"] * 100.0, 1)
             if bucket["total"] > 0
             else None,
         }
@@ -389,13 +425,11 @@ def get_availability_trend(
     month_from = _add_months(month_to, -(months - 1))
     raw = list_monthly_availability(month_from=month_from, month_to=month_to)
 
-    customer_plates: set[str] | None = None
-    if customer_id is not None:
-        customer_plates = _plates_for_customer(customer_id)
+    eligible_plates = _eligible_plates(customer_id)
 
     by_month: dict[str, list[dict[str, Any]]] = {}
     for row in raw:
-        if customer_plates is not None and row.get("plate") not in customer_plates:
+        if row.get("plate") not in eligible_plates:
             continue
         by_month.setdefault(row["period_month"], []).append(row)
 
@@ -416,12 +450,25 @@ def get_availability_trend(
     }
 
 
-def _plates_for_customer(customer_id: int) -> set[str]:
+def _eligible_plates(customer_id: int | None = None) -> set[str]:
+    where = [
+        "c.name <> %s",
+        "COALESCE(a.category, c.category, 'Ninguna') = ANY(%s)",
+    ]
+    params: list[Any] = [_SYSTEM_CUSTOMER_NAME, list(AVAILABILITY_CATEGORIES)]
+    if customer_id is not None:
+        where.append("a.customer_id = %s")
+        params.append(customer_id)
     with db_conn(row_factory=dict_row) as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
-                "SELECT plate FROM vehicle_motor_assignments WHERE customer_id = %s;",
-                (customer_id,),
+                f"""
+                SELECT a.plate
+                FROM vehicle_motor_assignments a
+                JOIN customers c ON c.id = a.customer_id
+                WHERE {" AND ".join(where)};
+                """,
+                params,
             )
             return {str(row["plate"]) for row in cur.fetchall() if row.get("plate")}
 

@@ -59,7 +59,16 @@ def _previous_record(odo_end: float | None) -> MonthlyPerformanceRecord:
     )
 
 
-def _calculate(*, trip_odos, first_reading, last_reading, summary=None, previous_record=None):
+def _calculate(
+    *,
+    trip_odos,
+    first_reading,
+    last_reading,
+    summary=None,
+    previous_record=None,
+    chronometer_lookup=None,
+    estimate_return=None,
+):
     with (
         patch(
             "app.services.performance_providers.get_frotcom_mileage_and_time",
@@ -77,6 +86,10 @@ def _calculate(*, trip_odos, first_reading, last_reading, summary=None, previous
             "app.services.performance_providers.find_frotcom_last_reading",
             return_value=last_reading,
         ),
+        patch(
+            "app.services.performance_providers.estimate_hourmeter_end_from_chronometer",
+            return_value=estimate_return or (None, []),
+        ),
     ):
         return _calculate_frotcom_vehicle_record(
             target=_make_target(),
@@ -90,6 +103,8 @@ def _calculate(*, trip_odos, first_reading, last_reading, summary=None, previous
             range_start_utc=datetime(2026, 6, 1, 5, tzinfo=timezone.utc),
             range_end_utc=datetime(2026, 7, 1, 4, 59, 59, tzinfo=timezone.utc),
             previous_record=previous_record,
+            chronometer_lookup=chronometer_lookup,
+            now_utc=datetime(2026, 7, 10, tzinfo=timezone.utc),
         )
 
 
@@ -235,6 +250,88 @@ class TestFrotcomOdometerPriority:
         # El resumen cubre km y combustible, pero no trae horometro ECM.
         first_can.assert_called_once()
         last_can.assert_not_called()
+
+    def test_chronometer_fallback_when_can_unavailable(self):
+        record = _calculate(
+            trip_odos=_trip_odos(
+                odo_start=14000.0,
+                odo_end=16000.0,
+                trip_count=40,
+                engine_hours=225.25,
+                engine_hours_trip_count=40,
+            ),
+            first_reading=None,
+            last_reading=None,
+            summary=SUMMARY,
+            chronometer_lookup=lambda: 8330.0,
+            estimate_return=(8325.75, []),
+        )
+        assert record.horo_end == pytest.approx(8325.75)
+        assert record.horo_start == pytest.approx(8325.75 - 225.25)
+        assert record.hours_ecm == pytest.approx(225.25)
+        assert any("estimado" in w for w in record.warnings)
+
+    def test_chronometer_not_used_when_can_gives_hourmeter(self):
+        lookup_calls = []
+
+        def _lookup():
+            lookup_calls.append(1)
+            return 9999.0
+
+        record = _calculate(
+            trip_odos=_trip_odos(odo_start=14000.0, odo_end=16000.0),
+            first_reading=FIRST_CAN,
+            last_reading=LAST_CAN,
+            summary=SUMMARY,
+            chronometer_lookup=_lookup,
+        )
+        assert record.horo_end == 8325.75
+        assert lookup_calls == []
+
+    def test_chronometer_without_month_trips_keeps_hourmeter_flat(self):
+        record = _calculate(
+            trip_odos=_trip_odos(trip_count=0),
+            first_reading=None,
+            last_reading=None,
+            summary=SUMMARY,
+            chronometer_lookup=lambda: 500.0,
+            estimate_return=(500.0, []),
+        )
+        assert record.horo_start == 500.0
+        assert record.horo_end == 500.0
+        assert record.hours_ecm == 0.0
+
+    def test_chronometer_lookup_failure_only_warns(self):
+        def _lookup():
+            raise RuntimeError("HTTP 500 en /v2/vehicles")
+
+        record = _calculate(
+            trip_odos=_trip_odos(odo_start=14000.0, odo_end=16000.0),
+            first_reading=None,
+            last_reading=None,
+            summary=SUMMARY,
+            chronometer_lookup=_lookup,
+        )
+        assert record.horo_end is None
+        assert any("chronometer" in w for w in record.warnings)
+
+    def test_hours_ecm_falls_back_to_trip_engine_hours(self):
+        record = _calculate(
+            trip_odos=_trip_odos(
+                odo_start=14000.0,
+                odo_end=16000.0,
+                trip_count=12,
+                engine_hours=98.5,
+                engine_hours_trip_count=12,
+            ),
+            first_reading=None,
+            last_reading=None,
+            summary=SUMMARY,
+        )
+        assert record.horo_start is None
+        assert record.horo_end is None
+        assert record.hours_ecm == pytest.approx(98.5)
+        assert any("conduccion + ralenti" in w for w in record.warnings)
 
     def test_no_data_when_all_sources_empty(self):
         record = _calculate(

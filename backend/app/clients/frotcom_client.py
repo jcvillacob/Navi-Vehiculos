@@ -21,6 +21,21 @@ _TRIP_DATE_FIELDS = ("started", "startDate", "startTime", "start", "dateStart",
                      "departureDate", "departureTime", "beginDate", "df")
 _TRIP_DISTANCE_FIELDS = ("distance", "mileage", "tripDistance", "km",
                          "totalDistance", "distanceKms", "mileageKms", "gpsMileage")
+# Confirmado con respuestas reales del tenant: los viajes traen mileageCanbus y
+# canbusDistanceTravelled. Los demas alias se mantienen como respaldo.
+_TRIP_CANBUS_DISTANCE_FIELDS = ("mileageCanbus", "canbusDistanceTravelled",
+                                "canBusDistance", "canbusDistance", "canBusMileage",
+                                "canbusMileage", "canDistance", "canMileage",
+                                "canKms", "canbusKms")
+# Tiempos por viaje en segundos (confirmado con respuestas reales del tenant).
+_TRIP_DRIVE_TIME_FIELD = "driveTimeSec"
+_TRIP_IDLE_TIME_FIELD = "ralentiTimeSec"
+# Horometro actual del vehiculo en /v2/vehicles, en horas.
+_VEHICLE_CHRONOMETER_FIELD = "chronometer"
+# La reconstruccion del horometro desde chronometer acumula error con cada dia
+# transcurrido entre el fin del mes y la ejecucion (huecos GPS, periodos sin
+# comunicacion). Pasado este limite el estimado deja de ser confiable.
+_CHRONOMETER_MAX_GAP_DAYS = 62
 _BOGOTA_UTC_OFFSET = timedelta(hours=-5)
 _AUTH_FAILURE_TTL_SECONDS = 60
 _TOKEN_LOCK = threading.Lock()
@@ -361,6 +376,47 @@ def trip_distance(trip: dict[str, Any]) -> float | None:
     return None
 
 
+def trip_canbus_distance(trip: dict[str, Any]) -> float | None:
+    """Distancia CANBus del viaje; cae a la distancia GPS si no hay dato CAN."""
+    for field in _TRIP_CANBUS_DISTANCE_FIELDS:
+        value = _to_float(trip.get(field))
+        if value is not None:
+            return value
+    return trip_distance(trip)
+
+
+def trip_engine_hours(trip: dict[str, Any]) -> float | None:
+    """Horas de motor del viaje (conduccion + ralenti), o None sin datos."""
+    total_seconds = 0.0
+    has_data = False
+    for field in (_TRIP_DRIVE_TIME_FIELD, _TRIP_IDLE_TIME_FIELD):
+        value = _to_float(trip.get(field))
+        if value is not None:
+            total_seconds += value
+            has_data = True
+    return total_seconds / 3600.0 if has_data else None
+
+
+def extract_vehicle_chronometer(vehicle: dict[str, Any]) -> float | None:
+    """Horometro actual (horas) reportado por /v2/vehicles."""
+    if not isinstance(vehicle, dict):
+        return None
+    return _to_float(vehicle.get(_VEHICLE_CHRONOMETER_FIELD))
+
+
+def build_chronometer_map(vehicles: list[dict[str, Any]]) -> dict[str, float]:
+    """Mapa vehicle_id -> chronometer (horas) a partir de /v2/vehicles."""
+    mapping: dict[str, float] = {}
+    for vehicle in vehicles:
+        if not isinstance(vehicle, dict):
+            continue
+        vehicle_id = _extract_id_from_vehicle(vehicle)
+        chronometer = extract_vehicle_chronometer(vehicle)
+        if vehicle_id and chronometer is not None:
+            mapping[vehicle_id] = chronometer
+    return mapping
+
+
 def sort_trips_chronologically(trips: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     dated: list[tuple[datetime, dict[str, Any]]] = []
     undated = 0
@@ -437,6 +493,8 @@ class FrotcomTripOdometers:
     reconstruction_incomplete: bool
     trip_count: int
     warnings: list[str]
+    engine_hours: float | None = None
+    engine_hours_trip_count: int = 0
 
 
 def derive_trip_odometers(trips_sorted: list[dict[str, Any]]) -> FrotcomTripOdometers:
@@ -461,7 +519,9 @@ def derive_trip_odometers(trips_sorted: list[dict[str, Any]]) -> FrotcomTripOdom
     if odo_start is not None and first_odo_index:
         reconstructed = 0.0
         for trip in trips_sorted[:first_odo_index]:
-            distance = trip_distance(trip)
+            # El odometro es CAN: preferimos la distancia CANBus del viaje y
+            # solo caemos a la GPS cuando no viene.
+            distance = trip_canbus_distance(trip)
             if distance is None:
                 reconstruction_incomplete = True
             else:
@@ -476,6 +536,13 @@ def derive_trip_odometers(trips_sorted: list[dict[str, Any]]) -> FrotcomTripOdom
                 "Algunos viajes previos sin odometro tampoco reportan distancia; el odometro inicial puede quedar sobreestimado."
             )
 
+    engine_hours_values = [
+        hours
+        for hours in (trip_engine_hours(trip) for trip in trips_sorted)
+        if hours is not None
+    ]
+    engine_hours = sum(engine_hours_values) if engine_hours_values else None
+
     return FrotcomTripOdometers(
         odo_start=odo_start,
         odo_end=odo_end,
@@ -483,6 +550,8 @@ def derive_trip_odometers(trips_sorted: list[dict[str, Any]]) -> FrotcomTripOdom
         reconstruction_incomplete=reconstruction_incomplete,
         trip_count=len(trips_sorted),
         warnings=warnings,
+        engine_hours=engine_hours,
+        engine_hours_trip_count=len(engine_hours_values),
     )
 
 
@@ -505,7 +574,62 @@ def get_trip_based_odometers(
         reconstruction_incomplete=result.reconstruction_incomplete,
         trip_count=result.trip_count,
         warnings=warnings,
+        engine_hours=result.engine_hours,
+        engine_hours_trip_count=result.engine_hours_trip_count,
     )
+
+
+def estimate_hourmeter_end_from_chronometer(
+    config: FrotcomConfig,
+    vehicle_id: str,
+    chronometer_hours: float,
+    month_end_utc: datetime,
+    now_utc: datetime,
+) -> tuple[float | None, list[str]]:
+    """Estima el horometro al cierre del mes desde el chronometer actual.
+
+    Horometro final = chronometer actual - horas de motor (driveTimeSec +
+    ralentiTimeSec) de los viajes posteriores al fin del mes. Es un estimado:
+    el error crece con los dias transcurridos desde el corte, por eso se
+    omite pasados _CHRONOMETER_MAX_GAP_DAYS.
+    """
+    warnings: list[str] = []
+
+    if now_utc <= month_end_utc:
+        # Mes en curso: el chronometer es exactamente el corte vigente.
+        return chronometer_hours, warnings
+
+    gap_days = (now_utc - month_end_utc).days
+    if gap_days > _CHRONOMETER_MAX_GAP_DAYS:
+        warnings.append(
+            f"Horometro por chronometer omitido: pasaron {gap_days} dias desde el fin del mes "
+            f"(maximo {_CHRONOMETER_MAX_GAP_DAYS}); el estimado ya no es confiable."
+        )
+        return None, warnings
+
+    trips, fetch_warnings = fetch_trips_range(config, vehicle_id, month_end_utc, now_utc)
+    warnings.extend(fetch_warnings)
+
+    posterior_hours = 0.0
+    undated = 0
+    for trip in trips:
+        started = trip_start_datetime(trip)
+        if started is None:
+            undated += 1
+            continue
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        if started <= month_end_utc:
+            continue
+        hours = trip_engine_hours(trip)
+        if hours is not None:
+            posterior_hours += hours
+    if undated:
+        warnings.append(
+            f"{undated} viaje(s) posteriores sin fecha excluidos del ajuste del horometro por chronometer."
+        )
+
+    return chronometer_hours - posterior_hours, warnings
 
 
 def get_frotcom_month_range(year: int, month_number: int) -> tuple[str, str, datetime, datetime]:

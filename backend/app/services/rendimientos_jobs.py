@@ -25,6 +25,7 @@ from app.schemas.vehicle import (
     PerformanceCalculationJob,
 )
 from app.services.availability_store import (
+    AVAILABILITY_CATEGORIES,
     _SYSTEM_CUSTOMER_NAME,
     run_availability_phase,
 )
@@ -560,8 +561,11 @@ def _count_availability_targets(payload: MonthlyPerformanceCalculateRequest) -> 
     el front pueda mostrar el progreso completo desde el inicio.
     """
     params: list[Any] = []
-    where = ["1 = 1", "(c.name IS NULL OR c.name <> %s)"]
-    params.append(_SYSTEM_CUSTOMER_NAME)
+    where = [
+        "c.name <> %s",
+        "COALESCE(a.category, c.category, 'Ninguna') = ANY(%s)",
+    ]
+    params.extend([_SYSTEM_CUSTOMER_NAME, list(AVAILABILITY_CATEGORIES)])
     customer_ids = sorted({int(c) for c in (payload.customer_ids or [])})
     if customer_ids:
         where.append("a.customer_id = ANY(%s)")
@@ -573,7 +577,7 @@ def _count_availability_targets(payload: MonthlyPerformanceCalculateRequest) -> 
                     f"""
                     SELECT COUNT(DISTINCT a.plate)
                     FROM vehicle_motor_assignments a
-                    LEFT JOIN customers c ON c.id = a.customer_id
+                    JOIN customers c ON c.id = a.customer_id
                     WHERE {" AND ".join(where)};
                     """,
                     params,

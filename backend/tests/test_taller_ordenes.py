@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from app.services import taller_ordenes
 from app.services.taller_ordenes import build_active_orders
 
 
@@ -113,6 +114,29 @@ def test_customer_mapping_by_normalized_plate():
     assert order["customer_id"] == 7
     assert order["customer_name"] == "Viacargo"
     assert order["fleet"] == "Viacargo"
+
+
+def test_refresh_cache_keeps_only_availability_eligible_vehicles(monkeypatch):
+    orders = [
+        _order(number="ELIGIBLE", vehicleCode="ABC-123"),
+        _order(number="OUTSIDE", vehicleCode="XYZ999"),
+    ]
+    monkeypatch.setattr(
+        taller_ordenes,
+        "_load_plate_customer_map",
+        lambda: {"ABC123": {"customer_id": 7, "customer_name": "Viacargo"}},
+    )
+    cached: dict[str, Any] = {}
+    monkeypatch.setattr(taller_ordenes, "_set_cached", lambda payload: cached.update(payload))
+
+    result = taller_ordenes.refresh_cache_from_orders(
+        orders,
+        now=datetime(2026, 7, 11, 12, 0, 0),
+    )
+
+    assert [order["order_number"] for order in result["orders"]] == ["ELIGIBLE"]
+    assert result["summary"]["total_active"] == 1
+    assert cached["summary"]["total_active"] == 1
 
 
 def test_days_elapsed_from_start_date_with_workshop_fallback():

@@ -11,12 +11,17 @@ from app.clients.frotcom_client import (
     FrotcomRequestError,
     _AUTH_FAILURE_CACHE,
     _TOKEN_CACHE,
+    build_chronometer_map,
     derive_trip_odometers,
+    estimate_hourmeter_end_from_chronometer,
+    extract_vehicle_chronometer,
     fetch_trips_range,
     get_frotcom_month_range,
     get_frotcom_month_range_utc_bounds,
     sort_trips_chronologically,
+    trip_canbus_distance,
     trip_distance,
+    trip_engine_hours,
     trip_start_datetime,
 )
 
@@ -178,6 +183,26 @@ class TestTripHelpers:
         assert [t["id"] for t in ordered] == [1, 2]
         assert undated == 0
 
+    def test_canbus_distance_prefers_can_fields(self):
+        assert trip_canbus_distance({"mileageCanbus": 12.0, "distance": 15.0}) == 12.0
+        assert trip_canbus_distance({"canbusDistanceTravelled": 8.5}) == 8.5
+
+    def test_canbus_distance_falls_back_to_gps(self):
+        assert trip_canbus_distance({"distance": 15.0}) == 15.0
+        assert trip_canbus_distance({}) is None
+
+    def test_engine_hours_sums_drive_and_idle(self):
+        trip = {"driveTimeSec": 3600, "ralentiTimeSec": 1800}
+        assert trip_engine_hours(trip) == pytest.approx(1.5)
+
+    def test_engine_hours_with_single_field(self):
+        assert trip_engine_hours({"driveTimeSec": 7200}) == pytest.approx(2.0)
+        assert trip_engine_hours({"ralentiTimeSec": 900}) == pytest.approx(0.25)
+
+    def test_engine_hours_without_data_is_none(self):
+        assert trip_engine_hours({}) is None
+        assert trip_engine_hours({"driveTimeSec": "n/a"}) is None
+
 
 class TestDeriveTripOdometers:
     def test_reconstruction_of_initial_odometer(self):
@@ -225,6 +250,91 @@ class TestDeriveTripOdometers:
         assert result.odo_start is None
         assert result.odo_end is None
         assert result.trip_count == 0
+        assert result.engine_hours is None
+        assert result.engine_hours_trip_count == 0
+
+    def test_reconstruction_prefers_canbus_distance(self):
+        trips = [
+            {"mileageCanbus": 8.0, "distance": 10.0},
+            {"startOdometer": 1000.0, "endOdometer": 1100.0},
+        ]
+        result = derive_trip_odometers(trips)
+        assert result.odo_start == 992.0
+
+    def test_engine_hours_aggregated_from_trips(self):
+        trips = [
+            {"driveTimeSec": 3600, "ralentiTimeSec": 1800},
+            {"driveTimeSec": 1800},
+            {},
+        ]
+        result = derive_trip_odometers(trips)
+        assert result.engine_hours == pytest.approx(2.0)
+        assert result.engine_hours_trip_count == 2
+
+
+class TestChronometer:
+    def test_extract_vehicle_chronometer(self):
+        assert extract_vehicle_chronometer({"chronometer": 8325.75}) == 8325.75
+        assert extract_vehicle_chronometer({"chronometer": "no"}) is None
+        assert extract_vehicle_chronometer({}) is None
+
+    def test_build_chronometer_map(self):
+        vehicles = [
+            {"id": 386804, "chronometer": 8100.5},
+            {"id": 386805},
+            {"chronometer": 10.0},
+            "no-es-dict",
+        ]
+        assert build_chronometer_map(vehicles) == {"386804": 8100.5}
+
+    def test_current_month_returns_chronometer_without_fetch(self):
+        with patch("app.clients.frotcom_client.fetch_trips_range") as fetch:
+            value, warnings = estimate_hourmeter_end_from_chronometer(
+                CONFIG, "v1", 8325.75, _utc(2026, 8, 1, 4, 59, 59), _utc(2026, 7, 15)
+            )
+        assert value == 8325.75
+        assert warnings == []
+        fetch.assert_not_called()
+
+    def test_posterior_trip_hours_are_subtracted(self):
+        trips = [
+            # Viaje del mes (inicio antes del corte): no descuenta.
+            {"started": "2026-06-30T10:00:00Z", "driveTimeSec": 3600},
+            # Viajes posteriores: descuentan 1.5h + 0.5h.
+            {"started": "2026-07-02T10:00:00Z", "driveTimeSec": 3600, "ralentiTimeSec": 1800},
+            {"started": "2026-07-03T10:00:00Z", "driveTimeSec": 1800},
+            # Sin fecha: excluido con warning.
+            {"driveTimeSec": 7200},
+        ]
+        with patch(
+            "app.clients.frotcom_client.fetch_trips_range",
+            return_value=(trips, []),
+        ):
+            value, warnings = estimate_hourmeter_end_from_chronometer(
+                CONFIG, "v1", 100.0, _utc(2026, 7, 1, 4, 59, 59), _utc(2026, 7, 10)
+            )
+        assert value == pytest.approx(98.0)
+        assert any("sin fecha" in w for w in warnings)
+
+    def test_gap_beyond_limit_skips_estimate(self):
+        with patch("app.clients.frotcom_client.fetch_trips_range") as fetch:
+            value, warnings = estimate_hourmeter_end_from_chronometer(
+                CONFIG, "v1", 100.0, _utc(2026, 4, 1), _utc(2026, 7, 15)
+            )
+        assert value is None
+        assert any("omitido" in w for w in warnings)
+        fetch.assert_not_called()
+
+    def test_fetch_warnings_are_propagated(self):
+        with patch(
+            "app.clients.frotcom_client.fetch_trips_range",
+            return_value=([], ["Bloque fallo"]),
+        ):
+            value, warnings = estimate_hourmeter_end_from_chronometer(
+                CONFIG, "v1", 100.0, _utc(2026, 7, 1), _utc(2026, 7, 5)
+            )
+        assert value == 100.0
+        assert warnings == ["Bloque fallo"]
 
 
 class TestMonthRangeUtc:
