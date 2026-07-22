@@ -7340,15 +7340,19 @@ select.control-sm {
   margin-top: 0;
   padding: 18px 20px;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .disp-ranking-table-shell {
-  /* Encabezado (~33 px) + 10 filas (~43 px). El resto queda en scroll. */
-  height: 463px;
-  max-height: 463px;
-  flex: 0 0 463px;
+  /* Usa todo el alto de la tarjeta hermana; el resto de filas queda en scroll. */
+  height: auto;
+  max-height: none;
+  min-height: 0;
+  flex: 1 1 auto;
   overflow-y: auto;
 }
 
