@@ -423,6 +423,7 @@ export default function DisponibilidadPage() {
 
   const coverageSummary = coverage?.summary || {};
   const coverageFleets = Array.isArray(coverage?.fleets) ? coverage.fleets : [];
+  const coverageFleetsIncomplete = coverageFleets.filter((fleet) => Number(fleet.coverage_pct) < 100);
   const coveragePlates = Array.isArray(coverage?.uncovered_plates) ? coverage.uncovered_plates : [];
   const cloudfleetUnmatched = Array.isArray(coverage?.cloudfleet_unmatched) ? coverage.cloudfleet_unmatched : [];
   const cloudfleetOnlyCount = cloudfleetUnmatched.length;
@@ -895,12 +896,12 @@ export default function DisponibilidadPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {coverageFleets.length === 0 ? (
+                      {coverageFleetsIncomplete.length === 0 ? (
                         <tr>
-                          <td className="table-empty-row" colSpan={4}>Sin datos por flota.</td>
+                          <td className="table-empty-row" colSpan={4}>Todas las flotas tienen cobertura completa.</td>
                         </tr>
                       ) : (
-                        coverageFleets.map((f) => (
+                        coverageFleetsIncomplete.map((f) => (
                           <tr key={f.customer_id ?? f.customer_name}>
                             <td>{f.customer_name}</td>
                             <td>{f.total}</td>
