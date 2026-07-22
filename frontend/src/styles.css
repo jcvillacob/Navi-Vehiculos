@@ -7343,16 +7343,16 @@ select.control-sm {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .disp-ranking-table-shell {
-  /* Usa todo el alto de la tarjeta hermana; el resto de filas queda en scroll. */
+  /* La tarjeta izquierda define el alto del grid; esta tabla se adapta dentro. */
   height: auto;
   max-height: none;
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   overflow-y: auto;
 }
 
