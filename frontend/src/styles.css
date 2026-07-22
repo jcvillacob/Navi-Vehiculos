@@ -7340,10 +7340,16 @@ select.control-sm {
   margin-top: 0;
   padding: 18px 20px;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .disp-ranking-table-shell {
-  max-height: min(720px, 70vh);
+  /* Encabezado (~33 px) + 10 filas (~43 px). El resto queda en scroll. */
+  height: 463px;
+  max-height: 463px;
+  flex: 0 0 463px;
+  overflow-y: auto;
 }
 
 .disp-ranking-table-shell .vehicles-table thead {
@@ -7518,7 +7524,9 @@ select.control-sm {
     grid-template-columns: 1fr;
   }
   .disp-ranking-table-shell {
+    height: auto;
     max-height: none;
+    flex-basis: auto;
   }
 }
 
