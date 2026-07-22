@@ -3,7 +3,7 @@ import logging
 import queue
 import threading
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import require_permission
@@ -18,6 +18,8 @@ from app.schemas.vehicle import (
     VehicleCategoryUpdateRequest,
     VehicleDatabaseAssignmentRequest,
     VehicleLookupResponse,
+    VehicleReprocessJob,
+    VehicleReprocessJobRequest,
     VehicleVocacionalUpdateRequest,
 )
 from app.services.motor_catalog import (
@@ -39,6 +41,16 @@ from app.services.vehicle_lookup import (
     lookup_vehicle as lookup_vehicle_service,
 )
 from app.services.vehicle_ficha import get_vehicle_ficha, get_vehicle_telemetry
+from app.services.vehicle_reprocess_jobs import (
+    ReprocessJobAlreadyRunning,
+    ReprocessJobNotFound,
+    acknowledge_job as acknowledge_reprocess_job,
+    cancel_job as cancel_reprocess_job,
+    create_job as create_reprocess_job,
+    get_current_job as get_current_reprocess_job,
+    get_job as get_reprocess_job,
+    run_job as run_reprocess_job,
+)
 
 router = APIRouter(prefix="/vehicle", tags=["vehicle"])
 
@@ -142,6 +154,68 @@ def batch_lookup(
                 yield json.dumps({"status": "error", "message": "Error serializando resultado"}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
+@router.post(
+    "/reprocess-jobs",
+    response_model=VehicleReprocessJob,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_vehicle_reprocess_job(
+    payload: VehicleReprocessJobRequest,
+    background_tasks: BackgroundTasks,
+    response: Response,
+    user: dict = Depends(require_permission("engine_lookup.batch")),
+) -> VehicleReprocessJob:
+    try:
+        job = create_reprocess_job(payload, user_id=int(user["id"]))
+    except ReprocessJobAlreadyRunning as exc:
+        response.status_code = status.HTTP_409_CONFLICT
+        return exc.job
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    background_tasks.add_task(run_reprocess_job, job.id)
+    return job
+
+
+@router.get("/reprocess-jobs/current", response_model=VehicleReprocessJob | None)
+def current_vehicle_reprocess_job(
+    user: dict = Depends(require_permission("engine_lookup.batch")),
+) -> VehicleReprocessJob | None:
+    return get_current_reprocess_job(user_id=int(user["id"]))
+
+
+@router.get("/reprocess-jobs/{job_id}", response_model=VehicleReprocessJob)
+def read_vehicle_reprocess_job(
+    job_id: int,
+    user: dict = Depends(require_permission("engine_lookup.batch")),
+) -> VehicleReprocessJob:
+    try:
+        return get_reprocess_job(job_id, user_id=int(user["id"]))
+    except ReprocessJobNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/reprocess-jobs/{job_id}/cancel", response_model=VehicleReprocessJob)
+def stop_vehicle_reprocess_job(
+    job_id: int,
+    user: dict = Depends(require_permission("engine_lookup.batch")),
+) -> VehicleReprocessJob:
+    try:
+        return cancel_reprocess_job(job_id, user_id=int(user["id"]))
+    except ReprocessJobNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/reprocess-jobs/{job_id}/acknowledge", response_model=VehicleReprocessJob)
+def acknowledge_vehicle_reprocess_job(
+    job_id: int,
+    user: dict = Depends(require_permission("engine_lookup.batch")),
+) -> VehicleReprocessJob:
+    try:
+        return acknowledge_reprocess_job(job_id, user_id=int(user["id"]))
+    except ReprocessJobNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.put("/{plate}/database", response_model=AssignedDatabaseSummary)

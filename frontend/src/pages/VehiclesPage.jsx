@@ -227,11 +227,13 @@ export default function VehiclesPage() {
   // React to bulk refresh finishing (works even if user navigated away and came back)
   useEffect(() => {
     if (bulkRefresh?.status !== "finished") return;
-    const { wasCancelled, errors, total } = bulkRefresh;
+    const { wasCancelled, errors, total, errorMessage } = bulkRefresh;
 
     loadVehicles(search).then(() => {
       if (wasCancelled) {
         pushToast("error", "Reprocesamiento cancelado.");
+      } else if (errorMessage) {
+        pushToast("error", `El reprocesamiento terminó con error: ${errorMessage}`);
       } else if (errors.length) {
         pushToast("error", `Completado con ${errors.length} error(es): ${errors.join(", ")}`);
       } else {

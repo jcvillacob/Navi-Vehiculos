@@ -528,6 +528,46 @@ export async function batchLookupVehiclesStream(identifiers, { force = false, sc
   return results;
 }
 
+export async function createVehicleReprocessJob(identifiers, { scope = "all", skipGeotab = false } = {}) {
+  const response = await fetchWithAuth(buildUrl("/api/v1/vehicle/reprocess-jobs"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      identifiers: identifiers.map((value) => value.trim().toUpperCase()),
+      scope,
+      skip_geotab: skipGeotab,
+    }),
+  });
+  if (response.status !== 202 && response.status !== 409) {
+    return parseJsonOrThrow(response, "Error iniciando el reprocesamiento");
+  }
+  return response.json();
+}
+
+export async function fetchCurrentVehicleReprocessJob() {
+  const response = await fetchWithAuth(buildUrl("/api/v1/vehicle/reprocess-jobs/current"));
+  return parseJsonOrThrow(response, "Error recuperando el reprocesamiento");
+}
+
+export async function fetchVehicleReprocessJob(jobId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/reprocess-jobs/${jobId}`));
+  return parseJsonOrThrow(response, "Error consultando el reprocesamiento");
+}
+
+export async function cancelVehicleReprocessJob(jobId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/reprocess-jobs/${jobId}/cancel`), {
+    method: "POST",
+  });
+  return parseJsonOrThrow(response, "Error cancelando el reprocesamiento");
+}
+
+export async function acknowledgeVehicleReprocessJob(jobId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/reprocess-jobs/${jobId}/acknowledge`), {
+    method: "POST",
+  });
+  return parseJsonOrThrow(response, "Error confirmando el reprocesamiento");
+}
+
 export async function listVehicleAssignments(search = "") {
   const normalizedSearch = search.trim().toUpperCase();
   const query = new URLSearchParams();

@@ -1,107 +1,128 @@
-import { createContext, useCallback, useContext, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
-import { batchLookupVehiclesStream } from "../api/vehicleApi";
+import {
+  acknowledgeVehicleReprocessJob,
+  cancelVehicleReprocessJob,
+  createVehicleReprocessJob,
+  fetchCurrentVehicleReprocessJob,
+  fetchVehicleReprocessJob,
+} from "../api/vehicleApi";
 
 const BulkRefreshContext = createContext(null);
+const POLL_INTERVAL_MS = 2000;
+const ACTIVE_STATUSES = new Set(["queued", "running"]);
 
-// State shape:
-//   null                                                       → idle
-//   { status: "running",  total, done, currentPlate, errors }  → in progress
-//   { status: "finished", total, done, errors, wasCancelled }  → done, waiting for consumer to acknowledge
+function normalizeJob(job) {
+  if (!job) return null;
+  const wasCancelled = job.status === "cancelled";
+  const finished = ["done", "error", "cancelled"].includes(job.status);
+  const errors = Array.isArray(job.errors) ? job.errors : [];
+  return {
+    id: job.id,
+    status: finished ? "finished" : "running",
+    backendStatus: job.status,
+    total: job.total_targets || 0,
+    done: job.processed_targets || 0,
+    currentPlate: job.current_identifier || "",
+    errors,
+    errorMessage: job.error_message || "",
+    wasCancelled,
+  };
+}
 
 export function BulkRefreshProvider({ children }) {
   const [state, setState] = useState(null);
-  const abortRef = useRef(null);
-  const runningRef = useRef(false);
+  const pollTimerRef = useRef(null);
+  const activeJobIdRef = useRef(null);
+  const mountedRef = useRef(true);
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) window.clearTimeout(pollTimerRef.current);
+    pollTimerRef.current = null;
+  }, []);
+
+  const poll = useCallback(async (jobId) => {
+    if (!mountedRef.current || activeJobIdRef.current !== jobId) return;
+    try {
+      const job = await fetchVehicleReprocessJob(jobId);
+      if (!mountedRef.current || activeJobIdRef.current !== jobId) return;
+      setState(normalizeJob(job));
+      if (!ACTIVE_STATUSES.has(job.status)) {
+        activeJobIdRef.current = null;
+        stopPolling();
+        return;
+      }
+    } catch {
+      // Una falla transitoria no debe perder un job que sigue en backend.
+    }
+    pollTimerRef.current = window.setTimeout(() => poll(jobId), POLL_INTERVAL_MS);
+  }, [stopPolling]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    let cancelled = false;
+    fetchCurrentVehicleReprocessJob()
+      .then((job) => {
+        if (cancelled || !job) return;
+        setState(normalizeJob(job));
+        if (ACTIVE_STATUSES.has(job.status)) {
+          activeJobIdRef.current = job.id;
+          poll(job.id);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      mountedRef.current = false;
+      stopPolling();
+    };
+  }, [poll, stopPolling]);
 
   const start = useCallback(async (plates, { scope = "all", skipGeotab = false } = {}) => {
-    if (runningRef.current || !plates.length) return;
-    runningRef.current = true;
-
-    const BATCH_SIZE = 500;
-    const total = plates.length;
-    const errors = [];
-    let done = 0;
-    let cancelled = false;
-
-    const abortController = new AbortController();
-    abortRef.current = abortController;
-
-    setState({ status: "running", total, done: 0, currentPlate: plates[0], errors });
-
-    for (let offset = 0; offset < total; offset += BATCH_SIZE) {
-      if (abortController.signal.aborted) {
-        cancelled = true;
-        break;
-      }
-
-      const chunk = plates.slice(offset, offset + BATCH_SIZE);
-
-      try {
-        await batchLookupVehiclesStream(chunk, {
-          force: true,
-          scope,
-          skipGeotab,
-          signal: abortController.signal,
-          onResult: (result) => {
-            done += 1;
-            const plate = plates[done - 1] || "";
-
-            if (result?.status === "error") {
-              errors.push(plate);
-            }
-
-            setState({
-              status: "running",
-              total,
-              done,
-              currentPlate: done < total ? plates[done] : plate,
-              errors,
-            });
-          },
-        });
-      } catch (err) {
-        if (err?.name === "AbortError" || abortController.signal.aborted) {
-          cancelled = true;
-          break;
-        }
-        // If this chunk's stream fails, mark its remaining plates as errors
-        const chunkProcessed = done - offset;
-        const remaining = chunk.slice(chunkProcessed);
-        errors.push(...remaining);
-        done = offset + chunk.length;
-
-        setState({
-          status: "running",
-          total,
-          done,
-          currentPlate: done < total ? plates[done] : plates[done - 1] || "",
-          errors,
-        });
-      }
+    if (activeJobIdRef.current || !plates.length) return;
+    stopPolling();
+    try {
+      const job = await createVehicleReprocessJob(plates, { scope, skipGeotab });
+      activeJobIdRef.current = job.id;
+      setState(normalizeJob(job));
+      if (ACTIVE_STATUSES.has(job.status)) poll(job.id);
+    } catch (error) {
+      activeJobIdRef.current = null;
+      setState({
+        id: null,
+        status: "finished",
+        backendStatus: "error",
+        total: plates.length,
+        done: 0,
+        currentPlate: "",
+        errors: [],
+        errorMessage: error instanceof Error ? error.message : "No fue posible iniciar el reprocesamiento",
+        wasCancelled: false,
+      });
     }
+  }, [poll, stopPolling]);
 
-    runningRef.current = false;
-    abortRef.current = null;
+  const cancel = useCallback(async () => {
+    const jobId = activeJobIdRef.current || state?.id;
+    if (!jobId) return;
+    const job = await cancelVehicleReprocessJob(jobId);
+    activeJobIdRef.current = null;
+    stopPolling();
+    setState(normalizeJob(job));
+  }, [state?.id, stopPolling]);
 
-    setState({
-      status: "finished",
-      total,
-      done: cancelled ? done - errors.length : done,
-      errors,
-      wasCancelled: cancelled,
-    });
-  }, []);
-
-  const cancel = useCallback(() => {
-    if (abortRef.current) {
-      abortRef.current.abort();
+  const acknowledge = useCallback(async () => {
+    const jobId = state?.id;
+    if (!jobId) {
+      setState(null);
+      return;
     }
-  }, []);
-
-  const acknowledge = useCallback(() => {
-    setState(null);
-  }, []);
+    try {
+      await acknowledgeVehicleReprocessJob(jobId);
+    } finally {
+      setState(null);
+    }
+  }, [state?.id]);
 
   return (
     <BulkRefreshContext.Provider

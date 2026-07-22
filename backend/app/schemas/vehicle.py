@@ -975,3 +975,26 @@ class BatchLookupRequest(BaseModel):
         default=False,
         description="Omitir consultas a Geotab (mas rapido)",
     )
+
+
+class VehicleReprocessJobRequest(BaseModel):
+    identifiers: list[str] = Field(..., min_length=1, max_length=10000)
+    scope: str = Field(default="all", pattern="^(all|fenix|cummins)$")
+    skip_geotab: bool = Field(default=False)
+
+
+class VehicleReprocessJob(BaseModel):
+    id: int
+    status: str = Field(..., description="queued | running | done | error | cancelled")
+    scope: str
+    skip_geotab: bool = False
+    total_targets: int = 0
+    processed_targets: int = 0
+    progress_pct: float = 0.0
+    current_identifier: str | None = None
+    errors: list[str] = Field(default_factory=list)
+    error_message: str | None = None
+    created_by_user_id: int
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
