@@ -144,7 +144,7 @@ def _export_customers(
             SELECT DISTINCT ON (
                 gr.database_id,
                 gr.rule_id,
-                COALESCE(gra.category, gr.category),
+                gra.category,
                 COALESCE(mc.engine_name, ''),
                 COALESCE(gra.event_type, '')
             )
@@ -154,19 +154,24 @@ def _export_customers(
                 gr.database_id,
                 gr.name,
                 gr.rule_id,
-                COALESCE(gra.category, gr.category) AS category,
+                gra.category,
                 gra.event_type,
+                gra.description,
+                gra.band,
+                gra.is_descenso,
                 gr.created_at,
                 mc.engine_name AS motor_type
             FROM geotab_rules gr
-            LEFT JOIN geotab_rule_applications gra
+            INNER JOIN geotab_rule_applications gra
                 ON gra.geotab_rule_id = gr.id
             LEFT JOIN motor_catalog mc
                 ON mc.id = gra.motor_id
+            WHERE gra.category <> 'operacion'
+               OR gra.motor_id IS NOT NULL
             ORDER BY
                 gr.database_id ASC,
                 gr.rule_id ASC,
-                COALESCE(gra.category, gr.category) ASC,
+                gra.category ASC,
                 COALESCE(mc.engine_name, '') ASC,
                 COALESCE(gra.event_type, '') ASC,
                 gr.id ASC;
@@ -205,6 +210,9 @@ def _export_customers(
                 "category": row["category"],
                 "motor_type": _normalize_motor_type(row.get("motor_type")),
                 "event_type": row.get("event_type"),
+                "description": row.get("description"),
+                "band": row.get("band"),
+                "is_descenso": bool(row.get("is_descenso")),
                 "created_at": _iso(row["created_at"]),
             }
         )

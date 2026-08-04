@@ -2272,8 +2272,17 @@ select.control-sm {
    GEOTAB RULES
 ───────────────────────────── */
 
-.modal-card-rules {
-  max-width: 680px;
+.modal-card.modal-card-rules {
+  width: min(760px, calc(100vw - 40px));
+  max-width: 760px;
+  overflow-x: hidden;
+}
+
+.rules-section,
+.rules-motor-section,
+.motor-group-list,
+.motor-group-card {
+  min-width: 0;
 }
 
 .rules-section {
@@ -2342,14 +2351,12 @@ select.control-sm {
 }
 
 .rule-add-form {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+  display: grid;
   gap: 8px;
 }
 
-.rule-add-form input {
-  flex: 1;
+.rule-add-input-row input {
+  width: 100%;
   min-width: 0;
   height: 34px;
   font-size: 12px;
@@ -2361,7 +2368,22 @@ select.control-sm {
   flex-shrink: 0;
 }
 
-.rule-add-form select {
+.rule-add-controls-row,
+.rule-add-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rule-add-controls-row {
+  justify-content: space-between;
+}
+
+.rule-add-filters {
+  flex-wrap: wrap;
+}
+
+.rule-add-filters select {
   width: 160px;
   flex: 0 0 160px;
   height: 34px;
@@ -2583,6 +2605,7 @@ select.control-sm {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
 }
 
 .motor-group-card-chevron {
@@ -2603,6 +2626,7 @@ select.control-sm {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 1;
 }
 
 .motor-group-card-motor {
@@ -2616,6 +2640,9 @@ select.control-sm {
 }
 
 .motor-group-card-tech {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: var(--font-mono, "SF Mono", "Fira Code", monospace);
   font-size: 11px;
   color: var(--text-muted);
@@ -2636,52 +2663,155 @@ select.control-sm {
 }
 
 .motor-group-card-rules {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  gap: 8px;
   padding: 0 16px 14px;
 }
 
-.motor-group-rule-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
+.motor-group-rule {
+  width: 100%;
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.04);
-  border: 1px solid transparent;
-  transition: all 140ms ease;
+  transition: border-color 140ms ease, background 140ms ease;
 }
 
-.motor-group-rule-chip:hover {
+.motor-group-rule:hover {
   background: rgba(0, 0, 0, 0.07);
   border-color: var(--border);
 }
 
-.motor-group-rule-chip.is-active {
+.motor-group-rule.is-active,
+.motor-group-rule[open] {
   background: rgba(238, 46, 47, 0.06);
   border-color: var(--red);
 }
 
-.motor-group-rule-chip-main {
-  all: unset;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
+.motor-group-rule > summary {
+  list-style: none;
   cursor: pointer;
 }
 
+.motor-group-rule > summary::-webkit-details-marker {
+  display: none;
+}
+
+.motor-group-rule-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 8px 10px;
+}
+
+.motor-group-rule-chevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 4 4 4-4 4'/%3E%3C/svg%3E") center/contain no-repeat;
+  transition: transform 180ms ease;
+}
+
+.motor-group-rule[open] .motor-group-rule-chevron {
+  transform: rotate(90deg);
+}
+
+.motor-group-rule-summary-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 .motor-group-rule-chip-name {
+  flex: 0 0 auto;
+  max-width: 100%;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .motor-group-rule-chip-id {
+  flex: 0 1 auto;
+  min-width: 0;
   font-family: var(--font-mono, "SF Mono", "Fira Code", monospace);
   font-size: 10px;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.motor-group-rule-summary-meta {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.motor-group-rule-content {
+  display: grid;
+  gap: 10px;
+  padding: 0 10px 10px;
+}
+
+.motor-group-rule-content .rule-summary-card {
+  margin-top: 0;
+}
+
+.credential-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.credential-detail-grid strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-strong);
+}
+
+.credential-auth-warning {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(238, 46, 47, 0.08);
+  color: var(--red);
+  font-size: 12px;
+}
+
+.credential-edit-form {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.credential-edit-form .rule-assign-form-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.motor-group-rule-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rule-delete-action {
+  color: var(--red);
+  border-color: rgba(238, 46, 47, 0.35);
 }
 
 .rule-app-tag {
@@ -2695,6 +2825,64 @@ select.control-sm {
   font-size: 10px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+/* ── Banda de RPM por aplicacion de operacion ── */
+.rule-band-warning {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(238, 46, 47, 0.1);
+  color: var(--red);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rule-band-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(24, 89, 121, 0.1);
+  color: var(--blue, #185979);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rule-band-badge.is-empty {
+  background: rgba(238, 46, 47, 0.1);
+  color: var(--red);
+}
+
+.rule-band-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rule-band-editor select {
+  height: 26px;
+  font-size: 11px;
+  padding: 0 6px;
+}
+
+.rule-descenso-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.rule-descenso-check input {
+  width: auto;
+  margin: 0;
 }
 
 /* ── Unassigned rules ── */
@@ -2939,7 +3127,15 @@ select.control-sm {
     grid-template-columns: 1fr;
   }
 
+  .credential-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
   .rule-assign-form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .credential-edit-form .rule-assign-form-row {
     grid-template-columns: 1fr;
   }
 
@@ -6001,6 +6197,21 @@ select.control-sm {
   white-space: nowrap;
 }
 
+.cpk-cph-override {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--text-muted, #5a6275);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cpk-cph-override input {
+  cursor: pointer;
+}
+
 .cpk-cph-paste,
 .cpk-cph-grid-card {
   display: grid;
@@ -6425,6 +6636,11 @@ select.control-sm {
     padding: 20px 16px 20px;
     gap: 16px;
     border-radius: 16px 16px 0 0;
+  }
+
+  .modal-card.modal-card-rules {
+    width: 100%;
+    max-width: none;
   }
 
   .modal-header {

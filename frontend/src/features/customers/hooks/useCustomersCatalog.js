@@ -10,7 +10,8 @@ import {
   listCustomers,
   setCustomerActive,
   updateCustomer,
-  updateCustomerDatabase
+  updateCustomerDatabase,
+  updateGeotabRuleApplication
 } from "../../../api/vehicleApi";
 
 export function useCustomersCatalog() {
@@ -177,6 +178,40 @@ export function useCustomersCatalog() {
     }
   };
 
+  const setGeotabRuleBand = async (applicationId, databaseId, customerId, payload) => {
+    setLoading(true);
+    setError("");
+    try {
+      const updated = await updateGeotabRuleApplication(applicationId, payload);
+      setCustomers((prev) =>
+        prev.map((customer) =>
+          customer.id === customerId
+            ? {
+                ...customer,
+                databases: customer.databases.map((db) =>
+                  db.id === databaseId
+                    ? {
+                        ...db,
+                        rules: db.rules.map((rule) =>
+                          rule.id === updated.id ? updated : rule
+                        )
+                      }
+                    : db
+                )
+              }
+            : customer
+        )
+      );
+      return updated;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No fue posible actualizar la regla";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const addGeotabRuleGroup = async (databaseId, customerId, payload) => {
     setLoading(true);
     setError("");
@@ -293,6 +328,7 @@ export function useCustomersCatalog() {
     registerCustomerDatabase,
     editCustomerDatabase,
     addGeotabRule,
+    setGeotabRuleBand,
     addGeotabRuleGroup,
     removeGeotabRule,
     removeGeotabRuleGroup

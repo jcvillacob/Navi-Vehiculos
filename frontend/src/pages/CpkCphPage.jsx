@@ -151,12 +151,27 @@ function computeRowDiff(row) {
   };
 }
 
+const GEOTAB_OVERRIDE_MARKER = "Retroceso Geotab aceptado manualmente";
+
+function hasOverrideMarker(row) {
+  return (Array.isArray(row.warnings) ? row.warnings : [])
+    .some((warning) => String(warning).startsWith(GEOTAB_OVERRIDE_MARKER));
+}
+
+function isRegressionOverridden(row) {
+  return Boolean(row.regression_override) || hasOverrideMarker(row);
+}
+
+// Espeja app/services/cpk_cph.py: solo bloquea el medidor que rige el ajuste
+// (km en comercial, horas en vocacional); el otro queda como advertencia.
 function getGeotabValidation(row) {
   const isGeotab = String(row.source_provider || "").trim().toLowerCase() === "geotab";
   const relevantDifferencePct = row.vocacional ? row.hour_difference_pct : row.km_difference_pct;
   const needsReview = isGeotab && Math.abs(Number(relevantDifferencePct || 0)) > 5;
-  if (!needsReview) return { needsReview: false, blocksSave: false, messages: [] };
+  if (!needsReview) return { needsReview: false, blocksSave: false, messages: [], reasons: [] };
 
+  const ownLabel = row.vocacional ? "horómetro" : "odómetro";
+  const unit = row.vocacional ? "h" : "km";
   const kmRegression = row.odo_start !== null
     && row.odo_start !== undefined
     && row.odo_end !== null
@@ -167,22 +182,53 @@ function getGeotabValidation(row) {
     && row.horo_end !== null
     && row.horo_end !== undefined
     && Number(row.horo_end) < Number(row.horo_start);
-  const sequenceRegressions = (Array.isArray(row.warnings) ? row.warnings : [])
-    .filter((warning) => String(warning).startsWith("Retroceso Geotab detectado") && String(warning).includes("[acumulado]"));
+  const ownTotal = Number(row.vocacional ? row.geotab_regression_total_hours : row.geotab_regression_total_km) || 0;
+  const sequenceRegressions = [];
+  const otherSequence = [];
+  for (const warning of Array.isArray(row.warnings) ? row.warnings : []) {
+    const text = String(warning);
+    if (!(text.startsWith("Retroceso Geotab detectado") && text.includes("[acumulado]"))) continue;
+    if (text.includes(`(${ownLabel})`)) sequenceRegressions.push(text);
+    else if (text.includes("(odómetro)") || text.includes("(horómetro)")) otherSequence.push(text);
+    else if (ownTotal > 0) sequenceRegressions.push(text);
+    else otherSequence.push(text);
+  }
   const messages = ["Revisión Geotab: la diferencia relevante supera 5%; se validaron los acumulados de km y horas."];
   const endpointRegressions = [];
-  if (kmRegression) endpointRegressions.push(`odómetro retrocede de ${formatNumber(row.odo_start)} a ${formatNumber(row.odo_end)} km`);
-  if (hourRegression) endpointRegressions.push(`horómetro retrocede de ${formatNumber(row.horo_start, 1)} a ${formatNumber(row.horo_end, 1)} h`);
+  const otherEndpoint = [];
+  if (kmRegression) {
+    const message = `odómetro retrocede de ${formatNumber(row.odo_start)} a ${formatNumber(row.odo_end)} km`;
+    (row.vocacional ? otherEndpoint : endpointRegressions).push(message);
+  }
+  if (hourRegression) {
+    const message = `horómetro retrocede de ${formatNumber(row.horo_start, 1)} a ${formatNumber(row.horo_end, 1)} h`;
+    (row.vocacional ? endpointRegressions : otherEndpoint).push(message);
+  }
+  if (otherEndpoint.length || otherSequence.length) {
+    messages.push(`Aviso Geotab: hay retrocesos en el otro medidor (${otherEndpoint.length + otherSequence.length}); no afectan el ajuste de ${row.vocacional ? "horas" : "kilómetros"} de esta fila.`);
+  }
   const appliedAdjustment = Math.abs(Number(row.vocacional ? row.hour_adjustment : row.km_adjustment) || 0);
   const sequenceAdjustmentMissing = sequenceRegressions.length > 0
     && (!(row.suggested_adjustment > 0) || appliedAdjustment + 0.0001 < row.suggested_adjustment);
-  const regressions = sequenceRegressions.length && !sequenceAdjustmentMissing ? [] : endpointRegressions;
-  if (sequenceAdjustmentMissing) regressions.push("retrocesos Geotab sin cubrir por el ajuste sugerido");
+  const regressions = sequenceRegressions.length && !sequenceAdjustmentMissing ? [] : [...endpointRegressions];
+  if (sequenceAdjustmentMissing) {
+    regressions.push(`${sequenceRegressions.length} retroceso(s) de ${ownLabel} sin cubrir: sugerido ${formatNumber(row.suggested_adjustment, row.vocacional ? 1 : 0)} ${unit}, aplicado ${formatNumber(appliedAdjustment, row.vocacional ? 1 : 0)} ${unit}`);
+  }
   if (sequenceRegressions.length && !sequenceAdjustmentMissing) {
     messages.push("El ajuste sugerido cubre los retrocesos Geotab detectados.");
   }
-  if (regressions.length) messages.push(`Inconsistencia Geotab: ${regressions.join("; ")}. No se permite guardar el ajuste.`);
-  return { needsReview: true, blocksSave: regressions.length > 0, messages };
+  if (!regressions.length) return { needsReview: true, blocksSave: false, messages, reasons: [] };
+
+  const note = String(row.correction_note || "").trim();
+  if (isRegressionOverridden(row)) {
+    if (note) {
+      messages.push(`${GEOTAB_OVERRIDE_MARKER}: ${regressions.join("; ")}. Nota: ${note}`);
+      return { needsReview: true, blocksSave: false, messages, reasons: [] };
+    }
+    regressions.push("forzar el guardado exige nota de corrección");
+  }
+  messages.push(`Inconsistencia Geotab: ${regressions.join("; ")}. No se permite guardar el ajuste.`);
+  return { needsReview: true, blocksSave: true, messages, reasons: regressions };
 }
 
 function rowsForApi(rows) {
@@ -456,14 +502,15 @@ export default function CpkCphPage() {
       .map(computeRowDiff)
       .filter((row) => (Number(row.km_adjustment || 0) !== 0 || Number(row.hour_adjustment || 0) !== 0) && !String(row.correction_note || "").trim());
     if (missingNotes.length) {
-      pushToast("error", "Cada ajuste de km u horas debe tener una nota.");
+      pushToast("error", `Cada ajuste de km u horas debe tener una nota. Placas sin nota: ${missingNotes.map((row) => row.plate).join(", ")}.`);
       return;
     }
     const blockedRows = visibleRows
       .map(computeRowDiff)
-      .filter((row) => getGeotabValidation(row).blocksSave);
+      .map((row) => ({ plate: row.plate, reasons: getGeotabValidation(row).reasons }))
+      .filter((entry) => entry.reasons.length);
     if (blockedRows.length) {
-      pushToast("error", "No se puede guardar: hay retrocesos de km u horas reportados por Geotab. Verifica las lecturas inicial y final.");
+      pushToast("error", `Retroceso Geotab en ${blockedRows.map((entry) => `${entry.plate} (${entry.reasons.join("; ")})`).join(" | ")}. Corrige las lecturas o marca "Guardar de todas formas" con nota.`);
       return;
     }
     setSaving(true);
@@ -485,8 +532,9 @@ export default function CpkCphPage() {
 
   const handleSaveRow = async (row) => {
     if (!activeReport || !row.id) return;
-    if (getGeotabValidation(computeRowDiff(row)).blocksSave) {
-      pushToast("error", "No se puede guardar: Geotab reporta un retroceso de km u horas en esta fila.");
+    const validation = getGeotabValidation(computeRowDiff(row));
+    if (validation.blocksSave) {
+      pushToast("error", `Retroceso Geotab en ${row.plate}: ${validation.reasons.join("; ")}. Corrige las lecturas o marca "Guardar de todas formas" con nota.`);
       return;
     }
     try {
@@ -497,7 +545,8 @@ export default function CpkCphPage() {
         hour_adjustment: parseNumber(row.hour_adjustment),
         kms_ecm_approved: parseNumber(row.kms_ecm_approved),
         hours_ecm_approved: parseNumber(row.hours_ecm_approved),
-        correction_note: row.correction_note || null
+        correction_note: row.correction_note || null,
+        regression_override: Boolean(row.regression_override)
       };
       if (hasCutoff) {
         payload.cutoff_start_at = row.cutoff_start_at;
@@ -931,6 +980,17 @@ export default function CpkCphPage() {
                               value={row.correction_note || ""}
                               onChange={(value) => updateLocalRow(index, { correction_note: value })}
                             />
+                            {geotabValidation.blocksSave || isRegressionOverridden(row) ? (
+                              <label className="cpk-cph-override">
+                                <input
+                                  type="checkbox"
+                                  checked={isRegressionOverridden(row)}
+                                  disabled={hasOverrideMarker(row)}
+                                  onChange={(event) => updateLocalRow(index, { regression_override: event.target.checked })}
+                                />
+                                Guardar de todas formas
+                              </label>
+                            ) : null}
                           </td>
                           <td>
                             {row.id ? (

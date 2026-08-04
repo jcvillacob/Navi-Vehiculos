@@ -12,6 +12,7 @@ from app.schemas.vehicle import (
     CustomerDatabaseUpdateRequest,
     CustomerRecord,
     CustomerUpdateRequest,
+    GeotabRuleApplicationUpdateRequest,
     GeotabRuleGroupCreateRequest,
     GeotabRuleGroupRecord,
     GeotabRuleCreateRequest,
@@ -35,6 +36,7 @@ from app.services.motor_catalog import (
     update_customer,
     update_customer_database,
     update_database_credential,
+    update_geotab_rule_application,
 )
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -221,6 +223,22 @@ def resolve_rule_record(
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/rules/applications/{application_id}",
+    response_model=GeotabRuleRecord,
+)
+def update_rule_application_record(
+    payload: GeotabRuleApplicationUpdateRequest,
+    application_id: int = Path(..., gt=0, description="ID de la aplicacion de la regla"),
+    _user: dict = Depends(require_permission("customers.edit")),
+) -> GeotabRuleRecord:
+    try:
+        return update_geotab_rule_application(application_id, payload)
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.get("/rules/{rule_id}/inspection", response_model=GeotabRuleInspection)

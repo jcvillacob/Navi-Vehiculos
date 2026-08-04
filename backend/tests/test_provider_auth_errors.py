@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -196,7 +197,18 @@ class TestArtimoAuthHandling:
         target_b = _make_target(provider_key="artimo", customer_database_id=10, plate="BBB222")
 
         mock_artimo = MagicMock()
-        mock_artimo.get_month_range.return_value = ("2026-01-01", "2026-01-31")
+        mock_artimo.get_month_range.return_value = (
+            "2026-01-01T05:00:00.000Z",
+            "2026-02-01T04:59:59.999Z",
+        )
+        mock_artimo.get_local_month_bounds.return_value = (
+            datetime(2026, 1, 1),
+            datetime(2026, 1, 31, 23, 59, 59, 999000),
+        )
+        mock_artimo.get_trip_lookback_range.return_value = (
+            "2025-12-30T05:00:00.000Z",
+            "2026-02-01T04:59:59.999Z",
+        )
         mock_artimo.get_report.side_effect = ArtimoAuthError(
             "Credenciales Artimo invalidas. Revisa usuario y contraseña de la database."
         )

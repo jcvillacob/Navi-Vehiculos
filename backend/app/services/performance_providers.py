@@ -13,6 +13,7 @@ from app.clients.artimo_client import (
     ArtimoAuthError,
     ArtimoClient,
     ArtimoConfig,
+    ArtimoTripWindow,
     extract_consumption_liters,
     extract_distance_km,
     extract_engine_time_hours,
@@ -21,6 +22,7 @@ from app.clients.artimo_client import (
     extract_plate,
     extract_provider_vehicle_id,
     gallons_from_liters,
+    select_trips_in_window,
     sort_rows_by_timestamp,
 )
 from app.schemas.vehicle import MonthlyPerformanceRecord
@@ -120,6 +122,8 @@ def _derive_start_values(
     current_trip: dict | None,
     gps_rows: list[dict],
     warnings: list[str],
+    window_distance_km: float | None = None,
+    window_engine_hours: float | None = None,
 ) -> tuple[float | None, float | None]:
     odo_start = None
     horo_start = None
@@ -132,7 +136,9 @@ def _derive_start_values(
             warnings.append("Odometro inicial tomado del cierre de Artimo del mes anterior.")
     elif current_trip is not None:
         current_odo_end = extract_odometer(current_trip)
-        current_distance = extract_distance_km(current_trip)
+        current_distance = (
+            window_distance_km if window_distance_km is not None else extract_distance_km(current_trip)
+        )
         if current_odo_end is not None and current_distance is not None:
             odo_start = max(0.0, current_odo_end - current_distance)
             warnings.append("Odometro inicial estimado con el acumulado del mes actual.")
@@ -150,7 +156,9 @@ def _derive_start_values(
             warnings.append("Horometro inicial tomado del cierre de Artimo del mes anterior.")
     elif current_trip is not None:
         current_horo_end = extract_horometer(current_trip)
-        current_engine_time = extract_engine_time_hours(current_trip)
+        current_engine_time = (
+            window_engine_hours if window_engine_hours is not None else extract_engine_time_hours(current_trip)
+        )
         if current_horo_end is not None and current_engine_time is not None:
             horo_start = max(0.0, current_horo_end - current_engine_time)
             warnings.append("Horometro inicial estimado con las horas del mes actual.")
@@ -167,6 +175,8 @@ def _calculate_vehicle_record(
     previous_record: MonthlyPerformanceRecord | None,
     provider_vehicle_id: str,
     gps_rows: list[dict],
+    trip_window: ArtimoTripWindow | None = None,
+    gps_truncated: bool = False,
 ) -> MonthlyPerformanceRecord:
     warnings: list[str] = []
     if current_trip is None and not gps_rows:
@@ -191,12 +201,18 @@ def _calculate_vehicle_record(
         current_trip=current_trip,
         gps_rows=gps_rows,
         warnings=warnings,
+        window_distance_km=trip_window.distance_km if trip_window else None,
+        window_engine_hours=trip_window.engine_hours if trip_window else None,
     )
 
     odo_end = extract_odometer(current_trip) if current_trip is not None else gps_odo_end
     horo_end = extract_horometer(current_trip) if current_trip is not None else None
-    fuel_gallons = gallons_from_liters(extract_consumption_liters(current_trip))
-    hours_gps = extract_engine_time_hours(current_trip)
+    if trip_window is not None:
+        fuel_gallons = gallons_from_liters(trip_window.fuel_liters)
+        hours_gps = trip_window.engine_hours
+    else:
+        fuel_gallons = gallons_from_liters(extract_consumption_liters(current_trip))
+        hours_gps = extract_engine_time_hours(current_trip)
 
     kms_ecm = None
     if odo_start is not None and odo_end is not None:
@@ -207,9 +223,19 @@ def _calculate_vehicle_record(
         hours_ecm = max(0.0, horo_end - horo_start)
 
     status = "calculated"
+    if trip_window is not None and trip_window.trips_after_window:
+        warnings.append(
+            f"{trip_window.trips_after_window} viaje(s) terminan despues del corte del mes: "
+            "su recorrido queda contado en el mes siguiente."
+        )
+    if gps_truncated:
+        warnings.append(
+            "El reporte GPS llego al tope de filas incluso partiendo la ventana; "
+            "los kilometros GPS pueden estar incompletos."
+        )
     if current_trip is None:
         status = "partial"
-        warnings.append("No hubo resumen de viajes; se completo solo con datos GPS disponibles.")
+        warnings.append("No hubo viajes en el mes; se completo solo con datos GPS disponibles.")
     elif any(value is None for value in (odo_start, odo_end, horo_start, horo_end, fuel_gallons)):
         status = "partial"
         warnings.append("No fue posible completar todos los campos base del corte mensual.")
@@ -308,9 +334,17 @@ class ArtimoMonthlyPerformanceProvider:
 
         artimo = ArtimoClient(self._build_config(sample_target))
         current_start, current_end = artimo.get_month_range(year, month_number)
+        current_bounds = artimo.get_local_month_bounds(year, month_number)
+        # Los viajes se piden con arranque adelantado: Artimo filtra por inicio,
+        # así que sin ese margen se perderían los que cruzan la medianoche.
+        detail_start, detail_end = artimo.get_trip_lookback_range(year, month_number)
         previous_year = int(previous_month[:4])
         previous_month_number = int(previous_month[-2:])
         previous_start, previous_end = artimo.get_month_range(previous_year, previous_month_number)
+        previous_bounds = artimo.get_local_month_bounds(previous_year, previous_month_number)
+        previous_detail_start, previous_detail_end = artimo.get_trip_lookback_range(
+            previous_year, previous_month_number
+        )
 
         try:
             current_trips = {
@@ -392,21 +426,43 @@ class ArtimoMonthlyPerformanceProvider:
                 )
 
                 try:
-                    gps_rows = artimo.get_report(
+                    gps_page = artimo.get_report_paged(
                         "gps",
                         current_start,
                         current_end,
                         resource_id=provider_vehicle_id,
                     )
+                    trip_window = select_trips_in_window(
+                        artimo.get_trip_details(
+                            detail_start, detail_end, resource_id=provider_vehicle_id
+                        ),
+                        window_start_local=current_bounds[0],
+                        window_end_local=current_bounds[1],
+                    )
+                    previous_record = previous_records.get((target.customer_database_id, target.plate))
+                    if previous_record is None or previous_record.odo_end is None:
+                        # Sin cierre guardado hay que reconstruirlo con la misma
+                        # regla, no con el agregado (que se pasa del corte).
+                        previous_trip = select_trips_in_window(
+                            artimo.get_trip_details(
+                                previous_detail_start,
+                                previous_detail_end,
+                                resource_id=provider_vehicle_id,
+                            ),
+                            window_start_local=previous_bounds[0],
+                            window_end_local=previous_bounds[1],
+                        ).close_trip or previous_trip
                     rows.append(
                         _calculate_vehicle_record(
                             target=target,
                             month=month,
-                            current_trip=current_trip,
+                            current_trip=trip_window.close_trip,
                             previous_trip=previous_trip,
-                            previous_record=previous_records.get((target.customer_database_id, target.plate)),
+                            previous_record=previous_record,
                             provider_vehicle_id=provider_vehicle_id,
-                            gps_rows=gps_rows,
+                            gps_rows=gps_page.rows,
+                            trip_window=trip_window,
+                            gps_truncated=gps_page.truncated,
                         )
                     )
                 except Exception as exc:

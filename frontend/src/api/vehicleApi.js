@@ -903,6 +903,18 @@ export async function createGeotabRuleGroup(databaseId, payload) {
   return parseJsonOrThrow(response, "Error creando grupo de reglas");
 }
 
+export async function updateGeotabRuleApplication(applicationId, payload) {
+  const response = await fetchWithAuth(
+    buildUrl(`/api/v1/customers/rules/applications/${applicationId}`),
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  return parseJsonOrThrow(response, "Error actualizando la aplicación de la regla");
+}
+
 export async function resolveGeotabRule(databaseId, ruleId) {
   const query = new URLSearchParams({ rule_id: ruleId.trim() });
   const response = await fetchWithAuth(

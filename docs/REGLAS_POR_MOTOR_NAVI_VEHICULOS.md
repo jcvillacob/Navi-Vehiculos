@@ -116,15 +116,18 @@ reglas aplicables. La verdad de "qué regla aplica a qué vehículo" es
 > `technical_number` único + `engine_name`). El vehículo conoce su motor por
 > `vehicle_motor_assignments.technical_number` → `motor_catalog`.
 
-Por eso **no se agregaron columnas `motor_type` ni check-constraints** (serían una
-segunda fuente de verdad que pelea con los grupos). La corrección fue **exponer
-`motor_type` en el snapshot**, derivándolo de lo que ya existe:
+Por eso **no se agregó una columna `motor_type` a `geotab_rules`** (sería una
+segunda fuente de verdad que pelea con los grupos). La aplicación concreta sí
+guarda `motor_id` en `geotab_rule_applications` y tiene un `CHECK` que exige
+motor para `category = operacion`. El snapshot expone `motor_type` derivándolo
+de esa relación:
 
 - **`motor_type` = `motor_catalog.engine_name`** (la familia: `ISD`, `X15`, …),
   normalizado con trim en ambos lados para que el cruce no se rompa por espacios.
-- **Regla**: `engine_name` del motor del grupo al que pertenece la regla
-  (`geotab_rule_group_rules` → `geotab_rule_groups.motor_id` → `motor_catalog`).
-  `habito_seguro` y `operacion` aún sin grupo → `motor_type = null`.
+- **Regla**: `engine_name` del motor de su aplicación
+  (`geotab_rule_applications.motor_id` → `motor_catalog`). Las aplicaciones
+  `operacion` siempre tienen motor; una regla física aún sin asignar no se
+  exporta. Los hábitos seguros globales sí usan `motor_type = null`.
 - **Vehículo**: `engine_name` del motor cuyo `technical_number` coincide; `null` si
   el `technical_number` no está en el catálogo.
 

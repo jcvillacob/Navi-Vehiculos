@@ -30,10 +30,35 @@ function formatMatchModeLabel(value) {
   return value === "any" ? "Cualquiera" : "Todas";
 }
 
-const RULE_EVENT_TYPES = [
-  { value: "", label: "Evento general" },
-  { value: "exceso_rpm", label: "Exceso RPM" }
+const SAFE_HABIT_DESCRIPTIONS = [
+  "Excesos de velocidad",
+  "Giros bruscos",
+  "Frenadas bruscas",
+  "Baches o Resaltos fuertes",
+  "Aceleraciones bruscas"
 ];
+
+// Bandas de RPM explicitas (ver backend app/services/rule_bands.py). Solo aplican a
+// aplicaciones de categoria 'operacion'.
+const RULE_BANDS = [
+  { value: "rango_bajo", label: "Rango Bajo" },
+  { value: "rango_economico", label: "Rango Económico" },
+  { value: "rango_balanceado", label: "Rango Balanceado" },
+  { value: "rango_potencia", label: "Rango Potencia" },
+  { value: "rango_potencia_ineficiente", label: "Rango Potencia Ineficiente" },
+  { value: "exceso_rpm", label: "Exceso RPM" },
+  { value: "ralenti", label: "Ralentí" }
+];
+
+const RULE_BAND_LABELS = RULE_BANDS.reduce((acc, band) => {
+  acc[band.value] = band.label;
+  return acc;
+}, {});
+
+function formatBandLabel(band) {
+  if (!band) return "Sin banda";
+  return RULE_BAND_LABELS[band] || band;
+}
 
 function getRuleApplications(rule) {
   if (Array.isArray(rule.applications) && rule.applications.length > 0) {
@@ -46,13 +71,15 @@ function getRuleApplications(rule) {
       motor_id: null,
       motor_name: null,
       technical_number: null,
-      event_type: null
+      event_type: null,
+      description: null
     }
   ];
 }
 
 function formatRuleApplicationLabel(application) {
-  if (application.event_type === "exceso_rpm") return "Exceso RPM";
+  if (application.description) return application.description;
+  if (application.event_type === "exceso_rpm") return "Excesos de RPM";
   return application.category === "habito_seguro" ? "Hábito seguro" : "Operación";
 }
 
@@ -842,6 +869,11 @@ function CredentialsPanel({ databaseId, canEdit = true }) {
   const [newLabel, setNewLabel] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [openCredentialId, setOpenCredentialId] = useState(null);
+  const [editingCredentialId, setEditingCredentialId] = useState(null);
+  const [editUsername, setEditUsername] = useState("");
+  const [editPassword, setEditPassword] = useState("");
+  const [editLabel, setEditLabel] = useState("");
 
   const refresh = async () => {
     setLoading(true);
@@ -906,6 +938,39 @@ function CredentialsPanel({ databaseId, canEdit = true }) {
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "No fue posible eliminar la credencial");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const startEditingCredential = (credential) => {
+    setEditingCredentialId(credential.id);
+    setEditUsername(credential.username);
+    setEditPassword("");
+    setEditLabel(credential.label || "");
+    setConfirmDeleteId(null);
+  };
+
+  const handleEditCredential = async (event, credential) => {
+    event.preventDefault();
+    if (!editUsername.trim()) return;
+
+    setSaving(true);
+    setError("");
+    try {
+      const payload = {
+        username: editUsername.trim(),
+        label: editLabel.trim()
+      };
+      if (editPassword.trim()) {
+        payload.password = editPassword.trim();
+      }
+      await updateDatabaseCredential(credential.id, payload);
+      setEditingCredentialId(null);
+      setEditPassword("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No fue posible actualizar la credencial");
     } finally {
       setSaving(false);
     }
@@ -978,72 +1043,299 @@ function CredentialsPanel({ databaseId, canEdit = true }) {
       {loading ? (
         <p className="support-copy">Cargando credenciales...</p>
       ) : credentials.length > 0 ? (
-        <div className="unassigned-rules-list">
-          {credentials.map((credential) => (
-            <div className="rule-list-item" key={`credential-${credential.id}`}>
-              <div className="rule-select-button" style={{ cursor: "default" }}>
-                <span className="rule-list-name">
-                  {credential.username}
-                  {credential.label ? <span className="rules-count-subtle"> · {credential.label}</span> : null}
-                </span>
-                <span className="rule-id-cell">
-                  {credential.is_active ? "Activa" : "Inactiva"}
-                  {credential.last_used_at
-                    ? ` · usada ${new Date(credential.last_used_at).toLocaleString()}`
-                    : " · sin uso"}
-                  {credential.last_auth_error_at ? " · ⚠ error de autenticación reciente" : ""}
-                </span>
-              </div>
-              {canEdit ? (
-                <>
-                  <button
-                    type="button"
-                    className="button-secondary button-sm"
-                    onClick={() => handleToggleActive(credential)}
-                    disabled={saving}
-                  >
-                    {credential.is_active ? "Desactivar" : "Activar"}
-                  </button>
-                  {confirmDeleteId === credential.id ? (
-                    <>
+        <div className="motor-group-card-rules">
+          {credentials.map((credential) => {
+            const isOpen = openCredentialId === credential.id;
+
+            return (
+              <details className="motor-group-rule credential-rule" key={`credential-${credential.id}`} open={isOpen}>
+                <summary
+                  className="motor-group-rule-summary"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setOpenCredentialId(isOpen ? null : credential.id);
+                  }}
+                >
+                  <span className="motor-group-rule-chevron" />
+                  <span className="motor-group-rule-summary-main">
+                    <span className="motor-group-rule-chip-name">{credential.username}</span>
+                    {credential.label ? <code className="motor-group-rule-chip-id">{credential.label}</code> : null}
+                  </span>
+                  <span className="motor-group-rule-summary-meta">
+                    <span className={`rule-badge ${credential.is_active ? "is-ok" : "is-muted"}`}>
+                      {credential.is_active ? "Activa" : "Inactiva"}
+                    </span>
+                  </span>
+                </summary>
+                <div className="motor-group-rule-content credential-rule-content">
+                  <div className="credential-detail-grid">
+                    <div>
+                      <span className="db-detail-label">Último uso</span>
+                      <strong>
+                        {credential.last_used_at
+                          ? new Date(credential.last_used_at).toLocaleString()
+                          : "Sin uso registrado"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="db-detail-label">Autenticación</span>
+                      <strong>{credential.last_auth_error_at ? "Error reciente" : "Sin errores recientes"}</strong>
+                    </div>
+                  </div>
+                  {credential.last_auth_error_at ? (
+                    <p className="credential-auth-warning">
+                      Último error: {new Date(credential.last_auth_error_at).toLocaleString()}
+                    </p>
+                  ) : null}
+                  {canEdit && editingCredentialId === credential.id ? (
+                    <form className="credential-edit-form" onSubmit={(event) => handleEditCredential(event, credential)}>
+                      <div className="rule-assign-form-row">
+                        <div className="form-field">
+                          <label htmlFor={`credential-edit-username-${credential.id}`}>Correo o usuario</label>
+                          <input
+                            id={`credential-edit-username-${credential.id}`}
+                            value={editUsername}
+                            onChange={(event) => setEditUsername(event.target.value)}
+                            required
+                            autoComplete="off"
+                          />
+                        </div>
+                        <div className="form-field">
+                          <label htmlFor={`credential-edit-password-${credential.id}`}>Nueva contraseña</label>
+                          <input
+                            id={`credential-edit-password-${credential.id}`}
+                            type="password"
+                            value={editPassword}
+                            onChange={(event) => setEditPassword(event.target.value)}
+                            placeholder="Déjala vacía para conservarla"
+                            autoComplete="new-password"
+                          />
+                        </div>
+                        <div className="form-field">
+                          <label htmlFor={`credential-edit-label-${credential.id}`}>Etiqueta</label>
+                          <input
+                            id={`credential-edit-label-${credential.id}`}
+                            value={editLabel}
+                            onChange={(event) => setEditLabel(event.target.value)}
+                            placeholder="Opcional"
+                            autoComplete="off"
+                          />
+                        </div>
+                      </div>
+                      <div className="motor-group-rule-actions">
+                        <button type="submit" className="button button-sm" disabled={saving || !editUsername.trim()}>
+                          Listo
+                        </button>
+                        <button
+                          type="button"
+                          className="button-secondary button-sm"
+                          onClick={() => setEditingCredentialId(null)}
+                          disabled={saving}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </form>
+                  ) : canEdit ? (
+                    <div className="motor-group-rule-actions">
                       <button
                         type="button"
-                        className="button-secondary button-sm rule-confirm-delete"
-                        onClick={() => handleDelete(credential.id)}
+                        className="button-secondary button-sm"
+                        onClick={() => startEditingCredential(credential)}
                         disabled={saving}
                       >
-                        Confirmar
+                        Editar
                       </button>
                       <button
                         type="button"
-                        className="icon-button rule-delete-button"
-                        onClick={() => setConfirmDeleteId(null)}
-                        title="Cancelar"
+                        className="button-secondary button-sm"
+                        onClick={() => handleToggleActive(credential)}
+                        disabled={saving}
                       >
-                        &#8592;
+                        {credential.is_active ? "Desactivar" : "Activar"}
                       </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      className="icon-button rule-delete-button"
-                      onClick={() => setConfirmDeleteId(credential.id)}
-                      disabled={saving}
-                      title="Eliminar"
-                    >
-                      &#10005;
-                    </button>
-                  )}
-                </>
-              ) : null}
-            </div>
-          ))}
+                      {confirmDeleteId === credential.id ? (
+                        <>
+                          <button
+                            type="button"
+                            className="button-secondary button-sm rule-confirm-delete"
+                            onClick={() => handleDelete(credential.id)}
+                            disabled={saving}
+                          >
+                            Confirmar eliminación
+                          </button>
+                          <button
+                            type="button"
+                            className="button-secondary button-sm"
+                            onClick={() => setConfirmDeleteId(null)}
+                          >
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="button-secondary button-sm rule-delete-action"
+                          onClick={() => setConfirmDeleteId(credential.id)}
+                          disabled={saving}
+                        >
+                          Eliminar
+                        </button>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </details>
+            );
+          })}
         </div>
       ) : (
         <div className="rules-empty-state">
           <p>Sin credenciales registradas para esta database.</p>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── Banda de RPM por aplicacion 'operacion' (badge o editor inline) ─── */
+function RuleBandControl({ rule, canEdit, loading, onSetRuleBand, onSaved, onCancel }) {
+  const [band, setBand] = useState(rule.band || "");
+  const [isDescenso, setIsDescenso] = useState(Boolean(rule.is_descenso));
+
+  const handleBandChange = (nextBand) => {
+    setBand(nextBand);
+    if (!nextBand || nextBand === "ralenti") {
+      setIsDescenso(false);
+    }
+  };
+
+  const handleSave = async () => {
+    await onSetRuleBand(
+      { id: rule.application_id },
+      { band: band || null, is_descenso: isDescenso }
+    );
+    onSaved?.();
+  };
+
+  if (!canEdit) {
+    return (
+      <span className={`rule-band-badge ${rule.band ? "" : "is-empty"}`}>
+        {formatBandLabel(rule.band)}
+      </span>
+    );
+  }
+
+  return (
+    <div className="rule-band-editor">
+      <select
+        value={band}
+        onChange={(event) => handleBandChange(event.target.value)}
+        disabled={loading}
+        aria-label="Banda de RPM de la aplicación"
+        title={
+          rule.suggested_band && !rule.band
+            ? `Sugerida: ${formatBandLabel(rule.suggested_band)}`
+            : "Banda de RPM"
+        }
+      >
+        <option value="">Sin banda</option>
+        {RULE_BANDS.map((band) => (
+          <option key={band.value} value={band.value}>
+            {band.label}
+          </option>
+        ))}
+      </select>
+      <label className="rule-descenso-check" title="Marca de descenso">
+        <input
+          type="checkbox"
+          checked={isDescenso}
+          onChange={(event) => setIsDescenso(event.target.checked)}
+          disabled={loading || !band || band === "ralenti"}
+        />
+        Desc.
+      </label>
+      <button
+        type="button"
+        className="button button-sm"
+        onClick={handleSave}
+        disabled={loading || (band === (rule.band || "") && isDescenso === Boolean(rule.is_descenso))}
+      >
+        Listo
+      </button>
+      <button type="button" className="button-secondary button-sm" onClick={onCancel} disabled={loading}>
+        Cancelar
+      </button>
+    </div>
+  );
+}
+
+function SafeHabitControl({ application, motors, loading, onUpdate, onSaved, onCancel }) {
+  const [description, setDescription] = useState(application.description || "");
+  const [motorId, setMotorId] = useState(
+    application.event_type === "exceso_rpm" && application.motor_id
+      ? String(application.motor_id)
+      : ""
+  );
+  const isRpm = description === "Excesos de RPM";
+  const unchanged =
+    description === (application.description || "") &&
+    (!isRpm || motorId === String(application.motor_id || ""));
+
+  const handleSave = async () => {
+    await onUpdate(
+      { id: application.application_id || application.id },
+      {
+        description,
+        motor_id: isRpm && motorId ? Number(motorId) : null
+      }
+    );
+    onSaved?.();
+  };
+
+  return (
+    <div className="rule-band-editor">
+      <select
+        value={description}
+        onChange={(event) => {
+          const value = event.target.value;
+          setDescription(value);
+          if (value !== "Excesos de RPM") setMotorId("");
+        }}
+        disabled={loading}
+        aria-label="Clasificación del hábito seguro"
+      >
+        <option value="">Selecciona un hábito seguro</option>
+        {SAFE_HABIT_DESCRIPTIONS.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+      {isRpm ? (
+        <select
+          value={motorId}
+          onChange={(event) => setMotorId(event.target.value)}
+          disabled={loading}
+          aria-label="Motor de la regla"
+        >
+          <option value="">Selecciona un motor</option>
+          {motors.map((motor) => (
+            <option key={`edit-safe-motor-${motor.id}`} value={motor.id}>
+              {motor.engine_name} | {motor.technical_number}
+            </option>
+          ))}
+        </select>
+      ) : null}
+      <button
+        type="button"
+        className="button button-sm"
+        onClick={handleSave}
+        disabled={loading || !description || (isRpm && !motorId) || unchanged}
+      >
+        Listo
+      </button>
+      <button type="button" className="button-secondary button-sm" onClick={onCancel} disabled={loading}>
+        Cancelar
+      </button>
     </div>
   );
 }
@@ -1057,6 +1349,7 @@ function DatabaseDetailModal({
   onClose,
   onEdit,
   onAddRule,
+  onSetRuleBand,
   onDeleteRule,
   onAddRuleGroup,
   onDeleteRuleGroup,
@@ -1065,11 +1358,15 @@ function DatabaseDetailModal({
   const [ruleId, setRuleId] = useState("");
   const [ruleCategory, setRuleCategory] = useState("operacion");
   const [ruleMotorId, setRuleMotorId] = useState("");
-  const [ruleEventType, setRuleEventType] = useState("");
+  const [ruleSafeHabitDescription, setRuleSafeHabitDescription] = useState("");
+  const [ruleBand, setRuleBand] = useState("");
+  const [ruleIsDescenso, setRuleIsDescenso] = useState(false);
   const [resolveStatus, setResolveStatus] = useState("idle");
   const [resolveError, setResolveError] = useState("");
   const [rulePreview, setRulePreview] = useState(null);
   const [selectedRuleId, setSelectedRuleId] = useState(null);
+  const [openRuleKey, setOpenRuleKey] = useState(null);
+  const [editingRuleKey, setEditingRuleKey] = useState(null);
   const [pendingSelectionRuleId, setPendingSelectionRuleId] = useState(null);
   const [inspection, setInspection] = useState(null);
   const [inspectionLoading, setInspectionLoading] = useState(false);
@@ -1128,23 +1425,23 @@ function DatabaseDetailModal({
       const existingRuleKeys = new Set(merged.rules.map((rule) => rule.application_key));
       for (const rule of group.rules) {
         const fullRule = rules.find((candidate) => candidate.id === rule.rule_record_id);
-        const hasMotorRpmApplication = fullRule
-          ? getRuleApplications(fullRule).some(
-              (application) =>
-                application.category === "habito_seguro" &&
-                application.event_type === "exceso_rpm" &&
-                sameMotorIdentity(application, group)
-            )
-          : false;
-        if (hasMotorRpmApplication) continue;
         const applicationKey = `${rule.rule_record_id}:operacion:`;
         if (existingRuleKeys.has(applicationKey)) continue;
         existingRuleKeys.add(applicationKey);
+        const opApp = fullRule
+          ? getRuleApplications(fullRule).find(
+              (application) => application.category === "operacion"
+            )
+          : null;
         merged.rules.push({
           ...rule,
           application_key: applicationKey,
           application_category: "operacion",
-          event_type: null
+          event_type: null,
+          application_id: typeof opApp?.id === "number" ? opApp.id : null,
+          band: opApp?.band ?? null,
+          is_descenso: Boolean(opApp?.is_descenso),
+          suggested_band: opApp?.suggested_band ?? null
         });
       }
       merged.rules.sort((a, b) => a.name.localeCompare(b.name));
@@ -1154,6 +1451,20 @@ function DatabaseDetailModal({
     for (const rule of rules) {
       for (const application of getRuleApplications(rule)) {
         if (!application.motor_id) continue;
+        if (
+          application.category === "habito_seguro" &&
+          application.event_type === "exceso_rpm" &&
+          getRuleApplications(rule).some(
+            (candidate) =>
+              candidate.category === "operacion" &&
+              candidate.band === "exceso_rpm" &&
+              sameMotorIdentity(candidate, application)
+          )
+        ) {
+          // Exceso RPM se administra y muestra una sola vez como banda del motor.
+          // La aplicacion de habito seguro es derivada y solo viaja por la API.
+          continue;
+        }
         const motorName = application.motor_name || "Motor";
         const technicalNumber = application.technical_number || "";
         const key = `${String(motorName).trim().toLowerCase()}|${String(technicalNumber).trim()}`;
@@ -1178,7 +1489,12 @@ function DatabaseDetailModal({
           rule_id: rule.rule_id,
           application_key: applicationKey,
           application_category: application.category,
-          event_type: application.event_type
+          event_type: application.event_type,
+          description: application.description,
+          application_id: typeof application.id === "number" ? application.id : null,
+          band: application.band ?? null,
+          is_descenso: Boolean(application.is_descenso),
+          suggested_band: application.suggested_band ?? null
         });
       }
     }
@@ -1302,9 +1618,23 @@ function DatabaseDetailModal({
   useEffect(() => {
     if (ruleCategory === "operacion") {
       setRuleMotorId("");
-      setRuleEventType("");
+      setRuleSafeHabitDescription("");
+    } else {
+      // La banda solo aplica a 'operacion'.
+      setRuleBand("");
+      setRuleIsDescenso(false);
     }
   }, [ruleCategory]);
+
+  // Pre-llena la banda con la sugerencia del backend (sugeridor por keyword) cuando
+  // se resuelve una regla 'operacion'; el humano confirma o corrige.
+  useEffect(() => {
+    if (ruleCategory !== "operacion" || !rulePreview?.exists) {
+      return;
+    }
+    setRuleBand(rulePreview.suggested_band || "");
+    setRuleIsDescenso(Boolean(rulePreview.suggested_is_descenso));
+  }, [rulePreview, ruleCategory]);
 
   const handleAddRule = async (event) => {
     event.preventDefault();
@@ -1312,19 +1642,29 @@ function DatabaseDetailModal({
     if (!normalizedRuleId || resolveStatus !== "resolved" || rulePreview?.rule_id !== normalizedRuleId) {
       return;
     }
-    if (ruleEventType === "exceso_rpm" && !ruleMotorId) {
+    if (ruleCategory === "habito_seguro" && !ruleSafeHabitDescription) {
+      return;
+    }
+    if (ruleCategory === "operacion" && !ruleMotorId) {
+      return;
+    }
+    if (ruleSafeHabitDescription === "Excesos de RPM" && !ruleMotorId) {
       return;
     }
     const created = await onAddRule({
       rule_id: normalizedRuleId,
       category: ruleCategory,
       motor_id: ruleMotorId ? Number(ruleMotorId) : null,
-      event_type: ruleEventType || null
+      description: ruleCategory === "habito_seguro" ? ruleSafeHabitDescription : null,
+      band: ruleCategory === "operacion" ? ruleBand || null : null,
+      is_descenso: ruleCategory === "operacion" ? ruleIsDescenso : false
     });
     setRuleId("");
     setRuleCategory("operacion");
     setRuleMotorId("");
-    setRuleEventType("");
+    setRuleSafeHabitDescription("");
+    setRuleBand("");
+    setRuleIsDescenso(false);
     setResolveStatus("idle");
     setResolveError("");
     setRulePreview(null);
@@ -1420,61 +1760,126 @@ function DatabaseDetailModal({
                 <span className={`rule-resolution-dot is-${resolveStatus}`} />
               </div>
               <form className="rule-add-form" onSubmit={handleAddRule}>
-                <input
-                  value={ruleId}
-                  onChange={(event) => setRuleId(event.target.value)}
-                  placeholder="Pega el ID de regla Geotab"
-                  required
-                  autoComplete="off"
-                />
-                <select
-                  value={ruleCategory}
-                  onChange={(event) => setRuleCategory(event.target.value)}
-                  disabled={loading}
-                  aria-label="Categoria de la regla"
-                >
-                  <option value="operacion">Operación</option>
-                  <option value="habito_seguro">Hábito seguro</option>
-                </select>
-                {ruleCategory === "habito_seguro" ? (
-                  <>
+                <div className="rule-add-input-row">
+                  <input
+                    value={ruleId}
+                    onChange={(event) => setRuleId(event.target.value)}
+                    placeholder="Pega el ID de regla Geotab"
+                    required
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="rule-add-controls-row">
+                  <div className="rule-add-filters">
                     <select
-                      value={ruleEventType}
-                      onChange={(event) => setRuleEventType(event.target.value)}
+                      value={ruleCategory}
+                      onChange={(event) => setRuleCategory(event.target.value)}
                       disabled={loading}
-                      aria-label="Tipo de evento"
+                      aria-label="Categoria de la regla"
                     >
-                      {RULE_EVENT_TYPES.map((option) => (
-                        <option key={option.value || "general"} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
+                      <option value="operacion">Operación</option>
+                      <option value="habito_seguro">Hábito seguro</option>
                     </select>
-                    <select
-                      value={ruleMotorId}
-                      onChange={(event) => setRuleMotorId(event.target.value)}
-                      disabled={loading || motorsLoading}
-                      required={ruleEventType === "exceso_rpm"}
-                      aria-label="Motor de la regla"
-                    >
-                      <option value="">
-                        {motorsLoading ? "Cargando..." : "Global"}
-                      </option>
-                      {motors.map((motor) => (
-                        <option key={`rule-motor-${motor.id}`} value={motor.id}>
-                          {motor.engine_name} | {motor.technical_number}
-                        </option>
-                      ))}
-                    </select>
-                  </>
-                ) : null}
-                {canEdit ? (
+                    {ruleCategory === "habito_seguro" ? (
+                      <>
+                        <select
+                          value={ruleSafeHabitDescription}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setRuleSafeHabitDescription(value);
+                            if (value !== "Excesos de RPM") {
+                              setRuleMotorId("");
+                            }
+                          }}
+                          disabled={loading}
+                          required
+                          aria-label="Clasificación del hábito seguro"
+                        >
+                          <option value="">Selecciona un hábito seguro</option>
+                          {SAFE_HABIT_DESCRIPTIONS.map((description) => (
+                            <option key={description} value={description}>
+                              {description}
+                            </option>
+                          ))}
+                        </select>
+                        {ruleSafeHabitDescription === "Excesos de RPM" ? (
+                          <select
+                            value={ruleMotorId}
+                            onChange={(event) => setRuleMotorId(event.target.value)}
+                            disabled={loading || motorsLoading}
+                            required
+                            aria-label="Motor de la regla"
+                          >
+                            <option value="">
+                              {motorsLoading ? "Cargando..." : "Selecciona un motor"}
+                            </option>
+                            {motors.map((motor) => (
+                              <option key={`rule-motor-${motor.id}`} value={motor.id}>
+                                {motor.engine_name} | {motor.technical_number}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {ruleCategory === "operacion" ? (
+                      <>
+                        <select
+                          value={ruleMotorId}
+                          onChange={(event) => setRuleMotorId(event.target.value)}
+                          disabled={loading || motorsLoading}
+                          required
+                          aria-label="Motor de la regla"
+                        >
+                          <option value="">
+                            {motorsLoading ? "Cargando..." : "Selecciona un motor"}
+                          </option>
+                          {motors.map((motor) => (
+                            <option key={`operation-rule-motor-${motor.id}`} value={motor.id}>
+                              {motor.engine_name} | {motor.technical_number}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={ruleBand}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setRuleBand(value);
+                            if (!value || value === "ralenti") {
+                              setRuleIsDescenso(false);
+                            }
+                          }}
+                          disabled={loading}
+                          aria-label="Banda de RPM"
+                        >
+                          <option value="">Sin banda</option>
+                          {RULE_BANDS.map((band) => (
+                            <option key={band.value} value={band.value}>
+                              {band.label}
+                            </option>
+                          ))}
+                        </select>
+                        <label className="rule-descenso-check" title="Marca de descenso">
+                          <input
+                            type="checkbox"
+                            checked={ruleIsDescenso}
+                            onChange={(event) => setRuleIsDescenso(event.target.checked)}
+                            disabled={loading || !ruleBand || ruleBand === "ralenti"}
+                          />
+                          Descenso
+                        </label>
+                      </>
+                    ) : null}
+                  </div>
+                  {canEdit ? (
                   <button
                     type="submit"
                     className="button button-sm"
                     disabled={
                       loading ||
-                      (ruleEventType === "exceso_rpm" && !ruleMotorId) ||
+                      (ruleCategory === "operacion" && !ruleMotorId) ||
+                      (ruleCategory === "habito_seguro" && !ruleSafeHabitDescription) ||
+                      (ruleSafeHabitDescription === "Excesos de RPM" && !ruleMotorId) ||
                       resolveStatus !== "resolved" ||
                       !rulePreview?.exists ||
                       rulePreview?.rule_id !== ruleId.trim()
@@ -1483,7 +1888,8 @@ function DatabaseDetailModal({
                   >
                     Agregar
                   </button>
-                ) : null}
+                  ) : null}
+                </div>
               </form>
 
               {rulePreview || resolveStatus === "loading" || (resolveStatus === "error" && resolveError) ? (
@@ -1629,61 +2035,132 @@ function DatabaseDetailModal({
                         </div>
                       </summary>
                       <div className="motor-group-card-rules">
-                        {group.rules.map((rule) => (
-                          <div
-                            className={`motor-group-rule-chip ${selectedRuleId === rule.rule_record_id ? "is-active" : ""}`}
-                            key={`mg-${group.id}-r-${rule.application_key || rule.rule_record_id}`}
+                        {group.rules.map((rule) => {
+                          const ruleKey = `mg-${group.id}-r-${rule.application_key || rule.rule_record_id}`;
+                          const isOpen = openRuleKey === ruleKey;
+                          const isEditing = editingRuleKey === ruleKey;
+
+                          return (
+                          <details
+                            className={`motor-group-rule ${selectedRuleId === rule.rule_record_id ? "is-active" : ""}`}
+                            key={ruleKey}
+                            open={isOpen}
                           >
-                            <button
-                              type="button"
-                              className="motor-group-rule-chip-main"
-                              onClick={() => setSelectedRuleId(rule.rule_record_id)}
+                            <summary
+                              className="motor-group-rule-summary"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                if (!isOpen) {
+                                setOpenRuleKey(ruleKey);
+                                setSelectedRuleId(rule.rule_record_id);
+                                setEditingRuleKey(null);
+                                } else {
+                                setOpenRuleKey(null);
+                                setEditingRuleKey(null);
+                              }
+                            }}
                             >
-                              <span className="motor-group-rule-chip-name">{rule.name}</span>
-                              {rule.application_category === "habito_seguro" ? (
-                                <span className="rule-app-tag">{formatRuleApplicationLabel(rule)}</span>
+                              <span className="motor-group-rule-chevron" />
+                              <span className="motor-group-rule-summary-main">
+                                <span className="motor-group-rule-chip-name">{rule.name}</span>
+                                <code className="motor-group-rule-chip-id">{rule.rule_id}</code>
+                              </span>
+                              <span className="motor-group-rule-summary-meta">
+                                {rule.application_category === "habito_seguro" ? (
+                                  <span className="rule-app-tag">{formatRuleApplicationLabel(rule)}</span>
+                                ) : (
+                                  <span className={`rule-band-badge ${rule.band ? "" : "is-empty"}`}>
+                                    {formatBandLabel(rule.band)}
+                                  </span>
+                                )}
+                              </span>
+                            </summary>
+                            <div className="motor-group-rule-content">
+                              <RuleSummaryCard
+                                inspection={
+                                  selectedRuleId === rule.rule_record_id && inspection?.rule_id === rule.rule_id
+                                    ? inspection
+                                    : null
+                                }
+                                loading={selectedRuleId === rule.rule_record_id && inspectionLoading}
+                                error={selectedRuleId === rule.rule_record_id ? inspectionError : ""}
+                                emptyMessage="Cargando descripción de la regla..."
+                              />
+                              {canEdit ? (
+                                <div className="motor-group-rule-actions">
+                                  {Boolean(rule.application_id) ? (
+                                    isEditing ? (
+                                      rule.application_category === "habito_seguro" ? (
+                                        <SafeHabitControl
+                                          application={rule}
+                                          motors={motors}
+                                          loading={loading}
+                                          onUpdate={onSetRuleBand}
+                                          onSaved={() => setEditingRuleKey(null)}
+                                          onCancel={() => setEditingRuleKey(null)}
+                                        />
+                                      ) : (
+                                        <RuleBandControl
+                                          rule={rule}
+                                          canEdit
+                                          loading={loading}
+                                          onSetRuleBand={onSetRuleBand}
+                                          onSaved={() => setEditingRuleKey(null)}
+                                          onCancel={() => setEditingRuleKey(null)}
+                                        />
+                                      )
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="button-secondary button-sm"
+                                        onClick={() => setEditingRuleKey(ruleKey)}
+                                        disabled={loading}
+                                      >
+                                        Editar
+                                      </button>
+                                    )
+                                  ) : null}
+                                  {confirmDeleteRuleId === rule.rule_record_id ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="button-secondary button-sm rule-confirm-delete"
+                                        onClick={() => {
+                                          setConfirmDeleteRuleId(null);
+                                          onDeleteRule({
+                                            id: rule.rule_record_id,
+                                            name: rule.name,
+                                            rule_id: rule.rule_id
+                                          });
+                                        }}
+                                        disabled={loading}
+                                      >
+                                        Confirmar eliminación
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="button-secondary button-sm"
+                                        onClick={() => setConfirmDeleteRuleId(null)}
+                                      >
+                                        Cancelar
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="button-secondary button-sm rule-delete-action"
+                                      onClick={() => setConfirmDeleteRuleId(rule.rule_record_id)}
+                                      disabled={loading}
+                                    >
+                                      Eliminar
+                                    </button>
+                                  )}
+                                </div>
                               ) : null}
-                              <code className="motor-group-rule-chip-id">{rule.rule_id}</code>
-                            </button>
-                            {canEdit && confirmDeleteRuleId === rule.rule_record_id ? (
-                              <>
-                                <button
-                                  type="button"
-                                  className="button-secondary button-sm rule-confirm-delete"
-                                  onClick={() => {
-                                    setConfirmDeleteRuleId(null);
-                                    onDeleteRule({
-                                      id: rule.rule_record_id,
-                                      name: rule.name,
-                                      rule_id: rule.rule_id
-                                    });
-                                  }}
-                                  disabled={loading}
-                                >
-                                  Confirmar
-                                </button>
-                                <button
-                                  type="button"
-                                  className="icon-button rule-delete-button"
-                                  onClick={() => setConfirmDeleteRuleId(null)}
-                                  title="Cancelar"
-                                >
-                                  &#8592;
-                                </button>
-                              </>
-                            ) : canEdit ? (
-                              <button
-                                type="button"
-                                className="icon-button rule-delete-button"
-                                onClick={() => setConfirmDeleteRuleId(rule.rule_record_id)}
-                                disabled={loading}
-                                title="Eliminar regla"
-                              >
-                                &#10005;
-                              </button>
-                            ) : null}
-                          </div>
-                        ))}
+                            </div>
+                          </details>
+                          );
+                        })}
                       </div>
                     </details>
                   ))}
@@ -1769,58 +2246,110 @@ function DatabaseDetailModal({
                 </div>
               </div>
               {safeHabitRules.length > 0 ? (
-                <div className="unassigned-rules-list">
-                  {safeHabitRules.map(({ rule, application }) => (
-                    <div
-                      className={`rule-list-item ${selectedRuleId === rule.id ? "is-selected" : ""}`}
-                      key={`safe-habit-${rule.id}-${application.id}`}
-                    >
-                      <button
-                        type="button"
-                        className="rule-select-button"
-                        onClick={() => setSelectedRuleId(rule.id)}
+                <div className="motor-group-card-rules">
+                  {safeHabitRules.map(({ rule, application }) => {
+                    const ruleKey = `safe-habit-${rule.id}-${application.id}`;
+                    const isOpen = openRuleKey === ruleKey;
+                    const isEditing = editingRuleKey === ruleKey;
+
+                    return (
+                      <details
+                        className={`motor-group-rule ${selectedRuleId === rule.id ? "is-active" : ""}`}
+                        key={ruleKey}
+                        open={isOpen}
                       >
-                        <span className="rule-list-name">{rule.name}</span>
-                        {application.event_type ? (
-                          <span className="rule-app-tag">{formatRuleApplicationLabel(application)}</span>
-                        ) : null}
-                        <span className="rule-id-cell">{rule.rule_id}</span>
-                      </button>
-                      {canEdit && confirmDeleteRuleId === rule.id ? (
-                        <>
-                          <button
-                            type="button"
-                            className="button-secondary button-sm rule-confirm-delete"
-                            onClick={() => {
-                              setConfirmDeleteRuleId(null);
-                              onDeleteRule(rule);
-                            }}
-                            disabled={loading}
-                          >
-                            Confirmar
-                          </button>
-                          <button
-                            type="button"
-                            className="icon-button rule-delete-button"
-                            onClick={() => setConfirmDeleteRuleId(null)}
-                            title="Cancelar"
-                          >
-                            &#8592;
-                          </button>
-                        </>
-                      ) : canEdit ? (
-                        <button
-                          type="button"
-                          className="icon-button rule-delete-button"
-                          onClick={() => setConfirmDeleteRuleId(rule.id)}
-                          disabled={loading}
-                          title="Eliminar"
+                        <summary
+                          className="motor-group-rule-summary"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (!isOpen) {
+                              setOpenRuleKey(ruleKey);
+                              setSelectedRuleId(rule.id);
+                              setEditingRuleKey(null);
+                            } else {
+                              setOpenRuleKey(null);
+                              setEditingRuleKey(null);
+                            }
+                          }}
                         >
-                          &#10005;
-                        </button>
-                      ) : null}
-                    </div>
-                  ))}
+                          <span className="motor-group-rule-chevron" />
+                          <span className="motor-group-rule-summary-main">
+                            <span className="motor-group-rule-chip-name">{rule.name}</span>
+                            <code className="motor-group-rule-chip-id">{rule.rule_id}</code>
+                          </span>
+                          <span className="motor-group-rule-summary-meta">
+                            <span className="rule-app-tag">{formatRuleApplicationLabel(application)}</span>
+                          </span>
+                        </summary>
+                        <div className="motor-group-rule-content">
+                          <RuleSummaryCard
+                            inspection={
+                              selectedRuleId === rule.id && inspection?.rule_id === rule.rule_id
+                                ? inspection
+                                : null
+                            }
+                            loading={selectedRuleId === rule.id && inspectionLoading}
+                            error={selectedRuleId === rule.id ? inspectionError : ""}
+                            emptyMessage="Cargando descripción de la regla..."
+                          />
+                          {canEdit ? (
+                            <div className="motor-group-rule-actions">
+                              {isEditing ? (
+                                <SafeHabitControl
+                                  application={application}
+                                  motors={motors}
+                                  loading={loading}
+                                  onUpdate={onSetRuleBand}
+                                  onSaved={() => setEditingRuleKey(null)}
+                                  onCancel={() => setEditingRuleKey(null)}
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="button-secondary button-sm"
+                                  onClick={() => setEditingRuleKey(ruleKey)}
+                                  disabled={loading}
+                                >
+                                  Editar
+                                </button>
+                              )}
+                              {confirmDeleteRuleId === rule.id ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="button-secondary button-sm rule-confirm-delete"
+                                    onClick={() => {
+                                      setConfirmDeleteRuleId(null);
+                                      onDeleteRule(rule);
+                                    }}
+                                    disabled={loading}
+                                  >
+                                    Confirmar eliminación
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="button-secondary button-sm"
+                                    onClick={() => setConfirmDeleteRuleId(null)}
+                                  >
+                                    Cancelar
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="button-secondary button-sm rule-delete-action"
+                                  onClick={() => setConfirmDeleteRuleId(rule.id)}
+                                  disabled={loading}
+                                >
+                                  Eliminar
+                                </button>
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+                      </details>
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="rules-empty-state">
@@ -1832,18 +2361,6 @@ function DatabaseDetailModal({
             {/* ── Credentials pool ── */}
             <CredentialsPanel databaseId={database.id} canEdit={canEdit} />
 
-            {/* ── Inspector panel ── */}
-            {selectedRule ? (
-              <div className="rule-inspector-section">
-                <div className="rules-label">Inspector</div>
-                <RuleInspectorPanel
-                  inspection={inspection}
-                  loading={inspectionLoading}
-                  error={inspectionError}
-                  selectedRule={selectedRule}
-                />
-              </div>
-            ) : null}
           </div>
         ) : null}
       </section>
@@ -1876,6 +2393,7 @@ export default function CustomersPage() {
     registerCustomerDatabase,
     editCustomerDatabase,
     addGeotabRule,
+    setGeotabRuleBand,
     addGeotabRuleGroup,
     removeGeotabRule,
     removeGeotabRuleGroup
@@ -1999,6 +2517,23 @@ export default function CustomersPage() {
       return created;
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message :"No fue posible crear la regla");
+      throw err;
+    }
+  };
+
+  const handleSetRuleBand = async (application, payload) => {
+    if (!resolvedViewingDb) return;
+    try {
+      const updated = await setGeotabRuleBand(
+        application.id,
+        resolvedViewingDb.id,
+        resolvedViewingDb.customer_id,
+        payload
+      );
+      pushToast("success", "Regla actualizada.");
+      return updated;
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "No fue posible actualizar la regla");
       throw err;
     }
   };
@@ -2246,6 +2781,7 @@ export default function CustomersPage() {
           onClose={() => setViewingDatabase(null)}
           onEdit={canEditCustomer ? openEditFromDetail : null}
           onAddRule={handleAddRule}
+          onSetRuleBand={handleSetRuleBand}
           onDeleteRule={handleDeleteRule}
           onAddRuleGroup={handleAddRuleGroup}
           onDeleteRuleGroup={handleDeleteRuleGroup}

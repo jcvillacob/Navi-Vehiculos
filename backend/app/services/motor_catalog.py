@@ -32,6 +32,7 @@ from app.schemas.vehicle import (
     GeotabRuleGroupRecord,
     GeotabRuleGroupRuleRecord,
     GeotabRuleApplicationRecord,
+    GeotabRuleApplicationUpdateRequest,
     GeotabRuleCreateRequest,
     GeotabRuleInspection,
     GeotabRuleRecord,
@@ -51,6 +52,11 @@ from app.services.storage import (
     delete_file,
     download_file,
     upload_file,
+)
+from app.services.rule_bands import (
+    RULE_BANDS,
+    suggest_band,
+    suggest_is_descenso,
 )
 from app.services.provider_registry import (
     infer_provider_key,
@@ -110,6 +116,14 @@ def _normalize_connection_type(value: str | None) -> str:
 
 
 RULE_CATEGORIES = ("operacion", "habito_seguro")
+SAFE_HABIT_DESCRIPTIONS = (
+    "Excesos de velocidad",
+    "Giros bruscos",
+    "Excesos de RPM",
+    "Frenadas bruscas",
+    "Baches o Resaltos fuertes",
+    "Aceleraciones bruscas",
+)
 
 
 def _normalize_rule_category(value: str | None) -> str:
@@ -122,6 +136,39 @@ def _normalize_rule_category(value: str | None) -> str:
 def _normalize_rule_event_type(value: str | None) -> str | None:
     cleaned = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
     return cleaned or None
+
+
+def _normalize_safe_habit_description(value: str | None) -> str | None:
+    cleaned = " ".join(str(value or "").split())
+    if not cleaned:
+        return None
+    canonical = {
+        description.casefold(): description for description in SAFE_HABIT_DESCRIPTIONS
+    }.get(cleaned.casefold())
+    if canonical is None:
+        raise ValueError("La clasificacion del habito seguro no es valida.")
+    return canonical
+
+
+def _normalize_rule_band(value: str | None) -> str | None:
+    cleaned = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not cleaned:
+        return None
+    if cleaned not in RULE_BANDS:
+        raise ValueError("La banda de RPM no es valida.")
+    return cleaned
+
+
+def _resolve_band_fields(
+    band: str | None, is_descenso: bool
+) -> tuple[str | None, bool]:
+    """Normaliza band y aplica las reglas de los CHECK a nivel aplicacion."""
+    normalized_band = _normalize_rule_band(band)
+    if normalized_band is None and is_descenso:
+        raise ValueError("El descenso requiere una banda de RPM asignada.")
+    if normalized_band == "ralenti" and is_descenso:
+        raise ValueError("La banda ralenti no puede marcarse como descenso.")
+    return normalized_band, bool(is_descenso)
 
 
 def _normalize_motor_payload(payload: MotorCatalogUpsertRequest) -> dict[str, Any]:
@@ -202,9 +249,14 @@ def _build_rule_records(
     rule_rows: list[dict[str, Any]],
     application_rows: list[dict[str, Any]],
 ) -> list[GeotabRuleRecord]:
+    rule_name_by_id: dict[int, str | None] = {
+        int(row["id"]): row.get("name") for row in rule_rows
+    }
     applications_by_rule_id: dict[int, list[GeotabRuleApplicationRecord]] = {}
     for row in application_rows:
         rule_record_id = int(row["geotab_rule_id"])
+        rule_name = rule_name_by_id.get(rule_record_id)
+        suggested_band = suggest_band(rule_name)
         applications_by_rule_id.setdefault(rule_record_id, []).append(
             GeotabRuleApplicationRecord(
                 id=int(row["id"]),
@@ -213,6 +265,11 @@ def _build_rule_records(
                 motor_name=row.get("motor_name"),
                 technical_number=row.get("technical_number"),
                 event_type=row.get("event_type"),
+                description=row.get("description"),
+                band=row.get("band"),
+                is_descenso=bool(row.get("is_descenso")),
+                suggested_band=suggested_band,
+                suggested_is_descenso=suggest_is_descenso(rule_name, suggested_band),
                 created_at=row["created_at"],
             )
         )
@@ -720,6 +777,7 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 category TEXT NOT NULL DEFAULT 'operacion',
                 motor_id BIGINT NULL REFERENCES motor_catalog(id) ON DELETE CASCADE,
                 event_type TEXT NULL,
+                description TEXT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
             """
@@ -739,6 +797,78 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             END $$;
             """
         )
+        # Bandas de RPM explicitas (ver app/services/rule_bands.py). Aditivo y nullable:
+        # 'band' solo aplica a category 'operacion'; para 'habito_seguro' queda NULL.
+        cur.execute(
+            """
+            ALTER TABLE geotab_rule_applications
+                ADD COLUMN IF NOT EXISTS band TEXT NULL,
+                ADD COLUMN IF NOT EXISTS is_descenso BOOLEAN NOT NULL DEFAULT FALSE;
+            """
+        )
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_geotab_rule_applications_band'
+                ) THEN
+                    ALTER TABLE geotab_rule_applications
+                    ADD CONSTRAINT ck_geotab_rule_applications_band
+                    CHECK (band IS NULL OR band IN (
+                        'rango_bajo', 'rango_economico', 'rango_balanceado',
+                        'rango_potencia', 'rango_potencia_ineficiente',
+                        'exceso_rpm', 'ralenti'
+                    ));
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_geotab_rule_applications_descenso'
+                ) THEN
+                    ALTER TABLE geotab_rule_applications
+                    ADD CONSTRAINT ck_geotab_rule_applications_descenso
+                    CHECK (
+                        is_descenso = FALSE
+                        OR (band IS NOT NULL AND band <> 'ralenti')
+                    );
+                END IF;
+            END $$;
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE geotab_rule_applications
+                ADD COLUMN IF NOT EXISTS description TEXT NULL;
+            """
+        )
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_geotab_rule_app_description_habito_only'
+                ) THEN
+                    ALTER TABLE geotab_rule_applications
+                    ADD CONSTRAINT ck_geotab_rule_app_description_habito_only
+                    CHECK (description IS NULL OR category = 'habito_seguro');
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_geotab_rule_app_description'
+                ) THEN
+                    ALTER TABLE geotab_rule_applications
+                    ADD CONSTRAINT ck_geotab_rule_app_description
+                    CHECK (description IS NULL OR description IN (
+                        'Excesos de velocidad', 'Giros bruscos', 'Excesos de RPM',
+                        'Frenadas bruscas', 'Baches o Resaltos fuertes',
+                        'Aceleraciones bruscas'
+                    ));
+                END IF;
+            END $$;
+            """
+        )
         cur.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS uq_geotab_rule_applications_scope
@@ -748,6 +878,69 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 COALESCE(motor_id, 0),
                 COALESCE(event_type, '')
             );
+            """
+        )
+        # Exceso de RPM se administra como banda de operacion del motor. Su
+        # aplicacion de habito seguro es derivada para la integracion y no debe
+        # requerir una segunda alta ni una segunda regla visible.
+        cur.execute(
+            """
+            INSERT INTO geotab_rule_applications (
+                geotab_rule_id, category, motor_id, event_type,
+                description, band, is_descenso
+            )
+            SELECT
+                safe.geotab_rule_id, 'operacion', safe.motor_id, NULL,
+                NULL, 'exceso_rpm', FALSE
+            FROM geotab_rule_applications safe
+            WHERE safe.category = 'habito_seguro'
+              AND safe.event_type = 'exceso_rpm'
+              AND safe.motor_id IS NOT NULL
+            ON CONFLICT DO NOTHING;
+            """
+        )
+        cur.execute(
+            """
+            UPDATE geotab_rule_applications operation
+            SET band = 'exceso_rpm', is_descenso = FALSE
+            FROM geotab_rule_applications safe
+            WHERE safe.geotab_rule_id = operation.geotab_rule_id
+              AND safe.category = 'habito_seguro'
+              AND safe.event_type = 'exceso_rpm'
+              AND safe.motor_id IS NOT NULL
+              AND operation.category = 'operacion'
+              AND operation.event_type IS NULL
+              AND operation.motor_id = safe.motor_id;
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO geotab_rule_applications (
+                geotab_rule_id, category, motor_id, event_type,
+                description, band, is_descenso
+            )
+            SELECT
+                operation.geotab_rule_id, 'habito_seguro', operation.motor_id,
+                'exceso_rpm', 'Excesos de RPM', NULL, FALSE
+            FROM geotab_rule_applications operation
+            WHERE operation.category = 'operacion'
+              AND operation.band = 'exceso_rpm'
+              AND operation.motor_id IS NOT NULL
+            ON CONFLICT DO NOTHING;
+            """
+        )
+        cur.execute(
+            """
+            UPDATE geotab_rule_applications safe
+            SET description = 'Excesos de RPM', band = NULL, is_descenso = FALSE
+            FROM geotab_rule_applications operation
+            WHERE operation.geotab_rule_id = safe.geotab_rule_id
+              AND operation.category = 'operacion'
+              AND operation.band = 'exceso_rpm'
+              AND operation.motor_id IS NOT NULL
+              AND safe.category = 'habito_seguro'
+              AND safe.event_type = 'exceso_rpm'
+              AND safe.motor_id = operation.motor_id;
             """
         )
         cur.execute(
@@ -837,7 +1030,8 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 ON grgr.geotab_rule_id = gr.id
             LEFT JOIN geotab_rule_groups grg
                 ON grg.id = grgr.group_id
-            WHERE NOT EXISTS (
+            WHERE (gr.category <> 'operacion' OR grg.motor_id IS NOT NULL)
+              AND NOT EXISTS (
                 SELECT 1
                 FROM geotab_rule_applications gra
                 WHERE gra.geotab_rule_id = gr.id
@@ -845,6 +1039,56 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                   AND gra.motor_id IS NOT DISTINCT FROM grg.motor_id
                   AND gra.event_type IS NULL
             );
+            """
+        )
+        # Una aplicacion de operacion siempre pertenece a un motor. Primero
+        # repara datos legacy usando el grupo; si ya existe la aplicacion valida,
+        # elimina solamente el duplicado global. Las reglas fisicas sin grupo se
+        # conservan para poder reasignarlas, pero no tienen una aplicacion
+        # exportable hasta seleccionar un motor.
+        cur.execute(
+            """
+            DELETE FROM geotab_rule_applications invalid
+            USING geotab_rule_group_rules grgr, geotab_rule_groups grg
+            WHERE invalid.geotab_rule_id = grgr.geotab_rule_id
+              AND grgr.group_id = grg.id
+              AND invalid.category = 'operacion'
+              AND invalid.motor_id IS NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM geotab_rule_applications valid
+                  WHERE valid.geotab_rule_id = invalid.geotab_rule_id
+                    AND valid.category = 'operacion'
+                    AND valid.motor_id = grg.motor_id
+                    AND valid.event_type IS NOT DISTINCT FROM invalid.event_type
+              );
+
+            UPDATE geotab_rule_applications invalid
+            SET motor_id = grg.motor_id
+            FROM geotab_rule_group_rules grgr
+            INNER JOIN geotab_rule_groups grg ON grg.id = grgr.group_id
+            WHERE invalid.geotab_rule_id = grgr.geotab_rule_id
+              AND invalid.category = 'operacion'
+              AND invalid.motor_id IS NULL;
+
+            DELETE FROM geotab_rule_applications
+            WHERE category = 'operacion'
+              AND motor_id IS NULL;
+            """
+        )
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_geotab_rule_app_motor_by_category'
+                ) THEN
+                    ALTER TABLE geotab_rule_applications
+                    ADD CONSTRAINT ck_geotab_rule_app_motor_by_category
+                    CHECK (category <> 'operacion' OR motor_id IS NOT NULL);
+                END IF;
+            END $$;
             """
         )
         cur.execute(
@@ -2316,6 +2560,9 @@ def list_customers() -> list[CustomerRecord]:
                     mc.engine_name AS motor_name,
                     mc.technical_number,
                     gra.event_type,
+                    gra.description,
+                    gra.band,
+                    gra.is_descenso,
                     gra.created_at
                 FROM geotab_rule_applications gra
                 LEFT JOIN motor_catalog mc
@@ -3133,6 +3380,9 @@ def _list_rules_for_database(database_id: int) -> list[GeotabRuleRecord]:
                         mc.engine_name AS motor_name,
                         mc.technical_number,
                         gra.event_type,
+                        gra.description,
+                        gra.band,
+                        gra.is_descenso,
                         gra.created_at
                     FROM geotab_rule_applications gra
                     LEFT JOIN motor_catalog mc
@@ -3284,7 +3534,11 @@ def resolve_geotab_rule(database_id: int, rule_id: str) -> GeotabRuleInspection:
         )
         raise RuntimeError("No fue posible consultar la regla en Geotab.") from exc
 
-    return GeotabRuleInspection(**inspection)
+    record = GeotabRuleInspection(**inspection)
+    # Sugerencia de banda por el nombre resuelto, para pre-llenar la UI de alta.
+    record.suggested_band = suggest_band(record.name)
+    record.suggested_is_descenso = suggest_is_descenso(record.name, record.suggested_band)
+    return record
 
 
 def create_geotab_rule(
@@ -3293,9 +3547,33 @@ def create_geotab_rule(
     normalized_rule_id = payload.rule_id.strip()
     normalized_category = _normalize_rule_category(payload.category)
     normalized_event_type = _normalize_rule_event_type(payload.event_type)
+    normalized_description = _normalize_safe_habit_description(payload.description)
     requested_motor_id = int(payload.motor_id) if payload.motor_id is not None else None
+    if normalized_category == "operacion" and requested_motor_id is None:
+        raise ValueError("Las reglas de operacion deben asociarse a un motor.")
+    if normalized_category == "habito_seguro":
+        if normalized_description is None:
+            raise ValueError("Debe seleccionar la clasificacion del habito seguro.")
+        if normalized_description == "Excesos de RPM":
+            raise ValueError(
+                "Excesos de RPM debe registrarse como banda de operacion y asignarse a un motor."
+            )
+        normalized_event_type = (
+            "exceso_rpm"
+            if normalized_description == "Excesos de RPM"
+            else None
+        )
+    elif normalized_description is not None:
+        raise ValueError("La clasificacion de habito seguro no aplica a reglas de operacion.")
     if normalized_event_type == "exceso_rpm" and requested_motor_id is None:
         raise ValueError("Las reglas de exceso de RPM deben asociarse a un motor.")
+    # La banda solo aplica a 'operacion'; para 'habito_seguro' queda NULL.
+    if normalized_category == "operacion":
+        normalized_band, normalized_is_descenso = _resolve_band_fields(
+            payload.band, payload.is_descenso
+        )
+    else:
+        normalized_band, normalized_is_descenso = None, False
 
     inspection = resolve_geotab_rule(database_id, normalized_rule_id)
     if not inspection.exists or not inspection.name:
@@ -3369,9 +3647,12 @@ def create_geotab_rule(
                         geotab_rule_id,
                         category,
                         motor_id,
-                        event_type
+                        event_type,
+                        description,
+                        band,
+                        is_descenso
                     )
-                    VALUES (%s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT DO NOTHING;
                     """,
                     (
@@ -3379,8 +3660,51 @@ def create_geotab_rule(
                         normalized_category,
                         canonical_motor_id,
                         normalized_event_type,
+                        normalized_description,
+                        normalized_band,
+                        normalized_is_descenso,
                     ),
                 )
+                # Si la aplicacion ya existia (ON CONFLICT DO NOTHING), la banda
+                # elegida en este alta debe persistir igualmente para 'operacion'.
+                if normalized_category == "operacion":
+                    cur.execute(
+                        """
+                        UPDATE geotab_rule_applications
+                        SET band = %s, is_descenso = %s
+                        WHERE geotab_rule_id = %s
+                          AND category = 'operacion'
+                          AND COALESCE(motor_id, 0) = COALESCE(%s, 0)
+                          AND COALESCE(event_type, '') = COALESCE(%s, '');
+                        """,
+                        (
+                            normalized_band,
+                            normalized_is_descenso,
+                            rule_record_id,
+                            canonical_motor_id,
+                            normalized_event_type,
+                        ),
+                    )
+                else:
+                    # Una aplicacion historica puede existir sin clasificacion.
+                    # Reasignarla desde la UI actualiza el dato explicito aun si
+                    # el INSERT encontro el mismo scope logico.
+                    cur.execute(
+                        """
+                        UPDATE geotab_rule_applications
+                        SET description = %s
+                        WHERE geotab_rule_id = %s
+                          AND category = 'habito_seguro'
+                          AND COALESCE(motor_id, 0) = COALESCE(%s, 0)
+                          AND COALESCE(event_type, '') = COALESCE(%s, '');
+                        """,
+                        (
+                            normalized_description,
+                            rule_record_id,
+                            canonical_motor_id,
+                            normalized_event_type,
+                        ),
+                    )
                 if (
                     normalized_category == "habito_seguro"
                     and normalized_event_type == "exceso_rpm"
@@ -3444,6 +3768,142 @@ def create_geotab_rule(
         if record.rule_id == normalized_rule_id:
             return record
     raise RuntimeError("No se pudo crear la regla.")
+
+
+def update_geotab_rule_application(
+    application_id: int, payload: GeotabRuleApplicationUpdateRequest
+) -> GeotabRuleRecord:
+    """Asigna banda de operacion o corrige la clasificacion de habito seguro."""
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        gra.category,
+                        gra.geotab_rule_id,
+                        gra.motor_id,
+                        gr.database_id
+                    FROM geotab_rule_applications gra
+                    INNER JOIN geotab_rules gr ON gr.id = gra.geotab_rule_id
+                    WHERE gra.id = %s;
+                    """,
+                    (application_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise ValueError("La aplicacion de la regla no existe.")
+                database_id = int(row["database_id"])
+
+                if str(row["category"]) == "operacion":
+                    if payload.description is not None or payload.motor_id is not None:
+                        raise ValueError(
+                            "La clasificacion de habito seguro no aplica a reglas de operacion."
+                        )
+                    normalized_band, normalized_is_descenso = _resolve_band_fields(
+                        payload.band, payload.is_descenso
+                    )
+                    cur.execute(
+                        """
+                        UPDATE geotab_rule_applications
+                        SET band = %s, is_descenso = %s
+                        WHERE id = %s;
+                        """,
+                        (normalized_band, normalized_is_descenso, application_id),
+                    )
+                    rule_record_id = int(row["geotab_rule_id"])
+                    motor_id = (
+                        int(row["motor_id"]) if row.get("motor_id") is not None else None
+                    )
+                    if normalized_band == "exceso_rpm" and motor_id is not None:
+                        cur.execute(
+                            """
+                            INSERT INTO geotab_rule_applications (
+                                geotab_rule_id, category, motor_id, event_type,
+                                description, band, is_descenso
+                            )
+                            VALUES (
+                                %s, 'habito_seguro', %s, 'exceso_rpm',
+                                'Excesos de RPM', NULL, FALSE
+                            )
+                            ON CONFLICT DO NOTHING;
+                            """,
+                            (rule_record_id, motor_id),
+                        )
+                        cur.execute(
+                            """
+                            UPDATE geotab_rule_applications
+                            SET description = 'Excesos de RPM'
+                            WHERE geotab_rule_id = %s
+                              AND category = 'habito_seguro'
+                              AND motor_id = %s
+                              AND event_type = 'exceso_rpm';
+                            """,
+                            (rule_record_id, motor_id),
+                        )
+                    elif motor_id is not None:
+                        cur.execute(
+                            """
+                            DELETE FROM geotab_rule_applications
+                            WHERE geotab_rule_id = %s
+                              AND category = 'habito_seguro'
+                              AND motor_id = %s
+                              AND event_type = 'exceso_rpm';
+                            """,
+                            (rule_record_id, motor_id),
+                        )
+                else:
+                    if payload.band is not None or payload.is_descenso:
+                        raise ValueError(
+                            "La banda de RPM solo aplica a aplicaciones de operacion."
+                        )
+                    normalized_description = _normalize_safe_habit_description(
+                        payload.description
+                    )
+                    if normalized_description is None:
+                        raise ValueError(
+                            "Debe seleccionar la clasificacion del habito seguro."
+                        )
+                    is_rpm = normalized_description == "Excesos de RPM"
+                    if is_rpm:
+                        raise ValueError(
+                            "Excesos de RPM debe administrarse como banda de operacion."
+                        )
+                    if payload.motor_id is not None:
+                        raise ValueError(
+                            "Los habitos seguros se aplican globalmente; "
+                            "Excesos de RPM se administra como banda del motor."
+                        )
+                    cur.execute(
+                        """
+                        UPDATE geotab_rule_applications
+                        SET description = %s,
+                            event_type = %s,
+                            motor_id = %s,
+                            band = NULL,
+                            is_descenso = FALSE
+                        WHERE id = %s;
+                        """,
+                        (
+                            normalized_description,
+                            None,
+                            None,
+                            application_id,
+                        ),
+                    )
+            conn.commit()
+        except UniqueViolation:
+            conn.rollback()
+            raise ValueError(
+                "Ya existe una aplicacion de esta regla con esa clasificacion y motor."
+            ) from None
+
+    for record in _list_rules_for_database(database_id):
+        for application in record.applications:
+            if application.id == application_id:
+                return record
+    raise RuntimeError("No se pudo actualizar la aplicacion de la regla.")
 
 
 def create_geotab_rule_group(
@@ -3625,6 +4085,29 @@ def create_geotab_rule_group(
             for rule_record_id in unique_rule_record_ids:
                 cur.execute(
                     """
+                    SELECT band, is_descenso
+                    FROM geotab_rule_applications
+                    WHERE geotab_rule_id = %s
+                      AND category = 'operacion'
+                      AND event_type IS NULL
+                    ORDER BY (motor_id IS NULL) DESC, id ASC
+                    LIMIT 1;
+                    """,
+                    (rule_record_id,),
+                )
+                operation_application = cur.fetchone()
+                operation_band = (
+                    operation_application.get("band")
+                    if operation_application is not None
+                    else None
+                )
+                operation_is_descenso = bool(
+                    operation_application.get("is_descenso")
+                    if operation_application is not None
+                    else False
+                )
+                cur.execute(
+                    """
                     DELETE FROM geotab_rule_applications
                     WHERE geotab_rule_id = %s
                       AND category = 'operacion'
@@ -3639,13 +4122,51 @@ def create_geotab_rule_group(
                         geotab_rule_id,
                         category,
                         motor_id,
-                        event_type
+                        event_type,
+                        band,
+                        is_descenso
                     )
-                    VALUES (%s, 'operacion', %s, NULL)
+                    VALUES (%s, 'operacion', %s, NULL, %s, %s)
                     ON CONFLICT DO NOTHING;
                     """,
-                    (rule_record_id, canonical_motor_id),
+                    (
+                        rule_record_id,
+                        canonical_motor_id,
+                        operation_band,
+                        operation_is_descenso,
+                    ),
                 )
+                cur.execute(
+                    """
+                    UPDATE geotab_rule_applications
+                    SET band = %s, is_descenso = %s
+                    WHERE geotab_rule_id = %s
+                      AND category = 'operacion'
+                      AND motor_id = %s
+                      AND event_type IS NULL;
+                    """,
+                    (
+                        operation_band,
+                        operation_is_descenso,
+                        rule_record_id,
+                        canonical_motor_id,
+                    ),
+                )
+                if operation_band == "exceso_rpm":
+                    cur.execute(
+                        """
+                        INSERT INTO geotab_rule_applications (
+                            geotab_rule_id, category, motor_id, event_type,
+                            description, band, is_descenso
+                        )
+                        VALUES (
+                            %s, 'habito_seguro', %s, 'exceso_rpm',
+                            'Excesos de RPM', NULL, FALSE
+                        )
+                        ON CONFLICT DO NOTHING;
+                        """,
+                        (rule_record_id, canonical_motor_id),
+                    )
                 cur.execute(
                     """
                     INSERT INTO geotab_rule_group_rules (group_id, geotab_rule_id)
@@ -3778,28 +4299,6 @@ def delete_geotab_rule_group(group_id: int) -> None:
                           AND event_type IS NULL;
                         """,
                         (rule_ids, int(group_row["motor_id"])),
-                    )
-                    cur.execute(
-                        """
-                        INSERT INTO geotab_rule_applications (
-                            geotab_rule_id,
-                            category,
-                            motor_id,
-                            event_type
-                        )
-                        SELECT gr.id, 'operacion', NULL, NULL
-                        FROM geotab_rules gr
-                        WHERE gr.id = ANY(%s)
-                          AND gr.category = 'operacion'
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM geotab_rule_applications gra
-                              WHERE gra.geotab_rule_id = gr.id
-                                AND gra.category = 'operacion'
-                          )
-                        ON CONFLICT DO NOTHING;
-                        """,
-                        (rule_ids,),
                     )
             cur.execute(
                 "DELETE FROM geotab_rule_groups WHERE id = %s RETURNING id;",

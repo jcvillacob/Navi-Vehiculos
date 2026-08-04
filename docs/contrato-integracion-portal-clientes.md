@@ -76,9 +76,13 @@ GET {NAVI_BASE_URL}/api/v1/integration/snapshot
             {
               "id": 101,
               "rule_id": "aB1cD2eF3gH",
-              "name": "RPM > 2200",
+              "name": "Rango Potencia Ineficiente X11",
               "category": "operacion",
               "motor_type": "ISD",
+              "event_type": null,
+              "description": null,
+              "band": "rango_potencia_ineficiente",
+              "is_descenso": false,
               "created_at": "2026-05-20T09:00:00Z"
             },
             {
@@ -87,6 +91,10 @@ GET {NAVI_BASE_URL}/api/v1/integration/snapshot
               "name": "Frenada brusca",
               "category": "habito_seguro",
               "motor_type": null,
+              "event_type": null,
+              "description": "Frenadas bruscas",
+              "band": null,
+              "is_descenso": false,
               "created_at": "2026-05-20T09:05:00Z"
             }
           ]
@@ -131,12 +139,22 @@ Notas sobre los campos clave:
 | `vehicles[].geotab_customer_status` | `found` / `not_found` / `unknown` / `not_applicable`. Solo confiar en `geotab_device_id` cuando es `found`. |
 | `databases[].provider_config.plate_prefix` | Algunos clientes nombran devices con prefijo (ej. device `TRABC123` para placa `ABC123`). Relevante si Portal Clientes busca por placa en vez de por id. |
 | `rules[].category` | `operacion` (reglas de motor) o `habito_seguro`. `rule_id` es el id nativo de Geotab para consultar `ExceptionEvent` (`ruleSearch: {id: ...}`). |
-| `rules[].motor_type` | **Familia de motor** a la que aplica la regla (`engine_name` del motor; ej. `ISD`, `X15`). Solo las reglas `operacion` agrupadas traen valor; las `habito_seguro` y las `operacion` aún sin grupo traen `null`. Ver §2.3. |
+| `rules[].motor_type` | **Familia de motor** a la que aplica la regla (`engine_name` del motor; ej. `ISD`, `X15`). Es obligatorio y no nulo para toda aplicación `operacion`; los hábitos seguros globales pueden traer `null`. Ver §2.3. |
+| `rules[].event_type` | Tipo semántico del evento (ej. `exceso_rpm`) o `null`. Semántica sin cambios. |
+| `rules[].description` | Clasificación explícita de una regla `habito_seguro`, independiente del nombre de la regla: `Excesos de velocidad`, `Giros bruscos`, `Excesos de RPM`, `Frenadas bruscas`, `Baches o Resaltos fuertes` o `Aceleraciones bruscas`. En reglas `operacion` es `null`. |
+| `rules[].band` | **Banda de RPM explícita** de la aplicación, administrada en Navi-Vehículos (NO inferida del nombre). Enum cerrado: `rango_bajo`, `rango_economico`, `rango_balanceado`, `rango_potencia`, `rango_potencia_ineficiente`, `exceso_rpm`, `ralenti`. Solo aplica a `category = operacion`; en `habito_seguro` siempre `null`. Puede ser `null` si aún no se asignó. **Aditivo/nullable**: el consumidor debe tolerar su ausencia. Ver §2.4. |
+| `rules[].is_descenso` | **Booleano** que marca la aplicación como banda de descenso. `false` por defecto. Nunca `true` con `band` nulo ni con `band = ralenti`. |
 | `vehicles[].motor_type` | **Familia de motor** del vehículo (`engine_name` del motor cuyo `technical_number` coincide). `null` si el `technical_number` no está en el catálogo. Mismo vocabulario que `rules[].motor_type`, así que cruzan directo. Ver §2.3. |
 | `vehicles[].marketing_model_name` | **Marketing Model Name** devuelto por QuickServe/Cummins para el motor del vehículo. Puede venir `null` si aún no se consultó o QuickServe no lo entregó. |
 | `vehicles[].service_model_name` | **Service Model Name** devuelto por QuickServe/Cummins para el motor del vehículo. Puede venir `null` si aún no se consultó o QuickServe no lo entregó. |
 | `vehicles[].vocacional` | **Booleano** del tipo de uso del vehículo: `true` = uso vocacional, `false` = transporte/comercial. Nunca `null` (default `false`). |
 | `credentials[]` | Pool de credenciales de esa db. Portal Clientes debe **rotar** entre las activas (round-robin o LRU) para no saturar una sola sesión Geotab. |
+
+`Excesos de RPM` es un caso derivado: en Navi Vehículos se registra y edita una
+sola vez como aplicación `operacion` con `band = exceso_rpm`, asociada al motor.
+El snapshot incluye además una aplicación `habito_seguro` derivada, con
+`event_type = exceso_rpm` y `description = "Excesos de RPM"`, para que los
+reportes de hábitos la consuman sin duplicar la regla en la interfaz administrativa.
 
 ### 2.2 Endpoints de conveniencia
 
@@ -178,6 +196,31 @@ WHERE (
 Casos huérfanos (cero reglas de `operacion`, en silencio): vehículos con
 `motor_type = null`, o cuyo `motor_type` no tiene ninguna regla `operacion` agrupada
 en su `database_key`.
+
+Una regla física de operación puede quedar temporalmente en el catálogo al
+eliminar su grupo para permitir reasignarla, pero no se crea ni exporta una
+aplicación hasta que tenga motor. El snapshot nunca emite `category = operacion`
+con `motor_type = null`.
+
+### 2.4 Banda de RPM explícita (`band` / `is_descenso`)
+
+El ETL de reportes distribuye el tiempo por **banda de RPM** (Rango Bajo, Económico,
+Balanceado, Potencia, Potencia Ineficiente, Exceso RPM, Ralentí). Antes la banda se
+**inferían del nombre** de la regla por palabras clave, lo cual es frágil: si una regla
+se renombra y deja de matchear, su tiempo desaparece en silencio y los porcentajes de
+las demás bandas se inflan sin ningún error.
+
+Por eso la banda ahora es un **dato explícito** administrado en Navi-Vehículos: cada
+aplicación `operacion` trae `band` (uno de los 7 valores del enum, o `null` si aún no
+se asignó) e `is_descenso` (booleano). El ETL debe **preferir `band`** sobre cualquier
+heurística de nombre y tratar `band = null` como "sin clasificar" (no adivinar).
+
+`band` solo aplica a `category = operacion`; en `habito_seguro` siempre es `null`.
+`is_descenso` nunca es `true` con `band` nulo ni con `band = ralenti`.
+
+**Compatibilidad:** ambos campos son aditivos y nullable. Portal Clientes puede
+desplegarse después; mientras tanto debe tolerar su ausencia y seguir con la
+heurística previa como fallback.
 
 ---
 

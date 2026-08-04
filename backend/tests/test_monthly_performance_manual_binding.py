@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse, urlunparse
 
@@ -8,6 +9,7 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
+from app.clients.artimo_client import ArtimoReportPage
 from app.services.performance_providers import (
     ArtimoMonthlyPerformanceProvider,
     FrotcomMonthlyPerformanceProvider,
@@ -352,12 +354,35 @@ class TestArtimoWithoutLegacyBootstrap:
         bindings = {}
         previous_records = {}
 
+        trip_row = {
+            "plate": "TEST001",
+            "id": "trip1",
+            "odometer": 10000,
+            "horometer": 500,
+            "enginetime": 5.0,
+            "startdate": "2026-01-15 08:00:00",
+            "enddate": "2026-01-15 12:00:00",
+            "distance": 100.0,
+            "consumption": 40.0,
+        }
         mock_artimo = MagicMock()
-        mock_artimo.get_month_range.return_value = ("2026-01-01", "2026-01-31")
-        mock_artimo.get_report.side_effect = lambda name, *args, **kwargs: (
-            [{"plate": "TEST001", "id": "trip1", "odometer": 10000, "engine_time_hours": 5.0,
-              "start_time": "2026-01-15T00:00:00Z", "distance": 100.0}] if name == "trips" else []
+        mock_artimo.get_month_range.return_value = (
+            "2026-01-01T05:00:00.000Z",
+            "2026-02-01T04:59:59.999Z",
         )
+        mock_artimo.get_local_month_bounds.return_value = (
+            datetime(2026, 1, 1),
+            datetime(2026, 1, 31, 23, 59, 59, 999000),
+        )
+        mock_artimo.get_trip_lookback_range.return_value = (
+            "2025-12-30T05:00:00.000Z",
+            "2026-02-01T04:59:59.999Z",
+        )
+        mock_artimo.get_report.side_effect = lambda name, *args, **kwargs: (
+            [trip_row] if name == "trips" else []
+        )
+        mock_artimo.get_trip_details.return_value = [trip_row]
+        mock_artimo.get_report_paged.return_value = ArtimoReportPage(rows=[])
 
         with patch.object(ArtimoMonthlyPerformanceProvider, "_build_config", return_value=MagicMock()):
             with patch("app.services.performance_providers.ArtimoClient", return_value=mock_artimo):

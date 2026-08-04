@@ -40,6 +40,9 @@ _GEOTAB_REVIEW_THRESHOLD_PCT = 5.0
 _GEOTAB_REGRESSION_WARNING_PREFIX = "Retroceso Geotab detectado"
 _GEOTAB_ACCUMULATED_REGRESSION_MARKER = "[acumulado]"
 _GEOTAB_GRANULAR_CHECK_PREFIX = "Verificación granular Geotab"
+_GEOTAB_OVERRIDE_MARKER = "Retroceso Geotab aceptado manualmente"
+_ODOMETER_LABEL = "odómetro"
+_HOURMETER_LABEL = "horómetro"
 
 
 def _ensure_cpk_tables(conn: psycopg.Connection) -> None:
@@ -184,16 +187,66 @@ def _is_geotab_row(row: dict[str, Any]) -> bool:
     return str(row.get("source_provider") or "").strip().lower() == "geotab"
 
 
-def _geotab_adjustment_validation(row: dict[str, Any]) -> tuple[bool, list[str]]:
-    """Devuelve si una fila Geotab debe bloquearse y sus advertencias.
+def _regression_metric(row: dict[str, Any]) -> tuple[str, str, str]:
+    """Medidor, etiqueta y unidad que gobiernan el ajuste de la fila."""
+    if bool(row.get("vocacional")):
+        return _HOURMETER_LABEL, "horas", "h"
+    return _ODOMETER_LABEL, "kilómetros", "km"
+
+
+def _split_sequence_regressions(row: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Separa los retrocesos [acumulado] del medidor que rige el ajuste de los
+    del otro medidor: un retroceso de horómetro no puede bloquear un ajuste de
+    km (ni al revés), porque el ajuste sugerido nunca lo cubriría."""
+    own_label, _, _ = _regression_metric(row)
+    other_label = _ODOMETER_LABEL if own_label == _HOURMETER_LABEL else _HOURMETER_LABEL
+    own_total = (
+        _num(row.get("geotab_regression_total_hours"))
+        if own_label == _HOURMETER_LABEL
+        else _num(row.get("geotab_regression_total_km"))
+    ) or 0.0
+    own: list[str] = []
+    other: list[str] = []
+    for warning in row.get("warnings") or []:
+        text = str(warning)
+        if not (
+            text.startswith(_GEOTAB_REGRESSION_WARNING_PREFIX)
+            and _GEOTAB_ACCUMULATED_REGRESSION_MARKER in text
+        ):
+            continue
+        if f"({own_label})" in text:
+            own.append(text)
+        elif f"({other_label})" in text:
+            other.append(text)
+        else:
+            # Resumen sin medidor ("N retroceso(s) adicional(es)"): solo cuenta
+            # si el medidor de la fila acumuló retrocesos.
+            (own if own_total > 0 else other).append(text)
+    return own, other
+
+
+def _regression_override_requested(row: dict[str, Any]) -> bool:
+    """El usuario aceptó explícitamente la inconsistencia (flag del request) o
+    ya la aceptó en un guardado previo (marcador persistido en warnings)."""
+    if bool(row.get("regression_override")):
+        return True
+    return any(
+        str(warning).startswith(_GEOTAB_OVERRIDE_MARKER) for warning in row.get("warnings") or []
+    )
+
+
+def _geotab_adjustment_validation(row: dict[str, Any]) -> tuple[bool, list[str], list[str]]:
+    """Devuelve si una fila Geotab debe bloquearse, sus advertencias y los motivos.
 
     La revisión se activa con la misma diferencia que se muestra en CPK/CPH:
     kilómetros para vehículos comerciales y horas para los vocacionales. Solo en
     ese caso se inspeccionan los acumulados crudos; un odómetro u horómetro no
-    puede terminar por debajo de su lectura inicial.
+    puede terminar por debajo de su lectura inicial. Únicamente el medidor que
+    rige el ajuste bloquea; el otro queda como advertencia, y el usuario puede
+    forzar el guardado con nota (`regression_override`).
     """
     if not _is_geotab_row(row):
-        return False, []
+        return False, [], []
 
     relevant_difference_pct = (
         _num(row.get("hour_difference_pct"))
@@ -201,30 +254,31 @@ def _geotab_adjustment_validation(row: dict[str, Any]) -> tuple[bool, list[str]]
         else _num(row.get("km_difference_pct"))
     )
     if relevant_difference_pct is None or abs(relevant_difference_pct) <= _GEOTAB_REVIEW_THRESHOLD_PCT:
-        return False, []
+        return False, [], []
 
+    own_label, metric_name, unit = _regression_metric(row)
     warnings = [
         "Revisión Geotab: la diferencia relevante supera 5%; se validaron los acumulados de km y horas."
     ]
     endpoint_regressions: list[str] = []
+    other_regressions: list[str] = []
     odo_start, odo_end = _num(row.get("odo_start")), _num(row.get("odo_end"))
     if odo_start is not None and odo_end is not None and odo_end < odo_start:
-        endpoint_regressions.append(
-            f"odómetro retrocede de {odo_start:g} a {odo_end:g} km"
-        )
+        message = f"odómetro retrocede de {odo_start:g} a {odo_end:g} km"
+        (endpoint_regressions if own_label == _ODOMETER_LABEL else other_regressions).append(message)
 
     horo_start, horo_end = _num(row.get("horo_start")), _num(row.get("horo_end"))
     if horo_start is not None and horo_end is not None and horo_end < horo_start:
-        endpoint_regressions.append(
-            f"horómetro retrocede de {horo_start:g} a {horo_end:g} h"
-        )
+        message = f"horómetro retrocede de {horo_start:g} a {horo_end:g} h"
+        (endpoint_regressions if own_label == _HOURMETER_LABEL else other_regressions).append(message)
 
-    sequence_regressions = [
-        str(warning)
-        for warning in row.get("warnings") or []
-        if str(warning).startswith(_GEOTAB_REGRESSION_WARNING_PREFIX)
-        and _GEOTAB_ACCUMULATED_REGRESSION_MARKER in str(warning)
-    ]
+    sequence_regressions, other_sequence = _split_sequence_regressions(row)
+    if other_regressions or other_sequence:
+        warnings.append(
+            f"Aviso Geotab: hay retrocesos en el otro medidor "
+            f"({len(other_regressions) + len(other_sequence)}); no afectan el ajuste de "
+            f"{metric_name} de esta fila."
+        )
     suggested_adjustment = max(0.0, _num(row.get("suggested_adjustment")) or 0.0)
     applied_adjustment = abs(
         (_num(row.get("hour_adjustment")) or 0.0)
@@ -235,24 +289,38 @@ def _geotab_adjustment_validation(row: dict[str, Any]) -> tuple[bool, list[str]]
         suggested_adjustment <= 0 or applied_adjustment + 0.0001 < suggested_adjustment
     )
     adjustment_covers_sequence = bool(sequence_regressions) and not sequence_adjustment_missing
-    regressions = [] if adjustment_covers_sequence else endpoint_regressions
+    regressions = [] if adjustment_covers_sequence else list(endpoint_regressions)
     if sequence_adjustment_missing:
         regressions.append(
-            "hay retrocesos Geotab sin cubrir por el ajuste sugerido"
+            f"{len(sequence_regressions)} retroceso(s) de {own_label} sin cubrir: "
+            f"sugerido {suggested_adjustment:g} {unit}, aplicado {applied_adjustment:g} {unit}"
         )
 
-    if regressions:
-        warnings.append(
-            "Inconsistencia Geotab: "
-            + "; ".join(regressions)
-            + ". No se permite guardar el ajuste."
-        )
-    return bool(regressions), warnings
+    if not regressions:
+        return False, warnings, []
+
+    if _regression_override_requested(row):
+        note = str(row.get("correction_note") or "").strip()
+        if note:
+            warnings.append(
+                f"{_GEOTAB_OVERRIDE_MARKER}: "
+                + "; ".join(regressions)
+                + f". Nota: {note}"
+            )
+            return False, warnings, []
+        regressions.append("forzar el guardado exige nota de corrección")
+
+    warnings.append(
+        "Inconsistencia Geotab: "
+        + "; ".join(regressions)
+        + ". No se permite guardar el ajuste."
+    )
+    return True, warnings, regressions
 
 
 def _append_geotab_validation_warnings(row: dict[str, Any]) -> dict[str, Any]:
     """Añade advertencias deterministas sin duplicarlas en guardados sucesivos."""
-    _, validation_warnings = _geotab_adjustment_validation(row)
+    _, validation_warnings, _ = _geotab_adjustment_validation(row)
     warnings = list(row.get("warnings") or [])
     for warning in validation_warnings:
         if warning not in warnings:
@@ -381,13 +449,29 @@ def _enrich_geotab_granular(
     return row
 
 
+def _regression_conflict_message(details: list[str]) -> str:
+    return (
+        "No se puede guardar el ajuste: Geotab reporta un retroceso en kilómetros u horas. "
+        "Detalle: "
+        + " | ".join(details)
+        + ". Verifique las lecturas inicial y final, o acepte la inconsistencia con "
+        "'Guardar de todas formas' explicando el motivo en la nota."
+    )
+
+
+def _regression_block_detail(row: dict[str, Any]) -> str | None:
+    """Motivo de bloqueo de una fila, con placa, o None si no bloquea."""
+    blocked, _, reasons = _geotab_adjustment_validation(row)
+    if not blocked:
+        return None
+    plate = str(row.get("plate") or "sin placa")
+    return f"{plate}: " + "; ".join(reasons)
+
+
 def _reject_geotab_regression(row: dict[str, Any]) -> None:
-    blocked, _ = _geotab_adjustment_validation(row)
-    if blocked:
-        raise CpkCphConflict(
-            "No se puede guardar el ajuste: Geotab reporta un retroceso en kilómetros u horas. "
-            "Verifique las lecturas inicial y final."
-        )
+    detail = _regression_block_detail(row)
+    if detail:
+        raise CpkCphConflict(_regression_conflict_message([detail]))
 
 
 def _row_from_preview(row: CpkCphPreviewRow | dict[str, Any]) -> dict[str, Any]:
@@ -450,6 +534,8 @@ def _row_from_preview(row: CpkCphPreviewRow | dict[str, Any]) -> dict[str, Any]:
         "calculation_status": str(data.get("calculation_status") or "pending"),
         "warnings": list(data.get("warnings") or []),
         "correction_note": (str(data.get("correction_note")).strip() if data.get("correction_note") else None),
+        # No es columna: viaja en el request y queda registrado como marcador en warnings.
+        "regression_override": bool(data.get("regression_override")),
     }
     return _append_geotab_validation_warnings(normalized_row)
 
@@ -728,14 +814,28 @@ def save_report(payload: CpkCphReportSaveRequest, *, user_id: int | None) -> Cpk
         _customer_name(conn, payload.customer_id)
         api_cache: dict[Any, Any] = {}
         enriched_rows: list[dict[str, Any]] = []
+        missing_notes: list[str] = []
+        blocked_rows: list[str] = []
         for raw_row in payload.rows:
             row = _row_from_preview(raw_row)
             row = _enrich_geotab_granular(row, month=payload.month, api_cache=api_cache)
             has_adjustment = bool(row.get("km_adjustment") or row.get("hour_adjustment"))
             if has_adjustment and not row.get("correction_note"):
-                raise CpkCphConflict("Cada ajuste de CPK/CPH requiere nota.")
-            _reject_geotab_regression(row)
+                missing_notes.append(str(row.get("plate") or "sin placa"))
+            detail = _regression_block_detail(row)
+            if detail:
+                blocked_rows.append(detail)
             enriched_rows.append(row)
+        # Se revisan todas las filas antes de fallar: el usuario ve de una vez
+        # cada placa problemática en lugar de corregir una por intento.
+        if missing_notes:
+            raise CpkCphConflict(
+                "Cada ajuste de CPK/CPH requiere nota. Placas sin nota: "
+                + ", ".join(missing_notes)
+                + "."
+            )
+        if blocked_rows:
+            raise CpkCphConflict(_regression_conflict_message(blocked_rows))
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -828,6 +928,8 @@ def update_row(report_id: int, row_id: int, payload: CpkCphRowPatchRequest, *, u
             next_data["hours_ecm_approved"] = payload.hours_ecm_approved
         if payload.correction_note is not None:
             next_data["correction_note"] = payload.correction_note.strip() or None
+        if payload.regression_override:
+            next_data["regression_override"] = True
 
         if recalc:
             preview = preview_report(

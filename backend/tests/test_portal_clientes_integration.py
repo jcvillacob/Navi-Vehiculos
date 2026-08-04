@@ -16,11 +16,13 @@ from psycopg.rows import dict_row
 from app.schemas.vehicle import (
     CustomerDatabaseCredentialCreateRequest,
     CustomerDatabaseCredentialUpdateRequest,
+    GeotabRuleApplicationUpdateRequest,
     GeotabRuleCreateRequest,
     GeotabRuleGroupCreateRequest,
     GeotabRuleInspection,
 )
 from app.services import availability_store, integration_export, motor_catalog, rendimientos
+from app.services.rule_bands import suggest_band, suggest_is_descenso
 
 
 def _connect():
@@ -82,6 +84,22 @@ def geotab_db(motor_tables):
             )
         conn.commit()
     return {"customer_id": customer_id, "database_id": database_id}
+
+
+@pytest.fixture
+def rule_motor_id(geotab_db):
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO motor_catalog (technical_number, engine_name)
+                VALUES ('TEC-RULE', 'Motor Reglas')
+                RETURNING id;
+                """
+            )
+            motor_id = int(cur.fetchone()["id"])
+        conn.commit()
+    return motor_id
 
 
 @pytest.fixture
@@ -288,23 +306,107 @@ def _fake_inspection(rule_id: str) -> GeotabRuleInspection:
     )
 
 
-def test_create_rule_with_category(geotab_db, monkeypatch):
+def test_create_rule_with_category(geotab_db, rule_motor_id, monkeypatch):
     monkeypatch.setattr(
         motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
     )
     record = motor_catalog.create_geotab_rule(
         geotab_db["database_id"],
-        GeotabRuleCreateRequest(rule_id="aRule1", category="habito_seguro"),
+        GeotabRuleCreateRequest(
+            rule_id="aRule1",
+            category="habito_seguro",
+            description="Giros bruscos",
+        ),
     )
     assert record.category == "habito_seguro"
     assert record.applications[0].category == "habito_seguro"
+    assert record.applications[0].description == "Giros bruscos"
 
     default_record = motor_catalog.create_geotab_rule(
         geotab_db["database_id"],
-        GeotabRuleCreateRequest(rule_id="aRule2"),
+        GeotabRuleCreateRequest(rule_id="aRule2", motor_id=rule_motor_id),
     )
     assert default_record.category == "operacion"
     assert default_record.applications[0].category == "operacion"
+    assert default_record.applications[0].motor_id == rule_motor_id
+
+
+def test_create_operation_rule_requires_motor(geotab_db):
+    with pytest.raises(ValueError, match="motor"):
+        motor_catalog.create_geotab_rule(
+            geotab_db["database_id"],
+            GeotabRuleCreateRequest(rule_id="aRuleWithoutMotor"),
+        )
+
+
+def test_database_rejects_operation_application_without_motor(geotab_db):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO geotab_rules (database_id, name, rule_id, category)
+                    VALUES (%s, 'Regla invalida', 'aInvalidScope', 'operacion')
+                    RETURNING id;
+                    """,
+                    (geotab_db["database_id"],),
+                )
+                rule_record_id = int(cur.fetchone()["id"])
+                cur.execute(
+                    """
+                    INSERT INTO geotab_rule_applications (
+                        geotab_rule_id, category, motor_id
+                    )
+                    VALUES (%s, 'operacion', NULL);
+                    """,
+                    (rule_record_id,),
+                )
+            conn.commit()
+
+
+def test_deleted_group_does_not_export_unassigned_operation(
+    geotab_db, rule_motor_id, monkeypatch
+):
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
+    )
+    rule = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aReassign1",
+            category="operacion",
+            motor_id=rule_motor_id,
+        ),
+    )
+    group = motor_catalog.create_geotab_rule_group(
+        geotab_db["database_id"],
+        GeotabRuleGroupCreateRequest(
+            motor_id=rule_motor_id,
+            rule_record_ids=[rule.id],
+        ),
+    )
+
+    motor_catalog.delete_geotab_rule_group(group.id)
+
+    listed_rule = next(
+        current
+        for current in motor_catalog._list_rules_for_database(geotab_db["database_id"])
+        if current.id == rule.id
+    )
+    assert listed_rule.applications == []
+
+    snapshot = integration_export.export_customers(include_credentials=False)
+    customer = next(
+        current
+        for current in snapshot["customers"]
+        if current["id"] == geotab_db["customer_id"]
+    )
+    database = next(
+        current
+        for current in customer["databases"]
+        if current["id"] == geotab_db["database_id"]
+    )
+    assert all(current["rule_id"] != "aReassign1" for current in database["rules"])
 
 
 def test_create_rule_invalid_category_rejected(geotab_db, monkeypatch):
@@ -318,6 +420,35 @@ def test_create_rule_invalid_category_rejected(geotab_db, monkeypatch):
         )
 
 
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Excesos de velocidad",
+        "Giros bruscos",
+        "Excesos de RPM",
+        "Frenadas bruscas",
+        "Baches o Resaltos fuertes",
+        "Aceleraciones bruscas",
+    ],
+)
+def test_safe_habit_description_enum(description):
+    assert motor_catalog._normalize_safe_habit_description(description) == description
+
+
+def test_safe_habit_description_rejects_missing_or_unknown():
+    assert motor_catalog._normalize_safe_habit_description(None) is None
+    with pytest.raises(ValueError, match="clasificacion"):
+        motor_catalog._normalize_safe_habit_description("Evento general")
+    with pytest.raises(ValueError, match="seleccionar"):
+        motor_catalog.create_geotab_rule(
+            1,
+            GeotabRuleCreateRequest(
+                rule_id="aSafeWithoutDescription",
+                category="habito_seguro",
+            ),
+        )
+
+
 def test_exceso_rpm_requires_motor(geotab_db, monkeypatch):
     monkeypatch.setattr(
         motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
@@ -328,7 +459,7 @@ def test_exceso_rpm_requires_motor(geotab_db, monkeypatch):
             GeotabRuleCreateRequest(
                 rule_id="aRpm1",
                 category="habito_seguro",
-                event_type="exceso_rpm",
+                description="Excesos de RPM",
             ),
         )
 
@@ -339,7 +470,11 @@ def test_rule_group_rejects_safe_habit_rules(geotab_db, monkeypatch):
     )
     safe_rule = motor_catalog.create_geotab_rule(
         geotab_db["database_id"],
-        GeotabRuleCreateRequest(rule_id="aSafe1", category="habito_seguro"),
+        GeotabRuleCreateRequest(
+            rule_id="aSafe1",
+            category="habito_seguro",
+            description="Frenadas bruscas",
+        ),
     )
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -356,7 +491,7 @@ def test_rule_group_rejects_safe_habit_rules(geotab_db, monkeypatch):
         )
 
 
-def test_exceso_rpm_application_converts_existing_operation_group(geotab_db, monkeypatch):
+def test_exceso_rpm_band_derives_safe_habit_application(geotab_db, monkeypatch):
     monkeypatch.setattr(
         motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
     )
@@ -370,7 +505,12 @@ def test_exceso_rpm_application_converts_existing_operation_group(geotab_db, mon
 
     rpm_rule = motor_catalog.create_geotab_rule(
         geotab_db["database_id"],
-        GeotabRuleCreateRequest(rule_id="aRpmX11", category="operacion"),
+        GeotabRuleCreateRequest(
+            rule_id="aRpmX11",
+            category="operacion",
+            motor_id=motor_id,
+            band="exceso_rpm",
+        ),
     )
     motor_catalog.create_geotab_rule_group(
         geotab_db["database_id"],
@@ -378,21 +518,31 @@ def test_exceso_rpm_application_converts_existing_operation_group(geotab_db, mon
     )
     assert motor_catalog._list_rule_groups_for_database(geotab_db["database_id"])[0].rules
 
-    converted = motor_catalog.create_geotab_rule(
-        geotab_db["database_id"],
-        GeotabRuleCreateRequest(
-            rule_id="aRpmX11",
-            category="habito_seguro",
-            motor_id=motor_id,
-            event_type="exceso_rpm",
-        ),
+    derived = next(
+        rule
+        for rule in motor_catalog._list_rules_for_database(geotab_db["database_id"])
+        if rule.rule_id == "aRpmX11"
     )
+    assert {
+        (
+            application.category,
+            application.motor_id,
+            application.event_type,
+            application.band,
+            application.description,
+        )
+        for application in derived.applications
+    } == {
+        ("operacion", motor_id, None, "exceso_rpm", None),
+        ("habito_seguro", motor_id, "exceso_rpm", None, "Excesos de RPM"),
+    }
 
-    assert motor_catalog._list_rule_groups_for_database(geotab_db["database_id"]) == []
-    assert [
-        (application.category, application.motor_id, application.event_type)
-        for application in converted.applications
-    ] == [("habito_seguro", motor_id, "exceso_rpm")]
+    operation = next(app for app in derived.applications if app.category == "operacion")
+    updated = motor_catalog.update_geotab_rule_application(
+        operation.id,
+        GeotabRuleApplicationUpdateRequest(band="rango_potencia"),
+    )
+    assert all(app.event_type != "exceso_rpm" for app in updated.applications)
 
 
 # ── Pool de credenciales ──────────────────────────────────────────────
@@ -508,14 +658,16 @@ def sibling_geotab_db(geotab_db):
 
 
 def test_rules_shared_across_customers_with_same_database(
-    geotab_db, sibling_geotab_db, monkeypatch
+    geotab_db, sibling_geotab_db, rule_motor_id, monkeypatch
 ):
     monkeypatch.setattr(
         motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
     )
     motor_catalog.create_geotab_rule(
         geotab_db["database_id"],
-        GeotabRuleCreateRequest(rule_id="aShared1", category="operacion"),
+        GeotabRuleCreateRequest(
+            rule_id="aShared1", category="operacion", motor_id=rule_motor_id
+        ),
     )
 
     # La regla registrada bajo el primer cliente es visible desde la fila del otro.
@@ -526,10 +678,13 @@ def test_rules_shared_across_customers_with_same_database(
     # fisica; devuelve el mismo registro y conserva la aplicacion.
     existing = motor_catalog.create_geotab_rule(
         sibling_geotab_db["database_id"],
-        GeotabRuleCreateRequest(rule_id="aShared1", category="operacion"),
+        GeotabRuleCreateRequest(
+            rule_id="aShared1", category="operacion", motor_id=rule_motor_id
+        ),
     )
     assert existing.rule_id == "aShared1"
     assert len(existing.applications) == 1
+    assert existing.applications[0].motor_id == rule_motor_id
 
 
 def test_credential_rotation_spans_sibling_databases(geotab_db, sibling_geotab_db):
@@ -634,8 +789,8 @@ async def test_snapshot_exposes_motor_type(client, vehicle, monkeypatch):
     """motor_type = engine_name de la familia de motor (ver REGLAS_POR_MOTOR).
 
     - vehiculo: engine_name del motor cuyo technical_number coincide.
-    - regla 'operacion' agrupada: engine_name del motor del grupo.
-    - regla 'habito_seguro' (o sin grupo): motor_type NULL.
+    - regla 'operacion': engine_name de su motor (siempre obligatorio).
+    - regla 'habito_seguro' global: motor_type NULL.
     """
     monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
     headers = {"X-API-Key": "clave-portal"}
@@ -655,24 +810,33 @@ async def test_snapshot_exposes_motor_type(client, vehicle, monkeypatch):
 
     op_rule = motor_catalog.create_geotab_rule(
         vehicle["database_id"],
-        GeotabRuleCreateRequest(rule_id="aOp1", category="operacion"),
-    )
-    motor_catalog.create_geotab_rule(
-        vehicle["database_id"],
-        GeotabRuleCreateRequest(rule_id="aSafe1", category="habito_seguro"),
+        GeotabRuleCreateRequest(
+            rule_id="aOp1", category="operacion", motor_id=motor_id
+        ),
     )
     motor_catalog.create_geotab_rule(
         vehicle["database_id"],
         GeotabRuleCreateRequest(
-            rule_id="aRpm1",
+            rule_id="aSafe1",
             category="habito_seguro",
+            description="Excesos de velocidad",
+        ),
+    )
+    rpm_rule = motor_catalog.create_geotab_rule(
+        vehicle["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aRpm1",
+            category="operacion",
             motor_id=motor_id,
-            event_type="exceso_rpm",
+            band="exceso_rpm",
         ),
     )
     motor_catalog.create_geotab_rule_group(
         vehicle["database_id"],
-        GeotabRuleGroupCreateRequest(motor_id=motor_id, rule_record_ids=[op_rule.id]),
+        GeotabRuleGroupCreateRequest(
+            motor_id=motor_id,
+            rule_record_ids=[op_rule.id, rpm_rule.id],
+        ),
     )
 
     response = await client.get("/api/v1/integration/snapshot", headers=headers)
@@ -683,11 +847,298 @@ async def test_snapshot_exposes_motor_type(client, vehicle, monkeypatch):
     assert vehicle_row["motor_type"] == "ISD"
 
     customer = next(c for c in payload["customers"] if c["name"] == "Cliente Portal")
-    rules = {r["rule_id"]: r for r in customer["databases"][0]["rules"]}
+    exported_rules = customer["databases"][0]["rules"]
+    rules = {r["rule_id"]: r for r in exported_rules}
     assert rules["aOp1"]["motor_type"] == "ISD"
     assert rules["aSafe1"]["motor_type"] is None
-    assert rules["aRpm1"]["motor_type"] == "ISD"
-    assert rules["aRpm1"]["event_type"] == "exceso_rpm"
+    assert rules["aSafe1"]["description"] == "Excesos de velocidad"
+    rpm_rows = [row for row in exported_rules if row["rule_id"] == "aRpm1"]
+    assert {row["category"] for row in rpm_rows} == {"operacion", "habito_seguro"}
+    assert {row["motor_type"] for row in rpm_rows} == {"ISD"}
+    assert next(row for row in rpm_rows if row["category"] == "operacion")["band"] == "exceso_rpm"
+    safe_rpm = next(row for row in rpm_rows if row["category"] == "habito_seguro")
+    assert safe_rpm["event_type"] == "exceso_rpm"
+    assert safe_rpm["description"] == "Excesos de RPM"
+
+
+# ── Bandas de RPM explicitas ──────────────────────────────────────────
+
+
+def _fake_inspection_named(name: str):
+    def _resolve(db_id, rule_id):
+        return GeotabRuleInspection(
+            exists=True, rule_id=rule_id, name=name, status="Activa", headline=""
+        )
+
+    return _resolve
+
+
+def test_create_rule_with_band(geotab_db, rule_motor_id, monkeypatch):
+    monkeypatch.setattr(
+        motor_catalog,
+        "resolve_geotab_rule",
+        _fake_inspection_named("Rango Economico Descenso"),
+    )
+    record = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aBand1",
+            category="operacion",
+            motor_id=rule_motor_id,
+            band="rango_economico",
+            is_descenso=True,
+        ),
+    )
+    app = record.applications[0]
+    assert app.band == "rango_economico"
+    assert app.is_descenso is True
+
+    # operacion sin banda -> None.
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", _fake_inspection_named("Regla rara")
+    )
+    no_band = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aBand2", category="operacion", motor_id=rule_motor_id
+        ),
+    )
+    assert no_band.applications[0].band is None
+    assert no_band.applications[0].is_descenso is False
+
+    # habito_seguro nunca lleva banda aunque se envie.
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", _fake_inspection_named("Frenada")
+    )
+    habito = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aBand3",
+            category="habito_seguro",
+            description="Frenadas bruscas",
+            band="rango_bajo",
+        ),
+    )
+    assert habito.applications[0].band is None
+
+
+def test_create_rule_band_suggestion_in_record(geotab_db, rule_motor_id, monkeypatch):
+    monkeypatch.setattr(
+        motor_catalog,
+        "resolve_geotab_rule",
+        _fake_inspection_named("Rango Potencia Ineficiente X11"),
+    )
+    record = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aSug1", category="operacion", motor_id=rule_motor_id
+        ),
+    )
+    app = record.applications[0]
+    # La banda real no se seteo (None), pero el sugeridor la propone.
+    assert app.band is None
+    assert app.suggested_band == "rango_potencia_ineficiente"
+
+
+def test_rule_band_check_constraints(geotab_db, rule_motor_id, monkeypatch):
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", _fake_inspection_named("Rango Bajo")
+    )
+    record = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aChk1", category="operacion", motor_id=rule_motor_id
+        ),
+    )
+    application_id = record.applications[0].id
+
+    # ralenti + descenso -> rechazado por CHECK.
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE geotab_rule_applications "
+                    "SET band = 'ralenti', is_descenso = TRUE WHERE id = %s;",
+                    (application_id,),
+                )
+            conn.commit()
+
+    # is_descenso sin band -> rechazado por CHECK.
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE geotab_rule_applications "
+                    "SET band = NULL, is_descenso = TRUE WHERE id = %s;",
+                    (application_id,),
+                )
+            conn.commit()
+
+
+def test_update_rule_application_band(geotab_db, rule_motor_id, monkeypatch):
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", _fake_inspection_named("Regla rara")
+    )
+    record = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aUpd1", category="operacion", motor_id=rule_motor_id
+        ),
+    )
+    application_id = record.applications[0].id
+    assert record.applications[0].band is None
+
+    updated = motor_catalog.update_geotab_rule_application(
+        application_id,
+        GeotabRuleApplicationUpdateRequest(band="rango_potencia", is_descenso=False),
+    )
+    app = next(a for a in updated.applications if a.id == application_id)
+    assert app.band == "rango_potencia"
+
+    # No se permite banda sobre aplicaciones habito_seguro.
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", _fake_inspection_named("Frenada")
+    )
+    safe = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aUpd2",
+            category="habito_seguro",
+            description="Frenadas bruscas",
+        ),
+    )
+    safe_app_id = safe.applications[0].id
+    with pytest.raises(ValueError, match="operacion"):
+        motor_catalog.update_geotab_rule_application(
+            safe_app_id,
+            GeotabRuleApplicationUpdateRequest(band="rango_bajo"),
+        )
+
+    edited_safe = motor_catalog.update_geotab_rule_application(
+        safe_app_id,
+        GeotabRuleApplicationUpdateRequest(description="Giros bruscos"),
+    )
+    edited_app = next(a for a in edited_safe.applications if a.id == safe_app_id)
+    assert edited_app.description == "Giros bruscos"
+    assert edited_app.event_type is None
+    assert edited_app.motor_id is None
+
+    with pytest.raises(ValueError, match="RPM"):
+        motor_catalog.update_geotab_rule_application(
+            safe_app_id,
+            GeotabRuleApplicationUpdateRequest(description="Excesos de RPM"),
+        )
+
+
+
+async def test_snapshot_includes_band_fields(
+    client, vehicle, rule_motor_id, monkeypatch
+):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+
+    monkeypatch.setattr(
+        motor_catalog,
+        "resolve_geotab_rule",
+        _fake_inspection_named("Rango Economico Descenso"),
+    )
+    motor_catalog.create_geotab_rule(
+        vehicle["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aBandOp",
+            category="operacion",
+            motor_id=rule_motor_id,
+            band="rango_economico",
+            is_descenso=True,
+        ),
+    )
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", _fake_inspection_named("Regla rara")
+    )
+    motor_catalog.create_geotab_rule(
+        vehicle["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aBandNone", category="operacion", motor_id=rule_motor_id
+        ),
+    )
+
+    response = await client.get("/api/v1/integration/snapshot", headers=headers)
+    assert response.status_code == 200
+    customer = next(c for c in response.json()["customers"] if c["name"] == "Cliente Portal")
+    rules = {r["rule_id"]: r for r in customer["databases"][0]["rules"]}
+
+    assert rules["aBandOp"]["band"] == "rango_economico"
+    assert rules["aBandOp"]["is_descenso"] is True
+    # Serializa NULL sin romper el formato.
+    assert rules["aBandNone"]["band"] is None
+    assert rules["aBandNone"]["is_descenso"] is False
+
+
+def test_backfill_operacion_bands(geotab_db, rule_motor_id):
+    """Reproduce el backfill de la migracion 20260724_0001 sobre nombres reales."""
+    seeds = [
+        ("Rango Bajo X11", "rango_bajo", False),
+        ("Rango Consumo X11", "rango_potencia_ineficiente", False),
+        ("Potencia Eficiente", "rango_potencia", False),
+        ("Rango Económico Descenso", "rango_economico", True),
+        ("Regla sin palabra clave", None, False),
+    ]
+    app_ids: list[int] = []
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            for idx, (name, _band, _desc) in enumerate(seeds):
+                cur.execute(
+                    "INSERT INTO geotab_rules (database_id, name, rule_id, category) "
+                    "VALUES (%s, %s, %s, 'operacion') RETURNING id;",
+                    (geotab_db["database_id"], name, f"bk{idx}"),
+                )
+                rule_id = int(cur.fetchone()["id"])
+                cur.execute(
+                    "INSERT INTO geotab_rule_applications "
+                    "(geotab_rule_id, category, motor_id) "
+                    "VALUES (%s, 'operacion', %s) RETURNING id;",
+                    (rule_id, rule_motor_id),
+                )
+                app_ids.append(int(cur.fetchone()["id"]))
+        conn.commit()
+
+    # Backfill identico al de la migracion.
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT gra.id AS application_id, gr.name AS rule_name
+                FROM geotab_rule_applications gra
+                INNER JOIN geotab_rules gr ON gr.id = gra.geotab_rule_id
+                WHERE gra.category = 'operacion' AND gra.band IS NULL
+                  AND gra.id = ANY(%s);
+                """,
+                (app_ids,),
+            )
+            rows = cur.fetchall()
+            for row in rows:
+                band = suggest_band(row["rule_name"])
+                if band is None:
+                    continue
+                cur.execute(
+                    "UPDATE geotab_rule_applications SET band = %s, is_descenso = %s "
+                    "WHERE id = %s;",
+                    (band, suggest_is_descenso(row["rule_name"], band), row["application_id"]),
+                )
+        conn.commit()
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, band, is_descenso FROM geotab_rule_applications "
+                "WHERE id = ANY(%s) ORDER BY id;",
+                (app_ids,),
+            )
+            result = {row["id"]: row for row in cur.fetchall()}
+
+    for app_id, (_name, expected_band, expected_desc) in zip(app_ids, seeds):
+        assert result[app_id]["band"] == expected_band
+        assert result[app_id]["is_descenso"] is expected_desc
 
 
 async def test_vehicles_pagination(client, vehicle, monkeypatch):

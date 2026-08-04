@@ -169,6 +169,63 @@ def test_small_or_transient_drop_is_also_added_to_suggested_adjustment():
     assert analysis.total == 2
 
 
+def test_regression_on_the_other_meter_does_not_block_the_row():
+    """Fila comercial (ajuste en km): un retroceso de horómetro nunca lo cubre
+    el ajuste sugerido en km, así que solo puede advertir."""
+    row = _row_from_preview(
+        _row(
+            odo_end=1100,
+            horo_end=190,
+            warnings=[
+                "Retroceso Geotab detectado [acumulado] (horómetro): 200 → 190 h "
+                "(caída de 10 h) entre 2026-06-10 y 2026-06-11."
+            ],
+            geotab_regression_count=1,
+            geotab_regression_total_hours=10,
+            suggested_adjustment=0,
+        )
+    )
+
+    assert any("otro medidor" in warning for warning in row["warnings"])
+    _reject_geotab_regression(row)
+
+
+def test_blocking_message_names_the_plate_and_the_reason():
+    row = _row_from_preview(_row(plate="ABC123"))
+
+    with pytest.raises(CpkCphConflict) as excinfo:
+        _reject_geotab_regression(row)
+    assert "ABC123" in str(excinfo.value)
+    assert "odómetro retrocede de 1000 a 900 km" in str(excinfo.value)
+
+
+def test_regression_override_with_note_allows_saving():
+    row = _row_from_preview(
+        _row(regression_override=True, correction_note="Cambio de ECM el 12/06.")
+    )
+
+    _reject_geotab_regression(row)
+    assert any("aceptado manualmente" in warning for warning in row["warnings"])
+
+
+def test_regression_override_without_note_still_blocks():
+    row = _row_from_preview(_row(regression_override=True))
+
+    with pytest.raises(CpkCphConflict, match="nota"):
+        _reject_geotab_regression(row)
+
+
+def test_persisted_override_marker_survives_a_reload():
+    """Al releer la fila guardada el flag ya no viaja, pero el marcador en
+    warnings mantiene la aceptación."""
+    saved = _row_from_preview(
+        _row(regression_override=True, correction_note="Cambio de ECM el 12/06.")
+    )
+    reloaded = _row_from_preview({**saved, "regression_override": False})
+
+    _reject_geotab_regression(reloaded)
+
+
 def _stale_monthly_row(**overrides):
     """Fila típica de datos mensuales calculados antes de la métrica de retrocesos:
     diferencia alta, métricas en cero, sin warnings [acumulado]."""

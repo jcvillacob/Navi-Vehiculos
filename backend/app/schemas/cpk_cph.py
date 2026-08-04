@@ -54,6 +54,10 @@ class CpkCphRowBase(BaseModel):
     calculation_status: str = "pending"
     warnings: list[str] = Field(default_factory=list)
     correction_note: str | None = None
+    regression_override: bool = Field(
+        default=False,
+        description="El usuario acepta guardar pese al retroceso Geotab (exige nota)",
+    )
 
 
 class CpkCphPreviewRow(CpkCphRowBase):
@@ -107,3 +111,7 @@ class CpkCphRowPatchRequest(BaseModel):
     kms_ecm_approved: float | None = Field(default=None, ge=0)
     hours_ecm_approved: float | None = Field(default=None, ge=0)
     correction_note: str | None = None
+    regression_override: bool = Field(
+        default=False,
+        description="El usuario acepta guardar pese al retroceso Geotab (exige nota)",
+    )

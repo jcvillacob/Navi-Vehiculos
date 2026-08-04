@@ -459,11 +459,46 @@ class GeotabRuleCreateRequest(BaseModel):
     motor_id: int | None = Field(
         default=None,
         gt=0,
-        description="Motor al que aplica esta regla; null significa global",
+        description=(
+            "Motor al que aplica la regla. Es obligatorio para category 'operacion'; "
+            "solo los habitos seguros globales usan null"
+        ),
     )
     event_type: str | None = Field(
         default=None,
         description="Tipo semantico del evento, por ejemplo 'exceso_rpm'",
+    )
+    description: str | None = Field(
+        default=None,
+        description="Clasificacion explicita del habito seguro; enum cerrado",
+    )
+    band: str | None = Field(
+        default=None,
+        description="Banda de RPM explicita (solo category 'operacion'); enum cerrado o null",
+    )
+    is_descenso: bool = Field(
+        default=False,
+        description="Marca de descenso; requiere band no nulo y band != ralenti",
+    )
+
+
+class GeotabRuleApplicationUpdateRequest(BaseModel):
+    description: str | None = Field(
+        default=None,
+        description="Nueva clasificacion para una aplicacion de habito seguro",
+    )
+    motor_id: int | None = Field(
+        default=None,
+        gt=0,
+        description="Motor requerido cuando description es 'Excesos de RPM'",
+    )
+    band: str | None = Field(
+        default=None,
+        description="Banda de RPM explicita o null para dejar sin banda",
+    )
+    is_descenso: bool = Field(
+        default=False,
+        description="Marca de descenso; requiere band no nulo y band != ralenti",
     )
 
 
@@ -477,6 +512,20 @@ class GeotabRuleApplicationRecord(BaseModel):
     motor_name: str | None = Field(default=None, description="Nombre del motor si aplica")
     technical_number: str | None = Field(default=None, description="Numero tecnico del motor si aplica")
     event_type: str | None = Field(default=None, description="Tipo semantico del evento")
+    description: str | None = Field(
+        default=None,
+        description="Clasificacion explicita de la aplicacion de habito seguro",
+    )
+    band: str | None = Field(default=None, description="Banda de RPM explicita asignada")
+    is_descenso: bool = Field(default=False, description="Marca de descenso de la banda")
+    suggested_band: str | None = Field(
+        default=None,
+        description="Banda sugerida por el nombre de la regla (sugeridor por keyword)",
+    )
+    suggested_is_descenso: bool = Field(
+        default=False,
+        description="Descenso sugerido por el nombre de la regla",
+    )
     created_at: datetime = Field(..., description="Fecha de creacion")
 
 
@@ -556,6 +605,14 @@ class GeotabRuleInspection(BaseModel):
     )
     raw_condition: Any = Field(default=None, description="Condicion cruda devuelta por Geotab")
     message: str | None = Field(default=None, description="Mensaje auxiliar para errores o fallback")
+    suggested_band: str | None = Field(
+        default=None,
+        description="Banda de RPM sugerida por el nombre resuelto (para pre-llenar la UI)",
+    )
+    suggested_is_descenso: bool = Field(
+        default=False,
+        description="Descenso sugerido por el nombre resuelto",
+    )
 
 
 class CustomerDatabaseRecord(BaseModel):
