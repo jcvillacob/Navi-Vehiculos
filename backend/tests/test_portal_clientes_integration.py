@@ -20,6 +20,9 @@ from app.schemas.vehicle import (
     GeotabRuleCreateRequest,
     GeotabRuleGroupCreateRequest,
     GeotabRuleInspection,
+    MotorCatalogUpsertRequest,
+    MotorRpmBandInput,
+    MotorUpdateRequest,
 )
 from app.services import availability_store, integration_export, motor_catalog, rendimientos
 from app.services.rule_bands import suggest_band, suggest_is_descenso
@@ -28,6 +31,13 @@ from app.services.rule_bands import suggest_band, suggest_is_descenso
 def _connect():
     raw = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
     return psycopg.connect(raw, row_factory=dict_row)
+
+
+def _run_runtime_reconciliation() -> None:
+    raw = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(raw) as conn:
+        motor_catalog._run_motor_tables_ddl_inner(conn)
+        conn.commit()
 
 
 @pytest.fixture
@@ -516,6 +526,10 @@ def test_exceso_rpm_band_derives_safe_habit_application(geotab_db, monkeypatch):
         geotab_db["database_id"],
         GeotabRuleGroupCreateRequest(motor_id=motor_id, rule_record_ids=[rpm_rule.id]),
     )
+
+    # Simula un reinicio del backend: la reconciliacion runtime debe conservar
+    # tanto la aplicacion operativa como su habito seguro derivado y el grupo.
+    _run_runtime_reconciliation()
     assert motor_catalog._list_rule_groups_for_database(geotab_db["database_id"])[0].rules
 
     derived = next(
@@ -543,6 +557,56 @@ def test_exceso_rpm_band_derives_safe_habit_application(geotab_db, monkeypatch):
         GeotabRuleApplicationUpdateRequest(band="rango_potencia"),
     )
     assert all(app.event_type != "exceso_rpm" for app in updated.applications)
+
+
+def test_legacy_safe_rpm_application_is_repaired_as_descending_operation(geotab_db):
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motor_catalog (technical_number, engine_name) "
+                "VALUES ('TEC-X13-DOWN', 'X13E6') RETURNING id;"
+            )
+            motor_id = int(cur.fetchone()["id"])
+            cur.execute(
+                """
+                INSERT INTO geotab_rules (database_id, name, rule_id, category)
+                VALUES (%s, 'Exceso RPM X13 Descenso', 'aRpmLegacyDown', 'habito_seguro')
+                RETURNING id;
+                """,
+                (geotab_db["database_id"],),
+            )
+            rule_record_id = int(cur.fetchone()["id"])
+            cur.execute(
+                """
+                INSERT INTO geotab_rule_applications (
+                    geotab_rule_id, category, motor_id, event_type, description
+                )
+                VALUES (%s, 'habito_seguro', %s, 'exceso_rpm', 'Excesos de RPM');
+                """,
+                (rule_record_id, motor_id),
+            )
+        conn.commit()
+
+    _run_runtime_reconciliation()
+
+    repaired = next(
+        rule
+        for rule in motor_catalog._list_rules_for_database(geotab_db["database_id"])
+        if rule.rule_id == "aRpmLegacyDown"
+    )
+    assert repaired.category == "operacion"
+    assert {
+        (
+            application.category,
+            application.event_type,
+            application.band,
+            application.is_descenso,
+        )
+        for application in repaired.applications
+    } == {
+        ("operacion", None, "exceso_rpm", True),
+        ("habito_seguro", "exceso_rpm", None, False),
+    }
 
 
 # ── Pool de credenciales ──────────────────────────────────────────────
@@ -1486,3 +1550,299 @@ async def test_taller_ordenes_returns_503_on_cloudfleet_error(client, monkeypatc
     response = await client.get("/api/v1/integration/taller-ordenes", headers=headers)
     assert response.status_code == 503
     assert "CloudFleet" in response.json()["detail"]
+
+
+# ── range_mode (Rangos por Reglas / Rangos por RPM) ───────────────────
+
+
+def test_range_mode_defaults_to_reglas(geotab_db):
+    customer = next(
+        c for c in motor_catalog.list_customers() if c.id == geotab_db["customer_id"]
+    )
+    assert customer.range_mode == "reglas"
+
+
+def test_set_range_mode_rpm_and_back(geotab_db):
+    customer_id = geotab_db["customer_id"]
+
+    updated = motor_catalog.set_customer_range_mode(customer_id, "rpm")
+    assert updated.range_mode == "rpm"
+
+    updated = motor_catalog.set_customer_range_mode(customer_id, "reglas")
+    assert updated.range_mode == "reglas"
+
+
+def test_set_range_mode_rejects_invalid_value(geotab_db):
+    with pytest.raises(ValueError, match="Modo de rangos invalido"):
+        motor_catalog.set_customer_range_mode(geotab_db["customer_id"], "otro")
+
+
+def test_set_range_mode_requires_geotab_database(motor_tables):
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO customers (name) VALUES ('Cliente Sin Geotab') RETURNING id;"
+            )
+            customer_id = int(cur.fetchone()["id"])
+        conn.commit()
+
+    with pytest.raises(ValueError, match="database Geotab"):
+        motor_catalog.set_customer_range_mode(customer_id, "rpm")
+
+
+def test_set_range_mode_missing_customer(motor_tables):
+    with pytest.raises(ValueError, match="no existe"):
+        motor_catalog.set_customer_range_mode(999999, "rpm")
+
+
+async def test_snapshot_exports_range_mode(client, vehicle, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+
+    response = await client.get("/api/v1/integration/customers", headers=headers)
+    assert response.status_code == 200
+    customer = next(
+        c for c in response.json()["customers"] if c["name"] == "Cliente Portal"
+    )
+    assert customer["range_mode"] == "reglas"
+
+    motor_catalog.set_customer_range_mode(vehicle["customer_id"], "rpm")
+
+    response = await client.get("/api/v1/integration/snapshot", headers=headers)
+    customer = next(
+        c for c in response.json()["customers"] if c["name"] == "Cliente Portal"
+    )
+    assert customer["range_mode"] == "rpm"
+
+
+# ── Rangos de RPM por motor (motor_rpm_bands) ─────────────────────────
+
+
+def _bands(*, exceso_max: int | None = None) -> list[MotorRpmBandInput]:
+    """Los cortes del reporte de referencia: 600/1100/1450/1800/2300/2750+."""
+    return [
+        MotorRpmBandInput(band="rango_bajo", rpm_min=600, rpm_max=1100),
+        MotorRpmBandInput(band="rango_economico", rpm_min=1100, rpm_max=1450),
+        MotorRpmBandInput(band="rango_balanceado", rpm_min=1450, rpm_max=1800),
+        MotorRpmBandInput(band="rango_potencia", rpm_min=1800, rpm_max=2300),
+        MotorRpmBandInput(band="rango_potencia_ineficiente", rpm_min=2300, rpm_max=2750),
+        MotorRpmBandInput(band="exceso_rpm", rpm_min=2750, rpm_max=exceso_max),
+    ]
+
+
+@pytest.fixture
+def motor(motor_tables):
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motor_catalog (technical_number, engine_name) "
+                "VALUES ('TEC-RPM', 'X11') RETURNING id;"
+            )
+            motor_id = int(cur.fetchone()["id"])
+        conn.commit()
+    return motor_id
+
+
+def test_motor_rpm_bands_start_empty(motor):
+    assert motor_catalog.list_motor_rpm_bands(motor) == []
+
+
+def test_set_motor_rpm_bands_roundtrip(motor):
+    saved = motor_catalog.set_motor_rpm_bands(motor, _bands())
+    assert [band.band for band in saved] == [
+        "rango_bajo",
+        "rango_economico",
+        "rango_balanceado",
+        "rango_potencia",
+        "rango_potencia_ineficiente",
+        "exceso_rpm",
+    ]
+    assert saved[0].rpm_min == 600
+    assert saved[-1].rpm_max is None
+    assert motor_catalog.list_motor_rpm_bands(motor) == saved
+
+
+def test_set_motor_rpm_bands_replaces_previous(motor):
+    motor_catalog.set_motor_rpm_bands(motor, _bands())
+    saved = motor_catalog.set_motor_rpm_bands(motor, _bands(exceso_max=4000))
+    assert saved[-1].rpm_max == 4000
+    assert len(saved) == 6
+
+
+def test_set_motor_rpm_bands_empty_clears(motor):
+    motor_catalog.set_motor_rpm_bands(motor, _bands())
+    assert motor_catalog.set_motor_rpm_bands(motor, []) == []
+    assert motor_catalog.list_motor_rpm_bands(motor) == []
+
+
+def test_set_motor_rpm_bands_rejects_incomplete(motor):
+    with pytest.raises(ValueError, match="Faltan bandas"):
+        motor_catalog.set_motor_rpm_bands(motor, _bands()[:3])
+
+
+def test_set_motor_rpm_bands_rejects_gap(motor):
+    bands = _bands()
+    bands[1] = MotorRpmBandInput(band="rango_economico", rpm_min=1200, rpm_max=1450)
+    with pytest.raises(ValueError, match="contiguos"):
+        motor_catalog.set_motor_rpm_bands(motor, bands)
+
+
+def test_set_motor_rpm_bands_rejects_overlap(motor):
+    bands = _bands()
+    bands[0] = MotorRpmBandInput(band="rango_bajo", rpm_min=600, rpm_max=1200)
+    with pytest.raises(ValueError, match="contiguos"):
+        motor_catalog.set_motor_rpm_bands(motor, bands)
+
+
+def test_set_motor_rpm_bands_rejects_inverted_range(motor):
+    bands = _bands()
+    bands[0] = MotorRpmBandInput(band="rango_bajo", rpm_min=1100, rpm_max=600)
+    with pytest.raises(ValueError, match="mayor que el minimo"):
+        motor_catalog.set_motor_rpm_bands(motor, bands)
+
+
+def test_set_motor_rpm_bands_rejects_open_middle_band(motor):
+    bands = _bands()
+    bands[2] = MotorRpmBandInput(band="rango_balanceado", rpm_min=1450, rpm_max=None)
+    with pytest.raises(ValueError, match="sin limite superior"):
+        motor_catalog.set_motor_rpm_bands(motor, bands)
+
+
+def test_set_motor_rpm_bands_missing_motor(motor_tables):
+    with pytest.raises(ValueError, match="no existe"):
+        motor_catalog.set_motor_rpm_bands(999999, _bands())
+
+
+def test_list_motors_includes_rpm_bands(motor):
+    motor_catalog.set_motor_rpm_bands(motor, _bands())
+    record = next(m for m in motor_catalog.list_motors() if m.id == motor)
+    assert len(record.rpm_bands) == 6
+    assert record.rpm_bands[0].rpm_min == 600
+
+
+async def test_snapshot_exports_motor_rpm_bands(client, motor, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+
+    response = await client.get("/api/v1/integration/snapshot", headers=headers)
+    assert response.status_code == 200
+    exported = next(m for m in response.json()["motors"] if m["motor_type"] == "X11")
+    # Un motor sin configurar viaja igual, con la lista vacia: el consumidor
+    # necesita distinguir "no configurado" de "no existe".
+    assert exported["rpm_bands"] == []
+
+    motor_catalog.set_motor_rpm_bands(motor, _bands())
+
+    response = await client.get("/api/v1/integration/snapshot", headers=headers)
+    exported = next(m for m in response.json()["motors"] if m["motor_type"] == "X11")
+    assert [band["band"] for band in exported["rpm_bands"]] == [
+        "rango_bajo",
+        "rango_economico",
+        "rango_balanceado",
+        "rango_potencia",
+        "rango_potencia_ineficiente",
+        "exceso_rpm",
+    ]
+    assert exported["rpm_bands"][0] == {
+        "band": "rango_bajo",
+        "rpm_min": 600,
+        "rpm_max": 1100,
+    }
+    assert exported["rpm_bands"][-1]["rpm_max"] is None
+
+
+# ── Velocidades de placa del motor (governed / overspeed) ────────────
+
+
+def test_create_motor_stores_governed_speeds(motor_tables):
+    created = motor_catalog.create_motor(
+        MotorCatalogUpsertRequest(
+            technical_number="TEC-X13E6",
+            engine_name="X13E6",
+            governed_speed_rpm=2100,
+            max_overspeed_rpm=2250,
+        )
+    )
+    assert created.governed_speed_rpm == 2100
+    assert created.max_overspeed_rpm == 2250
+
+    record = next(m for m in motor_catalog.list_motors() if m.id == created.id)
+    assert record.governed_speed_rpm == 2100
+    assert record.max_overspeed_rpm == 2250
+
+
+def test_create_motor_rejects_overspeed_below_governed(motor_tables):
+    with pytest.raises(ValueError):
+        motor_catalog.create_motor(
+            MotorCatalogUpsertRequest(
+                technical_number="TEC-BAD",
+                engine_name="BAD",
+                governed_speed_rpm=2100,
+                max_overspeed_rpm=1900,
+            )
+        )
+
+
+def test_motor_governed_speeds_start_null(motor):
+    record = next(m for m in motor_catalog.list_motors() if m.id == motor)
+    assert record.governed_speed_rpm is None
+    assert record.max_overspeed_rpm is None
+
+
+def test_update_motor_sets_and_clears_governed_speeds(motor):
+    updated = motor_catalog.update_motor(
+        motor,
+        MotorUpdateRequest(
+            engine_name="X11", governed_speed_rpm=2100, max_overspeed_rpm=2250
+        ),
+    )
+    assert updated.governed_speed_rpm == 2100
+    assert updated.max_overspeed_rpm == 2250
+
+    # El PUT escribe el valor tal cual llega: omitirlo borra el dato.
+    cleared = motor_catalog.update_motor(motor, MotorUpdateRequest(engine_name="X11"))
+    assert cleared.governed_speed_rpm is None
+    assert cleared.max_overspeed_rpm is None
+
+
+def test_update_motor_rejects_overspeed_below_governed(motor):
+    with pytest.raises(ValueError):
+        motor_catalog.update_motor(
+            motor,
+            MotorUpdateRequest(
+                engine_name="X11", governed_speed_rpm=2100, max_overspeed_rpm=1900
+            ),
+        )
+
+
+async def test_snapshot_exports_motor_governed_speeds(client, motor, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+
+    response = await client.get("/api/v1/integration/snapshot", headers=headers)
+    assert response.status_code == 200
+    exported = next(m for m in response.json()["motors"] if m["motor_type"] == "X11")
+    # Aditivo/nullable: las claves viajan siempre, en null mientras no se capturen.
+    assert exported["governed_speed_rpm"] is None
+    assert exported["max_overspeed_rpm"] is None
+
+    motor_catalog.update_motor(
+        motor,
+        MotorUpdateRequest(
+            engine_name="X11", governed_speed_rpm=2100, max_overspeed_rpm=2250
+        ),
+    )
+
+    response = await client.get("/api/v1/integration/snapshot", headers=headers)
+    exported = next(m for m in response.json()["motors"] if m["motor_type"] == "X11")
+    assert exported["governed_speed_rpm"] == 2100
+    assert exported["max_overspeed_rpm"] == 2250
+
+
+async def test_customers_export_includes_motors(client, motor, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    response = await client.get(
+        "/api/v1/integration/customers", headers={"X-API-Key": "clave-portal"}
+    )
+    assert response.status_code == 200
+    assert any(m["motor_type"] == "X11" for m in response.json()["motors"])

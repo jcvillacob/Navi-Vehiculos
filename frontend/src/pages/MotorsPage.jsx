@@ -4,10 +4,21 @@ import Can from "../components/Can";
 import ToastStack from "../components/ToastStack";
 import { useToasts } from "../components/useToasts";
 import MotorAttachmentModal from "../features/engineLookup/components/MotorAttachmentModal";
+import MotorRpmBandsModal from "../features/engineLookup/components/MotorRpmBandsModal";
 import RegisterMotorModal from "../features/engineLookup/components/RegisterMotorModal";
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
+
+// Bandas del eje de RPM (backend: rule_bands.RPM_RANGE_BANDS).
+const RPM_BAND_LABELS = {
+  rango_bajo: "Bajo",
+  rango_economico: "Economico",
+  rango_balanceado: "Balanceado",
+  rango_potencia: "Potencia",
+  rango_potencia_ineficiente: "Ineficiente",
+  exceso_rpm: "Exceso"
+};
 
 function AttachmentIcon({ contentType }) {
   const isPdf = contentType === "application/pdf";
@@ -32,6 +43,15 @@ function AttachmentIcon({ contentType }) {
   );
 }
 
+// Los inputs de RPM viajan como entero o null (null = "sin capturar" en el
+// contrato con Portal Clientes; nunca 0).
+function parseRpmInput(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function formatLastSeen(value) {
   if (!value) {
     return "Sin consultas";
@@ -46,11 +66,29 @@ function formatLastSeen(value) {
 function EditMotorModal({ motor, loading, onClose, onSubmit, onDelete }) {
   const [engineName, setEngineName] = useState(motor.engine_name);
   const [technicalNumber, setTechnicalNumber] = useState(motor.technical_number);
+  const [governedSpeed, setGovernedSpeed] = useState(
+    motor.governed_speed_rpm == null ? "" : String(motor.governed_speed_rpm)
+  );
+  const [maxOverspeed, setMaxOverspeed] = useState(
+    motor.max_overspeed_rpm == null ? "" : String(motor.max_overspeed_rpm)
+  );
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const governedValue = parseRpmInput(governedSpeed);
+  const overspeedValue = parseRpmInput(maxOverspeed);
+  const speedsError =
+    governedValue != null && overspeedValue != null && overspeedValue < governedValue
+      ? "La sobrevelocidad maxima no puede ser menor que la velocidad gobernada."
+      : "";
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    const payload = { engine_name: engineName.trim() };
+    if (speedsError) return;
+    const payload = {
+      engine_name: engineName.trim(),
+      governed_speed_rpm: governedValue,
+      max_overspeed_rpm: overspeedValue
+    };
     const trimmedTechnical = technicalNumber.trim();
     if (trimmedTechnical && trimmedTechnical !== motor.technical_number) {
       payload.technical_number = trimmedTechnical;
@@ -122,8 +160,53 @@ function EditMotorModal({ motor, loading, onClose, onSubmit, onDelete }) {
               />
             </div>
 
+            <div className="form-field">
+              <label htmlFor="edit-motor-governed-speed">
+                Velocidad nominal gobernada sin carga (RPM)
+              </label>
+              <input
+                id="edit-motor-governed-speed"
+                type="number"
+                min="1"
+                step="1"
+                inputMode="numeric"
+                value={governedSpeed}
+                onChange={(event) => setGovernedSpeed(event.target.value)}
+                placeholder="Ej: 2100"
+              />
+            </div>
+
+            <div className="form-field">
+              <label htmlFor="edit-motor-max-overspeed">
+                Capacidad maxima de sobrevelocidad (RPM)
+              </label>
+              <input
+                id="edit-motor-max-overspeed"
+                type="number"
+                min="1"
+                step="1"
+                inputMode="numeric"
+                value={maxOverspeed}
+                onChange={(event) => setMaxOverspeed(event.target.value)}
+                placeholder="Ej: 2250"
+              />
+              <p className="support-copy">
+                Datos de la hoja tecnica del motor. Se exportan a Portal Clientes; dejalos
+                vacios si aun no se conocen.
+              </p>
+            </div>
+
+            {speedsError ? (
+              <div className="notice-banner notice-error">{speedsError}</div>
+            ) : null}
+
             <div className="actions-row modal-actions">
-              <button type="submit" disabled={loading || !engineName.trim() || !technicalNumber.trim()}>
+              <button
+                type="submit"
+                disabled={
+                  loading || !engineName.trim() || !technicalNumber.trim() || Boolean(speedsError)
+                }
+              >
                 {loading ? "Guardando..." : "Guardar cambios"}
               </button>
               <button type="button" className="button-secondary" onClick={onClose}>
@@ -149,6 +232,7 @@ export default function MotorsPage() {
   const [isRegisterOpen, setIsRegisterOpen] = useState(false);
   const [selectedMotorForUpload, setSelectedMotorForUpload] = useState(null);
   const [editingMotor, setEditingMotor] = useState(null);
+  const [rpmBandsMotor, setRpmBandsMotor] = useState(null);
   const [search, setSearch] = useState("");
   const { toasts, pushToast } = useToasts();
 
@@ -161,7 +245,8 @@ export default function MotorsPage() {
     removeMotor,
     uploadAttachment,
     updateAttachment,
-    deleteAttachment
+    deleteAttachment,
+    saveRpmBands
   } = useMotorsCatalog();
 
   useEffect(() => {
@@ -228,6 +313,22 @@ export default function MotorsPage() {
       pushToast("success", msg);
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message : "No fue posible eliminar el motor");
+    }
+  };
+
+  const handleSaveRpmBands = async (bands) => {
+    try {
+      await saveRpmBands(rpmBandsMotor.id, bands);
+      setRpmBandsMotor(null);
+      pushToast(
+        "success",
+        bands.length ? "Rangos de RPM guardados." : "Rangos de RPM borrados."
+      );
+    } catch (err) {
+      pushToast(
+        "error",
+        err instanceof Error ? err.message : "No fue posible guardar los rangos de RPM"
+      );
     }
   };
 
@@ -378,6 +479,51 @@ export default function MotorsPage() {
                 <span>Creado</span>
                 <strong>{formatLastSeen(motor.created_at)}</strong>
               </div>
+              <div>
+                <span>Velocidad gobernada</span>
+                <strong>
+                  {motor.governed_speed_rpm == null
+                    ? "—"
+                    : `${motor.governed_speed_rpm} RPM`}
+                </strong>
+              </div>
+              <div>
+                <span>Sobrevelocidad max.</span>
+                <strong>
+                  {motor.max_overspeed_rpm == null ? "—" : `${motor.max_overspeed_rpm} RPM`}
+                </strong>
+              </div>
+            </div>
+
+            <div className="motor-card-rpm">
+              <div className="motor-rpm-header">
+                <span>Rangos de RPM</span>
+                <Can permission="motors.edit">
+                  <button
+                    type="button"
+                    className="button-secondary button-sm"
+                    onClick={() => setRpmBandsMotor(motor)}
+                  >
+                    {(motor.rpm_bands || []).length > 0 ? "Editar" : "Configurar"}
+                  </button>
+                </Can>
+              </div>
+
+              {(motor.rpm_bands || []).length > 0 ? (
+                <div className="rpm-band-chips">
+                  {motor.rpm_bands.map((band) => (
+                    <span className="rpm-band-chip" key={band.band} title={RPM_BAND_LABELS[band.band]}>
+                      {RPM_BAND_LABELS[band.band]} {band.rpm_min}
+                      {band.rpm_max == null ? "+" : `-${band.rpm_max}`}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="support-copy">
+                  Sin configurar. Los clientes en modo "Rangos por RPM" no calculan bandas
+                  para este motor.
+                </p>
+              )}
             </div>
 
             <div className="motor-card-attachments">
@@ -437,6 +583,15 @@ export default function MotorsPage() {
         onUpdate={handleUpdateAttachment}
         onDelete={handleDeleteAttachment}
       />
+
+      {rpmBandsMotor ? (
+        <MotorRpmBandsModal
+          motor={motors.find((m) => m.id === rpmBandsMotor.id) || rpmBandsMotor}
+          loading={loading}
+          onClose={() => setRpmBandsMotor(null)}
+          onSubmit={handleSaveRpmBands}
+        />
+      ) : null}
 
       {editingMotor ? (
         <EditMotorModal

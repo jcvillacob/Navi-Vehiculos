@@ -18,6 +18,7 @@ from app.core.db import db_conn
 from app.schemas.vehicle import (
     AssignedDatabaseSummary,
     CUSTOMER_CATEGORIES,
+    CUSTOMER_RANGE_MODES,
     CustomerCreateRequest,
     CustomerDatabaseCreateRequest,
     CustomerDatabaseCredentialCreateRequest,
@@ -38,6 +39,8 @@ from app.schemas.vehicle import (
     GeotabRuleRecord,
     MotorAttachmentRecord,
     MotorCatalogRecord,
+    MotorRpmBandInput,
+    MotorRpmBandRecord,
     MotorCatalogUpsertRequest,
     MotorUpdateRequest,
     RecentMotorRecord,
@@ -54,6 +57,8 @@ from app.services.storage import (
     upload_file,
 )
 from app.services.rule_bands import (
+    RPM_RANGE_BAND_LABELS,
+    RPM_RANGE_BANDS,
     RULE_BANDS,
     suggest_band,
     suggest_is_descenso,
@@ -100,6 +105,18 @@ def _normalize_category(value: str | None, *, default: str = "Ninguna") -> str:
     if cleaned not in CUSTOMER_CATEGORIES:
         raise ValueError(
             "Categoria invalida. Usa: " + ", ".join(CUSTOMER_CATEGORIES) + "."
+        )
+    return cleaned
+
+
+def _normalize_range_mode(value: str | None, *, default: str = "reglas") -> str:
+    """Valida el modo de rangos de un cliente. Vacio -> default ('reglas')."""
+    cleaned = (value or "").strip().lower()
+    if not cleaned:
+        return default
+    if cleaned not in CUSTOMER_RANGE_MODES:
+        raise ValueError(
+            "Modo de rangos invalido. Usa: " + ", ".join(CUSTOMER_RANGE_MODES) + "."
         )
     return cleaned
 
@@ -172,9 +189,19 @@ def _resolve_band_fields(
 
 
 def _normalize_motor_payload(payload: MotorCatalogUpsertRequest) -> dict[str, Any]:
+    if (
+        payload.governed_speed_rpm is not None
+        and payload.max_overspeed_rpm is not None
+        and payload.max_overspeed_rpm < payload.governed_speed_rpm
+    ):
+        raise ValueError(
+            "La sobrevelocidad maxima no puede ser menor que la velocidad gobernada."
+        )
     return {
         "technical_number": payload.technical_number.strip(),
         "engine_name": payload.engine_name.strip(),
+        "governed_speed_rpm": payload.governed_speed_rpm,
+        "max_overspeed_rpm": payload.max_overspeed_rpm,
     }
 
 
@@ -520,6 +547,74 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             );
             """
         )
+        # Datos de placa del motor (hoja tecnica del fabricante): velocidad
+        # nominal gobernada sin carga y capacidad maxima de sobrevelocidad.
+        # NULL = aun no capturados.
+        cur.execute(
+            """
+            ALTER TABLE motor_catalog
+            ADD COLUMN IF NOT EXISTS governed_speed_rpm INTEGER NULL;
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE motor_catalog
+            ADD COLUMN IF NOT EXISTS max_overspeed_rpm INTEGER NULL;
+            """
+        )
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_motor_catalog_governed_speeds'
+                ) THEN
+                    ALTER TABLE motor_catalog
+                    ADD CONSTRAINT ck_motor_catalog_governed_speeds
+                    CHECK (
+                        (governed_speed_rpm IS NULL OR governed_speed_rpm > 0)
+                        AND (max_overspeed_rpm IS NULL OR max_overspeed_rpm > 0)
+                        AND (
+                            governed_speed_rpm IS NULL
+                            OR max_overspeed_rpm IS NULL
+                            OR max_overspeed_rpm >= governed_speed_rpm
+                        )
+                    );
+                END IF;
+            END $$;
+            """
+        )
+        # Rangos de RPM por motor. Solo se usan cuando el cliente esta en
+        # range_mode='rpm': ahi Portal Clientes no arma las bandas desde las
+        # reglas Geotab sino cortando el eje de revoluciones con estos tramos.
+        # Un motor sin filas = sin configurar; el consumidor debe saltarse esos
+        # vehiculos en vez de inventar cortes (ver docs del contrato).
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS motor_rpm_bands (
+                id BIGSERIAL PRIMARY KEY,
+                motor_id BIGINT NOT NULL REFERENCES motor_catalog(id) ON DELETE CASCADE,
+                band TEXT NOT NULL,
+                rpm_min INTEGER NOT NULL,
+                rpm_max INTEGER NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT uq_motor_rpm_bands_motor_band UNIQUE (motor_id, band),
+                CONSTRAINT ck_motor_rpm_bands_band
+                    CHECK (band IN ({', '.join(repr(band) for band in RPM_RANGE_BANDS)})),
+                CONSTRAINT ck_motor_rpm_bands_min CHECK (rpm_min >= 0),
+                CONSTRAINT ck_motor_rpm_bands_max
+                    CHECK (rpm_max IS NULL OR rpm_max > rpm_min)
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_motor_rpm_bands_motor
+                ON motor_rpm_bands (motor_id);
+            """
+        )
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS customers (
@@ -681,6 +776,28 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             """
             ALTER TABLE customers
             ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+            """
+        )
+        # Modo de rangos que Portal Clientes usa para las flotas con Geotab.
+        cur.execute(
+            """
+            ALTER TABLE customers
+            ADD COLUMN IF NOT EXISTS range_mode TEXT NOT NULL DEFAULT 'reglas';
+            """
+        )
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_customers_range_mode'
+                ) THEN
+                    ALTER TABLE customers
+                    ADD CONSTRAINT ck_customers_range_mode
+                    CHECK (range_mode IN ('reglas', 'rpm'));
+                END IF;
+            END $$;
             """
         )
         cur.execute(
@@ -885,14 +1002,31 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
         # requerir una segunda alta ni una segunda regla visible.
         cur.execute(
             """
+            UPDATE geotab_rules physical
+            SET category = 'operacion'
+            WHERE physical.category IS DISTINCT FROM 'operacion'
+              AND EXISTS (
+                  SELECT 1
+                  FROM geotab_rule_applications safe
+                  WHERE safe.geotab_rule_id = physical.id
+                    AND safe.category = 'habito_seguro'
+                    AND safe.event_type = 'exceso_rpm'
+                    AND safe.motor_id IS NOT NULL
+              );
+            """
+        )
+        cur.execute(
+            """
             INSERT INTO geotab_rule_applications (
                 geotab_rule_id, category, motor_id, event_type,
                 description, band, is_descenso
             )
             SELECT
                 safe.geotab_rule_id, 'operacion', safe.motor_id, NULL,
-                NULL, 'exceso_rpm', FALSE
+                NULL, 'exceso_rpm',
+                POSITION('descenso' IN LOWER(physical.name)) > 0
             FROM geotab_rule_applications safe
+            INNER JOIN geotab_rules physical ON physical.id = safe.geotab_rule_id
             WHERE safe.category = 'habito_seguro'
               AND safe.event_type = 'exceso_rpm'
               AND safe.motor_id IS NOT NULL
@@ -902,15 +1036,25 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
         cur.execute(
             """
             UPDATE geotab_rule_applications operation
-            SET band = 'exceso_rpm', is_descenso = FALSE
+            SET band = 'exceso_rpm',
+                is_descenso = operation.is_descenso
+                    OR POSITION('descenso' IN LOWER(physical.name)) > 0
             FROM geotab_rule_applications safe
+            INNER JOIN geotab_rules physical ON physical.id = safe.geotab_rule_id
             WHERE safe.geotab_rule_id = operation.geotab_rule_id
               AND safe.category = 'habito_seguro'
               AND safe.event_type = 'exceso_rpm'
               AND safe.motor_id IS NOT NULL
               AND operation.category = 'operacion'
               AND operation.event_type IS NULL
-              AND operation.motor_id = safe.motor_id;
+              AND operation.motor_id = safe.motor_id
+              AND (
+                  operation.band IS DISTINCT FROM 'exceso_rpm'
+                  OR (
+                      POSITION('descenso' IN LOWER(physical.name)) > 0
+                      AND NOT operation.is_descenso
+                  )
+              );
             """
         )
         cur.execute(
@@ -1093,61 +1237,6 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
         )
         cur.execute(
             """
-            DELETE FROM geotab_rule_group_rules grgr
-            USING geotab_rule_groups grg, motor_catalog group_motor
-            WHERE grgr.group_id = grg.id
-              AND group_motor.id = grg.motor_id
-              AND EXISTS (
-                  SELECT 1
-                  FROM geotab_rule_applications app
-                  INNER JOIN motor_catalog app_motor
-                      ON app_motor.id = app.motor_id
-                  WHERE app.geotab_rule_id = grgr.geotab_rule_id
-                    AND app.category = 'habito_seguro'
-                    AND app.event_type = 'exceso_rpm'
-                    AND LOWER(app_motor.engine_name) = LOWER(group_motor.engine_name)
-                    AND app_motor.technical_number = group_motor.technical_number
-              );
-            """
-        )
-        cur.execute(
-            """
-            DELETE FROM geotab_rule_applications op_app
-            USING motor_catalog op_motor
-            WHERE op_motor.id = op_app.motor_id
-              AND op_app.category = 'operacion'
-              AND op_app.event_type IS NULL
-              AND EXISTS (
-                  SELECT 1
-                  FROM geotab_rule_applications rpm_app
-                  INNER JOIN motor_catalog rpm_motor
-                      ON rpm_motor.id = rpm_app.motor_id
-                  WHERE rpm_app.geotab_rule_id = op_app.geotab_rule_id
-                    AND rpm_app.category = 'habito_seguro'
-                    AND rpm_app.event_type = 'exceso_rpm'
-                    AND LOWER(rpm_motor.engine_name) = LOWER(op_motor.engine_name)
-                    AND rpm_motor.technical_number = op_motor.technical_number
-              );
-            """
-        )
-        cur.execute(
-            """
-            DELETE FROM geotab_rule_applications op_app
-            WHERE op_app.category = 'operacion'
-              AND op_app.motor_id IS NULL
-              AND op_app.event_type IS NULL
-              AND EXISTS (
-                  SELECT 1
-                  FROM geotab_rule_applications rpm_app
-                  WHERE rpm_app.geotab_rule_id = op_app.geotab_rule_id
-                    AND rpm_app.category = 'habito_seguro'
-                    AND rpm_app.event_type = 'exceso_rpm'
-                    AND rpm_app.motor_id IS NOT NULL
-              );
-            """
-        )
-        cur.execute(
-            """
             DELETE FROM geotab_rule_groups grg
             WHERE NOT EXISTS (
                 SELECT 1
@@ -1180,6 +1269,8 @@ def list_motors() -> list[MotorCatalogRecord]:
                     m.id,
                     m.technical_number,
                     m.engine_name,
+                    m.governed_speed_rpm,
+                    m.max_overspeed_rpm,
                     COUNT(a.plate)::INT AS vehicle_count,
                     MAX(a.last_seen_at) AS last_seen_at,
                     m.created_at,
@@ -1191,6 +1282,8 @@ def list_motors() -> list[MotorCatalogRecord]:
                     m.id,
                     m.technical_number,
                     m.engine_name,
+                    m.governed_speed_rpm,
+                    m.max_overspeed_rpm,
                     m.created_at,
                     m.updated_at
                 ORDER BY COUNT(a.plate) DESC, m.engine_name ASC;
@@ -1203,12 +1296,16 @@ def list_motors() -> list[MotorCatalogRecord]:
         available_cpls_by_technical_number = _list_available_cpls_by_technical_numbers(
             conn, [str(row["technical_number"]) for row in rows]
         )
+        rpm_bands_by_motor_id = _list_rpm_bands_by_motor_ids(
+            conn, [int(row["id"]) for row in rows]
+        )
 
     return [
         MotorCatalogRecord(
             **row,
             attachments=attachments_by_motor_id.get(int(row["id"]), []),
             available_cpls=available_cpls_by_technical_number.get(str(row["technical_number"]), []),
+            rpm_bands=rpm_bands_by_motor_id.get(int(row["id"]), []),
         )
         for row in rows
     ]
@@ -1224,16 +1321,22 @@ def create_motor(payload: MotorCatalogUpsertRequest) -> MotorCatalogRecord:
                     """
                     INSERT INTO motor_catalog (
                         technical_number,
-                        engine_name
+                        engine_name,
+                        governed_speed_rpm,
+                        max_overspeed_rpm
                     )
                     VALUES (
                         %(technical_number)s,
-                        %(engine_name)s
+                        %(engine_name)s,
+                        %(governed_speed_rpm)s,
+                        %(max_overspeed_rpm)s
                     )
                     RETURNING
                         id,
                         technical_number,
                         engine_name,
+                        governed_speed_rpm,
+                        max_overspeed_rpm,
                         0::INT AS vehicle_count,
                         NULL::TIMESTAMPTZ AS last_seen_at,
                         created_at,
@@ -1255,6 +1358,16 @@ def create_motor(payload: MotorCatalogUpsertRequest) -> MotorCatalogRecord:
 def update_motor(motor_id: int, payload: MotorUpdateRequest) -> MotorCatalogRecord:
     normalized_name = payload.engine_name.strip()
     normalized_technical = payload.technical_number.strip() if payload.technical_number else None
+    governed_speed = payload.governed_speed_rpm
+    max_overspeed = payload.max_overspeed_rpm
+    if (
+        governed_speed is not None
+        and max_overspeed is not None
+        and max_overspeed < governed_speed
+    ):
+        raise ValueError(
+            "La sobrevelocidad maxima no puede ser menor que la velocidad gobernada."
+        )
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         with conn.cursor() as cur:
@@ -1280,11 +1393,21 @@ def update_motor(motor_id: int, payload: MotorUpdateRequest) -> MotorCatalogReco
                 cur.execute(
                     """
                     UPDATE motor_catalog
-                    SET engine_name = %s, technical_number = %s, updated_at = NOW()
+                    SET engine_name = %s,
+                        technical_number = %s,
+                        governed_speed_rpm = %s,
+                        max_overspeed_rpm = %s,
+                        updated_at = NOW()
                     WHERE id = %s
                     RETURNING id, technical_number, engine_name, created_at, updated_at;
                     """,
-                    (normalized_name, normalized_technical, motor_id),
+                    (
+                        normalized_name,
+                        normalized_technical,
+                        governed_speed,
+                        max_overspeed,
+                        motor_id,
+                    ),
                 )
                 # Cascade: update vehicle_motor_assignments
                 cur.execute(
@@ -1299,11 +1422,14 @@ def update_motor(motor_id: int, payload: MotorUpdateRequest) -> MotorCatalogReco
                 cur.execute(
                     """
                     UPDATE motor_catalog
-                    SET engine_name = %s, updated_at = NOW()
+                    SET engine_name = %s,
+                        governed_speed_rpm = %s,
+                        max_overspeed_rpm = %s,
+                        updated_at = NOW()
                     WHERE id = %s
                     RETURNING id, technical_number, engine_name, created_at, updated_at;
                     """,
-                    (normalized_name, motor_id),
+                    (normalized_name, governed_speed, max_overspeed, motor_id),
                 )
             row = cur.fetchone()
         conn.commit()
@@ -1343,6 +1469,129 @@ def delete_motor(motor_id: int) -> int:
         conn.commit()
 
     return vehicle_count
+
+
+def _list_rpm_bands_by_motor_ids(
+    conn: psycopg.Connection, motor_ids: list[int]
+) -> dict[int, list[MotorRpmBandRecord]]:
+    """Rangos de RPM configurados, indexados por motor. Orden ascendente de RPM."""
+    if not motor_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT motor_id, band, rpm_min, rpm_max
+            FROM motor_rpm_bands
+            WHERE motor_id = ANY(%s)
+            ORDER BY motor_id ASC, rpm_min ASC;
+            """,
+            (list(motor_ids),),
+        )
+        rows = cur.fetchall()
+    grouped: dict[int, list[MotorRpmBandRecord]] = {}
+    for row in rows:
+        grouped.setdefault(int(row["motor_id"]), []).append(
+            MotorRpmBandRecord(
+                band=str(row["band"]),
+                rpm_min=int(row["rpm_min"]),
+                rpm_max=None if row["rpm_max"] is None else int(row["rpm_max"]),
+            )
+        )
+    return grouped
+
+
+def _validate_rpm_bands(bands: list[MotorRpmBandInput]) -> list[dict[str, Any]]:
+    """Valida una configuracion COMPLETA de rangos de RPM y la devuelve ordenada.
+
+    Se exige la particion completa (las 6 bandas), contigua y sin huecos, porque
+    el consumidor clasifica cada muestra de RPM cortando el eje: un hueco haria
+    desaparecer tiempo en silencio y un solape lo contaria dos veces. Una lista
+    vacia es valida y significa "sin configurar" (borra la configuracion).
+    """
+    if not bands:
+        return []
+
+    seen = [band.band for band in bands]
+    duplicates = {value for value in seen if seen.count(value) > 1}
+    if duplicates:
+        raise ValueError(
+            "Hay bandas repetidas: " + ", ".join(sorted(duplicates)) + "."
+        )
+    missing = [band for band in RPM_RANGE_BANDS if band not in seen]
+    if missing:
+        raise ValueError(
+            "Faltan bandas por configurar: "
+            + ", ".join(RPM_RANGE_BAND_LABELS[band] for band in missing)
+            + ". Los rangos de RPM deben cubrir el eje completo."
+        )
+
+    by_band = {band.band: band for band in bands}
+    ordered = [by_band[band] for band in RPM_RANGE_BANDS]
+
+    previous = None
+    for position, band in enumerate(ordered):
+        is_last = position == len(ordered) - 1
+        if band.rpm_max is None and not is_last:
+            raise ValueError(
+                f"Solo la banda mas alta ({RPM_RANGE_BAND_LABELS[RPM_RANGE_BANDS[-1]]}) "
+                "puede quedar sin limite superior."
+            )
+        if band.rpm_max is not None and band.rpm_max <= band.rpm_min:
+            raise ValueError(
+                f"En {RPM_RANGE_BAND_LABELS[band.band]} el maximo debe ser mayor que el minimo."
+            )
+        if previous is not None and previous.rpm_max != band.rpm_min:
+            raise ValueError(
+                f"Los rangos deben ser contiguos: {RPM_RANGE_BAND_LABELS[previous.band]} "
+                f"termina en {previous.rpm_max} y {RPM_RANGE_BAND_LABELS[band.band]} "
+                f"empieza en {band.rpm_min}."
+            )
+        previous = band
+
+    return [
+        {"band": band.band, "rpm_min": int(band.rpm_min), "rpm_max": band.rpm_max}
+        for band in ordered
+    ]
+
+
+def list_motor_rpm_bands(motor_id: int) -> list[MotorRpmBandRecord]:
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM motor_catalog WHERE id = %s;", (motor_id,))
+            if cur.fetchone() is None:
+                raise ValueError("El motor no existe.")
+        return _list_rpm_bands_by_motor_ids(conn, [motor_id]).get(motor_id, [])
+
+
+def set_motor_rpm_bands(
+    motor_id: int, bands: list[MotorRpmBandInput]
+) -> list[MotorRpmBandRecord]:
+    """Reemplaza la configuracion completa de rangos del motor (o la borra)."""
+    normalized = _validate_rpm_bands(bands)
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM motor_catalog WHERE id = %s;", (motor_id,))
+            if cur.fetchone() is None:
+                raise ValueError("El motor no existe.")
+            cur.execute("DELETE FROM motor_rpm_bands WHERE motor_id = %s;", (motor_id,))
+            for entry in normalized:
+                cur.execute(
+                    """
+                    INSERT INTO motor_rpm_bands (motor_id, band, rpm_min, rpm_max)
+                    VALUES (%(motor_id)s, %(band)s, %(rpm_min)s, %(rpm_max)s);
+                    """,
+                    {"motor_id": motor_id, **entry},
+                )
+            # El motor cambia de configuracion: mover su updated_at deja que el
+            # incremental por `since` del snapshot lo vuelva a exportar.
+            cur.execute(
+                "UPDATE motor_catalog SET updated_at = NOW() WHERE id = %s;",
+                (motor_id,),
+            )
+        conn.commit()
+        return _list_rpm_bands_by_motor_ids(conn, [motor_id]).get(motor_id, [])
 
 
 def list_motor_attachments(motor_id: int) -> list[MotorAttachmentRecord]:
@@ -2510,13 +2759,16 @@ def list_customers() -> list[CustomerRecord]:
                     c.name,
                     COALESCE(c.category, 'Ninguna') AS category,
                     c.is_active,
+                    COALESCE(c.range_mode, 'reglas') AS range_mode,
                     COUNT(cd.id)::INT AS database_count,
                     c.created_at,
                     c.updated_at
                 FROM customers c
                 LEFT JOIN customer_databases cd
                     ON cd.customer_id = c.id
-                GROUP BY c.id, c.name, c.category, c.is_active, c.created_at, c.updated_at
+                GROUP BY
+                    c.id, c.name, c.category, c.is_active, c.range_mode,
+                    c.created_at, c.updated_at
                 ORDER BY c.name ASC;
                 """
             )
@@ -2845,6 +3097,52 @@ def set_customer_active(customer_id: int, is_active: bool) -> CustomerRecord:
             )
             if cur.fetchone() is None:
                 raise ValueError("El cliente no existe.")
+        conn.commit()
+
+    customers = list_customers()
+    return next(c for c in customers if c.id == customer_id)
+
+
+def set_customer_range_mode(customer_id: int, range_mode: str) -> CustomerRecord:
+    """
+    Cambia el modo de rangos del cliente ('reglas' por defecto o 'rpm').
+
+    Solo tiene sentido para flotas con database Geotab: Portal Clientes usa este
+    flag para decidir si arma los rangos desde las reglas Geotab o desde los
+    rangos de RPM del motor.
+    """
+    normalized_mode = _normalize_range_mode(range_mode)
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM customers WHERE id = %s;", (customer_id,))
+            if cur.fetchone() is None:
+                raise ValueError("El cliente no existe.")
+
+            cur.execute(
+                """
+                SELECT 1
+                FROM customer_databases
+                WHERE customer_id = %s
+                  AND connection_type = 'geotab'
+                LIMIT 1;
+                """,
+                (customer_id,),
+            )
+            if cur.fetchone() is None:
+                raise ValueError(
+                    "El modo de rangos solo aplica a clientes con database Geotab."
+                )
+
+            cur.execute(
+                """
+                UPDATE customers
+                SET range_mode = %s, updated_at = NOW()
+                WHERE id = %s
+                RETURNING id;
+                """,
+                (normalized_mode, customer_id),
+            )
         conn.commit()
 
     customers = list_customers()
@@ -3704,60 +4002,6 @@ def create_geotab_rule(
                             canonical_motor_id,
                             normalized_event_type,
                         ),
-                    )
-                if (
-                    normalized_category == "habito_seguro"
-                    and normalized_event_type == "exceso_rpm"
-                    and canonical_motor_id is not None
-                ):
-                    cur.execute(
-                        """
-                        DELETE FROM geotab_rule_group_rules grgr
-                        USING geotab_rule_groups grg, motor_catalog mc
-                        WHERE grgr.group_id = grg.id
-                          AND mc.id = grg.motor_id
-                          AND grgr.geotab_rule_id = %s
-                          AND (LOWER(mc.engine_name), mc.technical_number) = (
-                              SELECT LOWER(engine_name), technical_number
-                              FROM motor_catalog
-                              WHERE id = %s
-                          );
-                        """,
-                        (rule_record_id, canonical_motor_id),
-                    )
-                    cur.execute(
-                        """
-                        DELETE FROM geotab_rule_applications gra
-                        WHERE gra.geotab_rule_id = %s
-                          AND gra.category = 'operacion'
-                          AND gra.event_type IS NULL
-                          AND (
-                              gra.motor_id IS NULL
-                              OR gra.motor_id IN (
-                                  SELECT same_motor.id
-                                  FROM motor_catalog same_motor
-                                  WHERE (
-                                      LOWER(same_motor.engine_name),
-                                      same_motor.technical_number
-                                  ) = (
-                                      SELECT LOWER(engine_name), technical_number
-                                      FROM motor_catalog
-                                      WHERE id = %s
-                                  )
-                              )
-                          );
-                        """,
-                        (rule_record_id, canonical_motor_id),
-                    )
-                    cur.execute(
-                        """
-                        DELETE FROM geotab_rule_groups grg
-                        WHERE NOT EXISTS (
-                            SELECT 1
-                            FROM geotab_rule_group_rules grgr
-                            WHERE grgr.group_id = grg.id
-                        );
-                        """
                     )
             conn.commit()
         except UniqueViolation:

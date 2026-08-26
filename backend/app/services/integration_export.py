@@ -94,7 +94,12 @@ def _export_customers(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, name, created_at, updated_at
+            SELECT
+                id,
+                name,
+                COALESCE(range_mode, 'reglas') AS range_mode,
+                created_at,
+                updated_at
             FROM customers
             ORDER BY name ASC;
             """
@@ -274,6 +279,9 @@ def _export_customers(
             {
                 "id": customer_id,
                 "name": row["name"],
+                # 'reglas' (default) = rangos desde las reglas Geotab;
+                # 'rpm' = rangos por RPM del motor.
+                "range_mode": row.get("range_mode") or "reglas",
                 "updated_at": _iso(customer_updated_at),
                 "databases": databases,
             }
@@ -398,6 +406,77 @@ def _export_vehicles(
     ]
 
 
+def _export_motors(conn: psycopg.Connection) -> list[dict[str, Any]]:
+    """Motores con sus rangos de RPM y velocidades de placa.
+
+    Los rangos solo los usan los clientes en range_mode='rpm';
+    `governed_speed_rpm` / `max_overspeed_rpm` son datos de la hoja tecnica del
+    fabricante y viajan siempre (NULL mientras no se capturen).
+
+    SIEMPRE se exporta el catalogo completo, incluso en una llamada incremental
+    (`since`): son pocas filas y el consumidor necesita la configuracion vigente
+    para poder calcular las bandas de cualquier vehiculo que le llegue en el
+    delta. Un motor sin rangos aparece con `rpm_bands: []` (sin configurar), que
+    es informacion util: el consumidor debe saltarse esos vehiculos, no inventar
+    cortes.
+
+    La clave es `motor_type` (= motor_catalog.engine_name), el mismo campo con el
+    que ya viajan reglas y vehiculos.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                mc.id,
+                mc.engine_name AS motor_type,
+                mc.governed_speed_rpm,
+                mc.max_overspeed_rpm,
+                mc.updated_at,
+                b.band,
+                b.rpm_min,
+                b.rpm_max
+            FROM motor_catalog mc
+            LEFT JOIN motor_rpm_bands b ON b.motor_id = mc.id
+            ORDER BY mc.engine_name ASC, b.rpm_min ASC;
+            """
+        )
+        rows = cur.fetchall()
+
+    motors: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        motor_type = _normalize_motor_type(row.get("motor_type"))
+        if not motor_type:
+            continue
+        motor = motors.setdefault(
+            motor_type,
+            {
+                "motor_type": motor_type,
+                "updated_at": _iso(row.get("updated_at")),
+                "governed_speed_rpm": (
+                    None
+                    if row.get("governed_speed_rpm") is None
+                    else int(row["governed_speed_rpm"])
+                ),
+                "max_overspeed_rpm": (
+                    None
+                    if row.get("max_overspeed_rpm") is None
+                    else int(row["max_overspeed_rpm"])
+                ),
+                "rpm_bands": [],
+            },
+        )
+        if row.get("band") is None:
+            continue
+        motor["rpm_bands"].append(
+            {
+                "band": str(row["band"]),
+                "rpm_min": int(row["rpm_min"]),
+                "rpm_max": None if row["rpm_max"] is None else int(row["rpm_max"]),
+            }
+        )
+    return list(motors.values())
+
+
 def build_snapshot(
     *, since: str | None = None, include_credentials: bool = False
 ) -> dict[str, Any]:
@@ -406,10 +485,12 @@ def build_snapshot(
         _ensure_motor_tables(conn)
         customers = _export_customers(conn, since_dt, include_credentials)
         vehicles = _export_vehicles(conn, since_dt)
+        motors = _export_motors(conn)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "since": since_dt.isoformat() if since_dt else None,
         "customers": customers,
+        "motors": motors,
         "vehicles": vehicles,
     }
 
@@ -442,10 +523,12 @@ def export_customers(
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         customers = _export_customers(conn, since_dt, include_credentials)
+        motors = _export_motors(conn)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "since": since_dt.isoformat() if since_dt else None,
         "customers": customers,
+        "motors": motors,
     }
 
 

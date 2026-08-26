@@ -7,11 +7,25 @@ from pydantic import BaseModel, Field
 
 # Categorias de cliente/vehiculo. "Ninguna" es el valor por defecto/neutro.
 CustomerCategory = Literal["Ninguna", "Experiencia Superior", "Flota Administrada"]
+# Modo de rangos de RPM que Portal Clientes debe usar para las flotas con Geotab.
+# "reglas" (default) = rangos derivados de las reglas Geotab; "rpm" = rangos por RPM del motor.
+CustomerRangeMode = Literal["reglas", "rpm"]
 CUSTOMER_CATEGORIES: tuple[str, ...] = (
     "Ninguna",
     "Experiencia Superior",
     "Flota Administrada",
 )
+CUSTOMER_RANGE_MODES: tuple[str, ...] = ("reglas", "rpm")
+# Bandas del eje de RPM (ver app/services/rule_bands.py: RPM_RANGE_BANDS). No
+# incluye 'ralenti': en modo rpm el ralenti se deriva de velocidad 0, no de un tramo.
+RpmRangeBand = Literal[
+    "rango_bajo",
+    "rango_economico",
+    "rango_balanceado",
+    "rango_potencia",
+    "rango_potencia_ineficiente",
+    "exceso_rpm",
+]
 
 
 class RecentMotorRecord(BaseModel):
@@ -170,11 +184,37 @@ class VehicleLookupResponse(BaseModel):
 class MotorCatalogUpsertRequest(BaseModel):
     technical_number: str = Field(..., min_length=1, description="Numero tecnico de motor")
     engine_name: str = Field(..., min_length=1, description="Nombre del motor")
+    governed_speed_rpm: int | None = Field(
+        default=None,
+        ge=1,
+        description="Velocidad nominal gobernada sin carga, en RPM. NULL = sin capturar.",
+    )
+    max_overspeed_rpm: int | None = Field(
+        default=None,
+        ge=1,
+        description="Capacidad maxima de sobrevelocidad, en RPM. NULL = sin capturar.",
+    )
 
 
 class MotorUpdateRequest(BaseModel):
     engine_name: str = Field(..., min_length=1, description="Nuevo nombre del motor")
     technical_number: str | None = Field(default=None, min_length=1, description="Nuevo numero tecnico (opcional)")
+    governed_speed_rpm: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Velocidad nominal gobernada sin carga, en RPM. Se escribe siempre tal cual "
+            "llega: omitirla o mandarla en null borra el valor guardado."
+        ),
+    )
+    max_overspeed_rpm: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Capacidad maxima de sobrevelocidad, en RPM. Se escribe siempre tal cual "
+            "llega: omitirla o mandarla en null borra el valor guardado."
+        ),
+    )
 
 
 class MotorAttachmentRecord(BaseModel):
@@ -189,16 +229,63 @@ class MotorAttachmentRecord(BaseModel):
     updated_at: datetime = Field(..., description="Fecha de ultima actualizacion")
 
 
+class MotorRpmBandRecord(BaseModel):
+    """Tramo del eje de RPM de un motor, usado por los clientes en range_mode='rpm'."""
+
+    band: RpmRangeBand = Field(..., description="Banda de RPM")
+    rpm_min: int = Field(..., ge=0, description="RPM minimo del tramo (inclusive)")
+    rpm_max: int | None = Field(
+        default=None,
+        ge=1,
+        description="RPM maximo del tramo (exclusivo). NULL solo en la banda mas alta.",
+    )
+
+
+class MotorRpmBandInput(BaseModel):
+    band: RpmRangeBand = Field(..., description="Banda de RPM")
+    rpm_min: int = Field(..., ge=0, description="RPM minimo del tramo (inclusive)")
+    rpm_max: int | None = Field(
+        default=None,
+        ge=1,
+        description="RPM maximo del tramo (exclusivo). NULL solo en la banda mas alta.",
+    )
+
+
+class MotorRpmBandsUpdateRequest(BaseModel):
+    """Configuracion COMPLETA de rangos del motor. Lista vacia = sin configurar."""
+
+    bands: list[MotorRpmBandInput] = Field(
+        default_factory=list,
+        description=(
+            "Las 6 bandas contiguas en orden ascendente, o lista vacia para borrar "
+            "la configuracion."
+        ),
+    )
+
+
 class MotorCatalogRecord(BaseModel):
     id: int = Field(..., description="ID del registro")
     technical_number: str = Field(..., description="Numero tecnico de motor")
     engine_name: str = Field(..., description="Nombre del motor")
+    governed_speed_rpm: int | None = Field(
+        default=None, description="Velocidad nominal gobernada sin carga, en RPM"
+    )
+    max_overspeed_rpm: int | None = Field(
+        default=None, description="Capacidad maxima de sobrevelocidad, en RPM"
+    )
     vehicle_count: int = Field(default=0, description="Cantidad de vehiculos asociados")
     last_seen_at: datetime | None = Field(
         default=None, description="Ultima vez que se consulto un vehiculo con este motor"
     )
     attachments: list[MotorAttachmentRecord] = Field(
         default_factory=list, description="Adjuntos asociados al motor"
+    )
+    rpm_bands: list[MotorRpmBandRecord] = Field(
+        default_factory=list,
+        description=(
+            "Rangos de RPM del motor (solo se usan si el cliente esta en range_mode='rpm'). "
+            "Vacio = sin configurar."
+        ),
     )
     available_cpls: list[str] = Field(
         default_factory=list, description="CPLs conocidos para ese motor"
@@ -393,6 +480,13 @@ class CustomerUpdateRequest(BaseModel):
     category: CustomerCategory = Field(
         default="Ninguna",
         description="Categoria del cliente: Ninguna | Experiencia Superior | Flota Administrada",
+    )
+
+
+class CustomerRangeModeUpdateRequest(BaseModel):
+    range_mode: CustomerRangeMode = Field(
+        ...,
+        description="Modo de rangos: 'reglas' (por reglas Geotab) o 'rpm' (por rangos de RPM)",
     )
 
 
@@ -653,6 +747,13 @@ class CustomerRecord(BaseModel):
     is_active: bool = Field(
         default=True,
         description="Estado del cliente. False = archivado (inactivo), conserva su histórico.",
+    )
+    range_mode: CustomerRangeMode = Field(
+        default="reglas",
+        description=(
+            "Modo de rangos para Portal Clientes: 'reglas' (default) o 'rpm'. "
+            "Solo aplica a clientes con database Geotab."
+        ),
     )
     database_count: int = Field(default=0, description="Cantidad de databases asociadas")
     databases: list[CustomerDatabaseRecord] = Field(

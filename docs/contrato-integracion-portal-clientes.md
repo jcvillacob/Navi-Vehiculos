@@ -44,6 +44,7 @@ GET {NAVI_BASE_URL}/api/v1/integration/snapshot
     {
       "id": 12,
       "name": "Transportes El Roble",
+      "range_mode": "reglas",
       "updated_at": "2026-06-01T10:00:00Z",
       "databases": [
         {
@@ -221,6 +222,92 @@ heurística de nombre y tratar `band = null` como "sin clasificar" (no adivinar)
 **Compatibilidad:** ambos campos son aditivos y nullable. Portal Clientes puede
 desplegarse después; mientras tanto debe tolerar su ausencia y seguir con la
 heurística previa como fallback.
+
+### 2.5 Modo de rangos por cliente (`range_mode`)
+
+Cada cliente trae `range_mode`, que define **de dónde salen las bandas de RPM** de esa
+flota:
+
+- `"reglas"` (default): las bandas salen de las reglas Geotab del cliente (§2.4). Es el
+  comportamiento histórico.
+- `"rpm"`: las bandas NO salen de reglas; se calculan cortando el eje de revoluciones
+  con los rangos del motor (§2.6).
+
+Es siempre un string (`"reglas"` | `"rpm"`), nunca `null` ni booleano. El toggle vive en
+Navi-Vehículos (pantalla Clientes, `PUT /api/v1/customers/{id}/range-mode`, permiso
+`customers.edit`) y solo se acepta en clientes con al menos una database
+`connection_type = "geotab"` (409 en caso contrario). Los clientes sin Geotab igual
+traen el campo, siempre en `"reglas"`.
+
+La decisión es **por cliente**, no por database ni por vehículo: todas las databases y
+vehículos de esa flota usan el mismo modo. Cambiar el modo mueve `customers.updated_at`,
+así que el incremental por `since` lo detecta.
+
+### 2.6 Rangos de RPM y velocidades por motor (`motors[]`)
+
+`/integration/snapshot` y `/integration/customers` traen un arreglo `motors` de primer
+nivel:
+
+```json
+"motors": [
+  {
+    "motor_type": "X11",
+    "updated_at": "2026-08-18T13:00:00Z",
+    "governed_speed_rpm": 2100,
+    "max_overspeed_rpm": 2250,
+    "rpm_bands": [
+      { "band": "rango_bajo",                  "rpm_min": 600,  "rpm_max": 1100 },
+      { "band": "rango_economico",             "rpm_min": 1100, "rpm_max": 1450 },
+      { "band": "rango_balanceado",            "rpm_min": 1450, "rpm_max": 1800 },
+      { "band": "rango_potencia",              "rpm_min": 1800, "rpm_max": 2300 },
+      { "band": "rango_potencia_ineficiente",  "rpm_min": 2300, "rpm_max": 2750 },
+      { "band": "exceso_rpm",                  "rpm_min": 2750, "rpm_max": null  }
+    ]
+  },
+  {
+    "motor_type": "F2.8",
+    "updated_at": "...",
+    "governed_speed_rpm": null,
+    "max_overspeed_rpm": null,
+    "rpm_bands": []
+  }
+]
+```
+
+Reglas del contrato:
+
+- `motor_type` es el mismo valor que ya viaja en reglas y vehículos
+  (`motor_catalog.engine_name`).
+- `governed_speed_rpm` = **velocidad nominal gobernada sin carga** y `max_overspeed_rpm`
+  = **capacidad máxima de sobrevelocidad**, ambas en RPM y tomadas de la hoja técnica del
+  fabricante (ej. X13E6: 2100 / 2250). Son **aditivas y nullable**: `null` significa "aún
+  no capturado", nunca 0, y el consumidor debe tolerar su ausencia. No dependen de
+  `range_mode`: viajan para todos los motores. Navi-Vehículos valida
+  `max_overspeed_rpm >= governed_speed_rpm` al guardar.
+- `rpm_min` es **inclusivo**, `rpm_max` **exclusivo**. Los tramos son contiguos y cubren
+  el eje completo; `rpm_max: null` solo aparece en la banda más alta (`exceso_rpm`) y
+  significa "sin límite". Navi-Vehículos valida la partición al guardar: rechaza huecos,
+  solapes, bandas faltantes y un `null` en una banda intermedia.
+- El tiempo por debajo de `rango_bajo.rpm_min` **no pertenece a ninguna banda**: es el
+  piso del motor girando (el reporte de referencia usa 600) y se descarta.
+- `ralenti` **no** es una banda de RPM en este modo: se deriva de la telemetría
+  (motor encendido y velocidad 0), no de un tramo del eje.
+- `rpm_bands: []` = **motor sin configurar**. El consumidor NO debe inventar cortes: si un
+  vehículo pertenece a una flota en `range_mode = "rpm"` y su motor no tiene rangos, hay
+  que **saltarse el cálculo** de ese vehículo y reportarlo como alerta de calidad de
+  datos.
+- `motors` se exporta **siempre completo**, incluso con `since`: son pocas filas y el
+  consumidor necesita la configuración vigente para el delta que le llegue. Guardar
+  rangos mueve `motor_catalog.updated_at`.
+
+Administración en Navi-Vehículos: pantalla Motores → botón **RPM** de cada tarjeta.
+API: `GET/PUT /api/v1/motors/{motor_id}/rpm-bands` (permisos `motors.list` /
+`motors.edit`). Un `PUT` con `{"bands": []}` borra la configuración.
+
+Las velocidades de placa se administran en el propio motor (icono de edición de la
+tarjeta) y viajan en `POST /api/v1/motors` y `PUT /api/v1/motors/{motor_id}` como
+`governed_speed_rpm` / `max_overspeed_rpm`. En el `PUT` el valor se escribe tal cual
+llega: mandarlo en `null` borra el dato.
 
 ---
 
