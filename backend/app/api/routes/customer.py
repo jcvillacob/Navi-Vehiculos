@@ -4,12 +4,16 @@ from app.core.dependencies import require_permission
 from app.schemas.vehicle import (
     CustomerActiveUpdateRequest,
     CustomerCreateRequest,
+    CustomerVehicleGroupCreateRequest,
+    CustomerVehicleGroupRecord,
+    CustomerVehicleGroupUpdateRequest,
     CustomerDatabaseCreateRequest,
     CustomerDatabaseCredentialCreateRequest,
     CustomerDatabaseCredentialRecord,
     CustomerDatabaseCredentialUpdateRequest,
     CustomerDatabaseRecord,
     CustomerDatabaseUpdateRequest,
+    CustomerRangeModeUpdateRequest,
     CustomerRecord,
     CustomerUpdateRequest,
     GeotabRuleApplicationUpdateRequest,
@@ -33,10 +37,17 @@ from app.services.motor_catalog import (
     list_database_credentials,
     resolve_geotab_rule,
     set_customer_active,
+    set_customer_range_mode,
     update_customer,
     update_customer_database,
     update_database_credential,
     update_geotab_rule_application,
+)
+from app.services.vehicle_groups import (
+    create_customer_group,
+    delete_customer_group,
+    list_customer_groups,
+    update_customer_group,
 )
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -68,6 +79,82 @@ def set_customer_active_record(
         return set_customer_active(customer_id, payload.is_active)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{customer_id}/range-mode", response_model=CustomerRecord)
+def set_customer_range_mode_record(
+    payload: CustomerRangeModeUpdateRequest,
+    customer_id: int = Path(..., gt=0, description="ID del cliente"),
+    _user: dict = Depends(require_permission("customers.edit")),
+) -> CustomerRecord:
+    try:
+        return set_customer_range_mode(customer_id, payload.range_mode)
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.get("/{customer_id}/groups", response_model=list[CustomerVehicleGroupRecord])
+def list_customer_group_records(
+    customer_id: int = Path(..., gt=0, description="ID del cliente"),
+    _user: dict = Depends(require_permission("customers.list")),
+) -> list[CustomerVehicleGroupRecord]:
+    try:
+        return [CustomerVehicleGroupRecord(**row) for row in list_customer_groups(customer_id)]
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{customer_id}/groups",
+    response_model=CustomerVehicleGroupRecord,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_customer_group_record(
+    payload: CustomerVehicleGroupCreateRequest,
+    customer_id: int = Path(..., gt=0, description="ID del cliente"),
+    _user: dict = Depends(require_permission("customers.edit")),
+) -> CustomerVehicleGroupRecord:
+    try:
+        return CustomerVehicleGroupRecord(
+            **create_customer_group(customer_id, payload.name, payload.parent_id)
+        )
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.put("/groups/{group_id}", response_model=CustomerVehicleGroupRecord)
+def update_customer_group_record(
+    payload: CustomerVehicleGroupUpdateRequest,
+    group_id: int = Path(..., gt=0, description="ID del grupo"),
+    _user: dict = Depends(require_permission("customers.edit")),
+) -> CustomerVehicleGroupRecord:
+    try:
+        return CustomerVehicleGroupRecord(
+            **update_customer_group(
+                group_id,
+                name=payload.name,
+                is_active=payload.is_active,
+                parent_id=payload.parent_id,
+                move_parent="parent_id" in payload.model_fields_set,
+            )
+        )
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.delete("/groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_customer_group_record(
+    group_id: int = Path(..., gt=0, description="ID del grupo"),
+    _user: dict = Depends(require_permission("customers.edit")),
+) -> None:
+    try:
+        delete_customer_group(group_id)
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.post("/{customer_id}/databases", response_model=CustomerDatabaseRecord, status_code=status.HTTP_201_CREATED)

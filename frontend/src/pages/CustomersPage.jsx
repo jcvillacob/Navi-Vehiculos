@@ -15,6 +15,7 @@ import {
   updateDatabaseCredential
 } from "../api/vehicleApi";
 import { useCustomersCatalog } from "../features/customers/hooks/useCustomersCatalog";
+import CustomerGroupsModal from "../features/customers/components/CustomerGroupsModal";
 import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../features/categories";
 import {
   DATABASE_PROVIDERS,
@@ -28,6 +29,21 @@ import {
 
 function formatMatchModeLabel(value) {
   return value === "any" ? "Cualquiera" : "Todas";
+}
+
+// Modo de rangos por cliente (solo flotas con Geotab). Portal Clientes lo usa
+// para decidir si arma los rangos desde las reglas Geotab o desde los RPM del motor.
+const RANGE_MODES = {
+  reglas: { label: "Rangos por Reglas", badge: "is-reglas" },
+  rpm: { label: "Rangos por RPM", badge: "is-rpm" }
+};
+
+function rangeModeOf(customer) {
+  return customer.range_mode === "rpm" ? "rpm" : "reglas";
+}
+
+function customerHasGeotab(customer) {
+  return (customer.databases || []).some((db) => db.connection_type === "geotab");
 }
 
 const SAFE_HABIT_DESCRIPTIONS = [
@@ -2368,6 +2384,47 @@ function DatabaseDetailModal({
   );
 }
 
+/* ── Range Mode Confirm Modal ──────────────────────────────────────── */
+function RangeModeConfirmModal({ customer, loading, onClose, onConfirm }) {
+  const currentMode = rangeModeOf(customer);
+  const nextMode = currentMode === "rpm" ? "reglas" : "rpm";
+
+  return (
+    <div className="modal-overlay" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <section className="card modal-card" role="dialog" aria-modal="true" aria-label="Cambiar modo de rangos">
+        <header className="modal-header">
+          <div className="modal-heading">
+            <span className="eyebrow">Modo de rangos</span>
+            <h3>Cliente: {customer.name}</h3>
+          </div>
+          <button type="button" className="icon-button modal-close-button" onClick={onClose}>
+            Cerrar
+          </button>
+        </header>
+
+        <div className="notice-banner notice-error">
+          <span>
+            Vas a cambiar el modo de <strong>{RANGE_MODES[currentMode].label}</strong> a{" "}
+            <strong>{RANGE_MODES[nextMode].label}</strong>. Portal Clientes usara este modo para
+            armar los rangos de toda la flota: con "{RANGE_MODES.reglas.label}" los toma de las
+            reglas Geotab configuradas y con "{RANGE_MODES.rpm.label}" los toma de los rangos de
+            RPM del motor. El cambio aplica en la proxima sincronizacion.
+          </span>
+        </div>
+
+        <div className="actions-row modal-actions">
+          <button type="button" disabled={loading} onClick={() => onConfirm(nextMode)}>
+            {loading ? "Guardando..." : `Cambiar a ${RANGE_MODES[nextMode].label}`}
+          </button>
+          <button type="button" className="button-secondary" onClick={onClose}>
+            Cancelar
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 /* ── Main Page ─────────────────────────────────────────────────────── */
 export default function CustomersPage() {
   const { toasts, pushToast } = useToasts();
@@ -2377,6 +2434,8 @@ export default function CustomersPage() {
   const [createDbForCustomerId, setCreateDbForCustomerId] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [editingDatabase, setEditingDatabase] = useState(null);
+  const [rangeModeCustomer, setRangeModeCustomer] = useState(null);
+  const [groupsCustomer, setGroupsCustomer] = useState(null);
   const [viewingDatabase, setViewingDatabase] = useState(null);
   const [motors, setMotors] = useState([]);
   const [motorsLoading, setMotorsLoading] = useState(false);
@@ -2390,6 +2449,7 @@ export default function CustomersPage() {
     registerCustomer,
     editCustomer,
     toggleCustomerActive,
+    changeCustomerRangeMode,
     registerCustomerDatabase,
     editCustomerDatabase,
     addGeotabRule,
@@ -2495,6 +2555,20 @@ export default function CustomersPage() {
       pushToast(
         "error",
         err instanceof Error ? err.message : "No fue posible cambiar el estado del cliente"
+      );
+    }
+  };
+
+  const handleChangeRangeMode = async (nextMode) => {
+    if (!rangeModeCustomer) return;
+    try {
+      await changeCustomerRangeMode(rangeModeCustomer.id, nextMode);
+      setRangeModeCustomer(null);
+      pushToast("success", `Modo actualizado: ${RANGE_MODES[nextMode].label}.`);
+    } catch (err) {
+      pushToast(
+        "error",
+        err instanceof Error ? err.message : "No fue posible cambiar el modo de rangos"
       );
     }
   };
@@ -2639,6 +2713,8 @@ export default function CustomersPage() {
         ) : null}
         {visibleCustomers.map((customer) => {
           const isInactive = customer.is_active === false;
+          const hasGeotab = customerHasGeotab(customer);
+          const rangeMode = rangeModeOf(customer);
           return (
           <article className={`card motor-card ${isInactive ? "is-inactive" : ""}`} key={customer.id}>
             <div className="motor-card-top">
@@ -2652,6 +2728,11 @@ export default function CustomersPage() {
               <h3>{customer.name}</h3>
               {customer.category && customer.category !== "Ninguna" ? (
                 <span className={categoryBadgeClass(customer.category)}>{customer.category}</span>
+              ) : null}
+              {hasGeotab ? (
+                <span className={`range-mode-badge ${RANGE_MODES[rangeMode].badge}`}>
+                  {RANGE_MODES[rangeMode].label}
+                </span>
               ) : null}
               <div className="motor-card-heading-row">
                 <div className="motor-card-heading-actions">
@@ -2673,6 +2754,30 @@ export default function CustomersPage() {
                       title="Editar cliente"
                     >
                       &#9998;
+                    </button>
+                  </Can>
+                  {hasGeotab ? (
+                    <Can permission="customers.edit">
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => setRangeModeCustomer(customer)}
+                        title={`Modo de rangos: ${RANGE_MODES[rangeMode].label}. Cambiar a ${
+                          RANGE_MODES[rangeMode === "rpm" ? "reglas" : "rpm"].label
+                        }`}
+                      >
+                        ⇄
+                      </button>
+                    </Can>
+                  ) : null}
+                  <Can permission="customers.list">
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setGroupsCustomer(customer)}
+                      title="Grupos internos de vehiculos (categorias/subcategorias)"
+                    >
+                      ▤
                     </button>
                   </Can>
                   <Can permission="customers.edit">
@@ -2760,6 +2865,22 @@ export default function CustomersPage() {
           loading={loading}
           onClose={() => setEditingCustomer(null)}
           onSubmit={handleEditCustomer}
+        />
+      ) : null}
+
+      <CustomerGroupsModal
+        open={Boolean(groupsCustomer)}
+        customer={groupsCustomer}
+        canEdit={canEditCustomer}
+        onClose={() => setGroupsCustomer(null)}
+      />
+
+      {rangeModeCustomer ? (
+        <RangeModeConfirmModal
+          customer={rangeModeCustomer}
+          loading={loading}
+          onClose={() => setRangeModeCustomer(null)}
+          onConfirm={handleChangeRangeMode}
         />
       ) : null}
 

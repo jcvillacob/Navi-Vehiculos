@@ -659,6 +659,60 @@ export async function setVehicleVocacional(plate, vocacional) {
   return parseJsonOrThrow(response, "Error actualizando el flag vocacional del vehiculo");
 }
 
+/**
+ * Asigna (o limpia) el grupo interno del cliente para un vehiculo.
+ * @param {string} plate
+ * @param {number|null} customerGroupId - id del grupo o null para limpiar.
+ */
+export async function setVehicleGroup(plate, customerGroupId) {
+  const normalizedPlate = plate.trim().toUpperCase();
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/group`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ customer_group_id: customerGroupId ?? null }),
+  });
+  return parseJsonOrThrow(response, "Error actualizando el grupo del vehiculo");
+}
+
+export async function listCustomerGroups(customerId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/${customerId}/groups`));
+  return parseJsonOrThrow(response, "Error listando los grupos del cliente");
+}
+
+export async function createCustomerGroup(customerId, payload) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/${customerId}/groups`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error creando el grupo");
+}
+
+export async function updateCustomerGroup(groupId, payload) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/groups/${groupId}`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(response, "Error actualizando el grupo");
+}
+
+export async function deleteCustomerGroup(groupId) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/groups/${groupId}`), {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = body?.detail || "";
+    } catch {
+      /* cuerpo vacio */
+    }
+    throw new Error(detail || `Error eliminando el grupo (${response.status})`);
+  }
+}
+
 export async function revalidateCustomerGeotab(plate) {
   const normalizedPlate = plate.trim().toUpperCase();
   const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/revalidate-customer-geotab`), {
@@ -750,6 +804,15 @@ export async function deleteMotor(motorId) {
   return parseJsonOrThrow(response, "Error eliminando motor");
 }
 
+export async function setMotorRpmBands(motorId, bands) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/motors/${motorId}/rpm-bands`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bands }),
+  });
+  return parseJsonOrThrow(response, "Error guardando los rangos de RPM");
+}
+
 export async function uploadMotorAttachment(motorId, payload) {
   const formData = new FormData();
   formData.append("cpl", payload.cpl);
@@ -817,6 +880,15 @@ export async function setCustomerActive(customerId, isActive) {
     body: JSON.stringify({ is_active: isActive }),
   });
   return parseJsonOrThrow(response, "Error actualizando el estado del cliente");
+}
+
+export async function setCustomerRangeMode(customerId, rangeMode) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/customers/${customerId}/range-mode`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ range_mode: rangeMode }),
+  });
+  return parseJsonOrThrow(response, "Error actualizando el modo de rangos del cliente");
 }
 
 export async function createCustomerDatabase(customerId, payload) {

@@ -321,6 +321,13 @@ class VehicleAssignmentSummary(BaseModel):
     database_connection_type: str | None = Field(default=None, description="Tipo de conexion de la database")
     has_motor_rules: bool = Field(default=False, description="Si el motor tiene reglas Geotab")
     vocacional: bool = Field(default=False, description="Uso vocacional")
+    customer_group_id: int | None = Field(
+        default=None, description="Grupo interno del cliente asignado al vehiculo"
+    )
+    group_name: str | None = Field(default=None, description="Nombre del grupo asignado")
+    group_path: str | None = Field(
+        default=None, description="Ruta completa del grupo (padres / hijo)"
+    )
     attachments_count: int = Field(default=0, description="Cantidad de adjuntos del motor matching CPL")
     last_seen_at: datetime = Field(..., description="Fecha de ultima consulta exitosa")
 
@@ -403,6 +410,13 @@ class VehicleAssignmentRecord(BaseModel):
         default=False,
         description="Indica si el vehiculo se usa para uso vocacional (no comercial).",
     )
+    customer_group_id: int | None = Field(
+        default=None, description="Grupo interno del cliente asignado al vehiculo"
+    )
+    group_name: str | None = Field(default=None, description="Nombre del grupo asignado")
+    group_path: str | None = Field(
+        default=None, description="Ruta completa del grupo (padres / hijo)"
+    )
     created_at: datetime = Field(..., description="Fecha de primer registro")
     updated_at: datetime = Field(..., description="Fecha de ultima actualizacion")
     last_seen_at: datetime = Field(..., description="Fecha de ultima consulta exitosa")
@@ -432,6 +446,46 @@ class VehicleVocacionalUpdateRequest(BaseModel):
     vocacional: bool = Field(
         ...,
         description="True si el vehiculo es de uso vocacional, False en caso contrario.",
+    )
+
+
+class CustomerVehicleGroupRecord(BaseModel):
+    """Nodo del arbol de grupos internos de un cliente (categoria/subcategoria)."""
+
+    id: int = Field(..., description="ID del grupo")
+    customer_id: int = Field(..., description="Cliente dueño del grupo")
+    parent_id: int | None = Field(
+        default=None, description="Grupo padre; None = nivel raiz (categoria)"
+    )
+    name: str = Field(..., description="Nombre del grupo")
+    is_active: bool = Field(default=True, description="Si el grupo esta activo")
+    vehicle_count: int = Field(
+        default=0, description="Vehiculos asignados directamente a este nodo"
+    )
+    created_at: datetime = Field(..., description="Fecha de creacion")
+    updated_at: datetime = Field(..., description="Fecha de actualizacion")
+
+
+class CustomerVehicleGroupCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120, description="Nombre del grupo")
+    parent_id: int | None = Field(
+        default=None, gt=0, description="Grupo padre; None crea una categoria raiz"
+    )
+
+
+class CustomerVehicleGroupUpdateRequest(BaseModel):
+    """parent_id solo se aplica si viene en el payload (None = mover a la raiz)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    is_active: bool | None = Field(default=None)
+    parent_id: int | None = Field(default=None, gt=0)
+
+
+class VehicleGroupUpdateRequest(BaseModel):
+    customer_group_id: int | None = Field(
+        default=None,
+        gt=0,
+        description="Grupo interno del cliente; None limpia la asignacion.",
     )
 
 

@@ -35,6 +35,14 @@
   --bg-subtle: #e8eaed;
   --surface: #ffffff;
   --surface-2: #f8f9fa;
+  --surface-hover: #f1f5f9;
+  /* Alias historicos usados como var(--bg-card, #fff) por CPK/CPH y mapa */
+  --bg-card: var(--surface);
+  --bg-soft: rgba(0, 0, 0, 0.03);
+  /* Overlays y superficies translucidas sobre el fondo de contenido */
+  --surface-glass: rgba(255, 255, 255, 0.72);
+  --surface-glass-strong: rgba(255, 255, 255, 0.9);
+  --scrim: rgba(53, 69, 80, 0.45);
 
   /* Text */
   --text: #1e2528;
@@ -91,6 +99,10 @@
 
 html {
   color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 body {
@@ -1815,6 +1827,34 @@ select.control-sm {
   background: rgba(53, 69, 80, 0.08);
   color: var(--gray);
   border-color: rgba(53, 69, 80, 0.2);
+}
+
+/* Modo de rangos del cliente (solo flotas con Geotab). Mismo look que los
+   category badges, pero paleta propia para no confundirlos. */
+.range-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  font-family: "Poppins", sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.range-mode-badge.is-reglas {
+  background: rgba(53, 69, 80, 0.08);
+  color: var(--gray);
+  border-color: rgba(53, 69, 80, 0.2);
+}
+
+.range-mode-badge.is-rpm {
+  background: rgba(238, 46, 47, 0.12);
+  color: var(--red);
+  border-color: rgba(238, 46, 47, 0.35);
 }
 
 /* Categoria heredada del cliente: se ve mas tenue para distinguirla de un override. */
@@ -5986,6 +6026,22 @@ select.control-sm {
   line-height: 1.45;
 }
 
+.cpk-cutoff-parse-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.76rem;
+  color: var(--text-muted, #5a6275);
+}
+
+.cpk-cutoff-parse-hint.is-empty {
+  color: var(--red, #ee2e2f);
+  font-weight: 600;
+}
+
+.cpk-cutoff-error {
+  margin: 0;
+}
+
 .cpk-cutoff-actions {
   display: flex;
   align-items: center;
@@ -6292,6 +6348,18 @@ select.control-sm {
 .cpk-cph-origin--cutoff {
   background: rgba(234, 179, 8, 0.18);
   color: #8a5b00;
+}
+
+.cpk-cph-origin--window {
+  margin-top: 4px;
+  background: rgba(90, 98, 117, 0.1);
+  color: var(--text-muted, #5a6275);
+  font-weight: 600;
+}
+
+.cpk-cph-origin--window-cut {
+  background: rgba(24, 89, 121, 0.14);
+  color: var(--blue, #185979);
 }
 
 .cpk-cph-cell-input {
@@ -6889,6 +6957,19 @@ select.control-sm {
 
 .sidebar-user-menu-item:hover {
   background: var(--bg-subtle);
+}
+
+.sidebar-user-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  margin-right: 8px;
+  color: var(--text-muted);
+}
+
+.sidebar-user-menu-item:hover .sidebar-user-menu-icon {
+  color: var(--red);
 }
 
 /* ── Audit page ────────────────────────────────────────────────────────────── */
@@ -8441,4 +8522,293 @@ select.control-sm {
   grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(140px, 180px)) auto;
   gap: 10px;
   align-items: center;
+}
+
+/* ─────────────────────────────────────────────
+   MODO OSCURO
+   Se activa con html[data-theme="dark"] (ver ThemeContext + script inline en
+   index.html). La mayor parte se resuelve reescribiendo los tokens de :root;
+   abajo quedan solo los parches de reglas que traian colores claros hardcoded.
+───────────────────────────────────────────── */
+
+html[data-theme="dark"] {
+  /* Surfaces */
+  --bg: #12171a;
+  --bg-subtle: #1a2126;
+  --surface: #1c2429;
+  --surface-2: #222b31;
+  --surface-hover: #273138;
+  --bg-card: var(--surface);
+  --bg-soft: rgba(255, 255, 255, 0.04);
+  --surface-glass: rgba(28, 36, 41, 0.72);
+  --surface-glass-strong: rgba(28, 36, 41, 0.92);
+  --scrim: rgba(0, 0, 0, 0.6);
+
+  /* Text */
+  --text: #e6eaec;
+  --text-secondary: #c3cac8;
+  --text-muted: #93a3ac;
+  --text-subtle: #74858f;
+
+  /* Borders */
+  --border: rgba(195, 202, 200, 0.14);
+  --border-strong: rgba(195, 202, 200, 0.26);
+  --border-focus: rgba(238, 46, 47, 0.6);
+
+  /* Brand: el rojo se aclara un punto para no vibrar sobre fondo oscuro */
+  --red: #f2494a;
+  --red-hover: #ff6162;
+  --red-soft: rgba(242, 73, 74, 0.16);
+  --amber: #e0b143;
+
+  /* Status palettes */
+  --status-ok-bg: rgba(178, 225, 0, 0.12);
+  --status-ok-border: rgba(178, 225, 0, 0.35);
+  --status-ok-text: #cbe86b;
+  --status-partial-bg: rgba(255, 179, 1, 0.12);
+  --status-partial-border: rgba(255, 179, 1, 0.35);
+  --status-partial-text: #ffca5c;
+  --status-error-bg: rgba(242, 73, 74, 0.14);
+  --status-error-border: rgba(242, 73, 74, 0.38);
+  --status-error-text: #ff9a9a;
+  --status-soft-bg: rgba(195, 202, 200, 0.08);
+  --status-soft-border: rgba(195, 202, 200, 0.18);
+  --status-soft-text: #a9b6bd;
+
+  /* Shadows: sobre fondo oscuro la sombra es negra, no gris azulada */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 32px rgba(0, 0, 0, 0.55), 0 4px 10px rgba(0, 0, 0, 0.35);
+}
+
+/* El sidebar ya era oscuro en claro; se hunde un poco mas para separarlo del canvas */
+html[data-theme="dark"] .sidebar-panel {
+  background: #161d22;
+}
+
+/* ── Parches: superficies blancas hardcoded ── */
+
+html[data-theme="dark"] .rule-inspector-card {
+  background: linear-gradient(180deg, var(--surface), var(--surface-2));
+}
+
+html[data-theme="dark"] .rule-badge,
+html[data-theme="dark"] .credential-detail-grid,
+html[data-theme="dark"] .credential-edit-form,
+html[data-theme="dark"] .rule-list-item,
+html[data-theme="dark"] .rule-accordion {
+  background: var(--surface-glass);
+}
+
+html[data-theme="dark"] .rule-list-item:hover,
+html[data-theme="dark"] .conn-cal-popover,
+html[data-theme="dark"] .bulk-upload-list-item {
+  background: var(--surface-2);
+}
+
+html[data-theme="dark"] .attachment-dropzone {
+  background: linear-gradient(180deg, var(--surface), var(--surface-2));
+}
+
+html[data-theme="dark"] .conn-pct-bar,
+html[data-theme="dark"] .conn-cal-day,
+html[data-theme="dark"] .conn-cal-day.cal-empty {
+  background: rgba(195, 202, 200, 0.12);
+}
+
+/* ── Parches: textos con hex oscuro fijo ── */
+
+html[data-theme="dark"] .category-badge.is-ninguna,
+html[data-theme="dark"] .range-mode-badge.is-reglas,
+html[data-theme="dark"] .disp-gauge-target,
+html[data-theme="dark"] .mapa-popup-tag {
+  color: var(--text-secondary);
+}
+
+html[data-theme="dark"] .conn-pct-good .conn-pct-label,
+html[data-theme="dark"] .availability-good,
+html[data-theme="dark"] .cpk-client-badge--flota-administrada,
+html[data-theme="dark"] .cpk-cutoff-status--ready,
+html[data-theme="dark"] .cpk-cph-status--valid {
+  color: #7fd07f;
+}
+
+html[data-theme="dark"] .status-chip.is-unbound,
+html[data-theme="dark"] .warning-chip {
+  color: var(--status-partial-text);
+}
+
+html[data-theme="dark"] .cpk-cutoff-status--error,
+html[data-theme="dark"] .cpk-cph-status--error {
+  color: var(--status-error-text);
+}
+
+/* Puntos de la timeline de consulta: fondo tenue + acento legible */
+html[data-theme="dark"] .lookup-timeline-item.is-ok .lookup-timeline-dot {
+  background: rgba(47, 140, 47, 0.18);
+  border-color: #7fd07f;
+  color: #7fd07f;
+}
+
+html[data-theme="dark"] .lookup-timeline-item.is-warning .lookup-timeline-dot {
+  background: rgba(255, 179, 1, 0.16);
+}
+
+html[data-theme="dark"] .lookup-timeline-item.is-error .lookup-timeline-dot {
+  background: rgba(242, 73, 74, 0.18);
+}
+
+html[data-theme="dark"] .lookup-timeline-item.is-info .lookup-timeline-dot {
+  background: rgba(24, 89, 121, 0.24);
+  border-color: #6aa8c9;
+  color: #6aa8c9;
+}
+
+/* La etiqueta de geocerca lleva halo blanco para leerse sobre el mapa claro */
+html[data-theme="dark"] .mapa-geofence-label span {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 0, 0, 1);
+}
+
+/* ── Recharts: los ejes/grid heredan currentColor del contenedor ── */
+
+html[data-theme="dark"] .recharts-cartesian-grid line {
+  stroke: var(--border);
+}
+
+html[data-theme="dark"] .recharts-cartesian-axis-line,
+html[data-theme="dark"] .recharts-cartesian-axis-tick-line {
+  stroke: var(--border-strong);
+}
+
+html[data-theme="dark"] .recharts-text {
+  fill: var(--text-muted);
+}
+
+html[data-theme="dark"] .recharts-default-tooltip {
+  background: var(--surface-2) !important;
+  border-color: var(--border-strong) !important;
+  color: var(--text);
+}
+
+/* El chevron del select va como SVG data-uri con stroke fijo: en oscuro se aclara */
+html[data-theme="dark"] :where(select) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c3cac8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+/* ── Rangos de RPM por motor ─────────────────────────────────────────── */
+.motor-card-rpm {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.motor-rpm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.motor-rpm-header span {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.rpm-band-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rpm-band-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.rpm-bands-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.rpm-band-row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) minmax(11rem, auto);
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.rpm-band-label {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.rpm-band-inputs {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.rpm-band-inputs input {
+  width: 6rem;
+}
+
+.rpm-band-separator {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+@media (max-width: 540px) {
+  .rpm-band-row {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+}
+
+/* Grupos internos de vehiculos por cliente (CustomerGroupsModal) */
+.group-tree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.group-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.group-tree-name {
+  font-weight: 600;
+}
+
+.group-tree-name.is-inactive {
+  color: #9aa4a1;
+  text-decoration: line-through;
+}
+
+.group-tree-meta {
+  font-size: 12px;
+  color: var(--gray);
+}
+
+.group-tree-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
 }

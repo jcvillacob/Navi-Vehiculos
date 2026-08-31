@@ -6,6 +6,7 @@ updated_at) que la otra app replica localmente.
 """
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -29,6 +30,8 @@ from app.services.taller_ordenes import (
     CloudFleetUnavailableError,
     get_active_orders,
 )
+
+_logger = logging.getLogger(__name__)
 
 _PASSWORD_MASK = "********"
 
@@ -139,6 +142,17 @@ def _export_customers(
             """
         )
         credential_rows = cur.fetchall()
+
+        # Grupos internos de vehiculos del cliente (categorias/subcategorias,
+        # arbol por parent_id). Portal Clientes los replica y filtra por ellos.
+        cur.execute(
+            """
+            SELECT id, customer_id, parent_id, name, is_active, updated_at
+            FROM customer_vehicle_groups
+            ORDER BY customer_id ASC, COALESCE(parent_id, 0) ASC, LOWER(name) ASC;
+            """
+        )
+        group_rows = cur.fetchall()
 
         # Una regla fisica puede tener varias aplicaciones: operacion por motor,
         # habito seguro global o habito seguro por motor (ej. exceso_rpm X11).
@@ -254,6 +268,20 @@ def _export_customers(
             }
         )
 
+    groups_by_customer: dict[int, list[dict[str, Any]]] = {}
+    for row in group_rows:
+        groups_by_customer.setdefault(int(row["customer_id"]), []).append(
+            {
+                "id": int(row["id"]),
+                "parent_id": (
+                    int(row["parent_id"]) if row.get("parent_id") is not None else None
+                ),
+                "name": row["name"],
+                "is_active": bool(row["is_active"]),
+                "updated_at": _iso(row["updated_at"]),
+            }
+        )
+
     customers: list[dict[str, Any]] = []
     for row in customer_rows:
         customer_id = int(row["id"])
@@ -273,7 +301,17 @@ def _export_customers(
                     int(cred_row["customer_database_id"]) == db["id"] for db in databases
                 )
             )
-            if customer_updated_at <= since and not db_changed and not cred_changed:
+            group_changed = any(
+                group_row["updated_at"] > since
+                for group_row in group_rows
+                if int(group_row["customer_id"]) == customer_id
+            )
+            if (
+                customer_updated_at <= since
+                and not db_changed
+                and not cred_changed
+                and not group_changed
+            ):
                 continue
         customers.append(
             {
@@ -284,6 +322,10 @@ def _export_customers(
                 "range_mode": row.get("range_mode") or "reglas",
                 "updated_at": _iso(customer_updated_at),
                 "databases": databases,
+                # Arbol completo siempre que el cliente entra al payload: un
+                # incremental que trae al cliente trae TODOS sus grupos, para
+                # que el consumidor pueda detectar bajas sin full sync.
+                "groups": groups_by_customer.get(customer_id, []),
             }
         )
     return customers
@@ -336,6 +378,7 @@ def _export_vehicles(
                 a.tipo_combustible,
                 a.nombre_vehiculo,
                 a.vocacional,
+                a.customer_group_id,
                 GREATEST(
                     a.updated_at,
                     COALESCE(geotab_binding.updated_at, a.updated_at)
@@ -400,10 +443,75 @@ def _export_vehicles(
             "nombre_vehiculo": row.get("nombre_vehiculo"),
             "vocacional": bool(row.get("vocacional")),
             "category": row.get("category") or "Ninguna",
+            "customer_group_id": row.get("customer_group_id"),
             "updated_at": _iso(row["updated_at"]),
         }
         for row in rows
     ]
+
+
+def _export_motor_attachments(
+    conn: psycopg.Connection,
+) -> dict[str, list[dict[str, Any]]]:
+    """Adjuntos del motor (curvas de par/potencia) agrupados por motor_type.
+
+    Solo METADATOS: el binario se sirve aparte por
+    `GET /integration/motor-attachments/{id}/file`, porque un snapshot con 12
+    PDFs embebidos en base64 pasaria de kilobytes a megabytes y se pediria
+    completo en cada sync incremental.
+
+    `stored_filename` viaja porque es la deteccion de cambio del consumidor:
+    reemplazar el archivo genera un object_name nuevo (uuid4), asi que un
+    stored_filename distinto significa binario distinto sin necesidad de
+    descargarlo para comparar.
+
+    Fail-open: si la consulta falla el snapshot sigue saliendo sin adjuntos. El
+    catalogo de motores y los rangos de RPM son datos de calculo; una curva es
+    documentacion, y no debe poder tumbar el sync.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    mc.engine_name AS motor_type,
+                    a.id,
+                    a.cpl,
+                    a.original_filename,
+                    a.content_type,
+                    a.file_size,
+                    a.stored_filename,
+                    a.updated_at
+                FROM motor_attachments a
+                JOIN motor_catalog mc ON mc.id = a.motor_id
+                ORDER BY mc.engine_name ASC, a.updated_at DESC, a.id DESC;
+                """
+            )
+            rows = cur.fetchall()
+    except Exception:  # noqa: BLE001 - documentacion, no dato de calculo
+        _logger.warning("export: no se pudieron leer los adjuntos de motor", exc_info=True)
+        return {}
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        motor_type = _normalize_motor_type(row.get("motor_type"))
+        if not motor_type:
+            continue
+        cpl = row.get("cpl")
+        grouped.setdefault(motor_type, []).append(
+            {
+                "id": int(row["id"]),
+                "cpl": (str(cpl).strip() or None) if cpl is not None else None,
+                "original_filename": row.get("original_filename"),
+                "content_type": row.get("content_type"),
+                "file_size": (
+                    None if row.get("file_size") is None else int(row["file_size"])
+                ),
+                "stored_filename": row.get("stored_filename"),
+                "updated_at": _iso(row.get("updated_at")),
+            }
+        )
+    return grouped
 
 
 def _export_motors(conn: psycopg.Connection) -> list[dict[str, Any]]:
@@ -422,6 +530,9 @@ def _export_motors(conn: psycopg.Connection) -> list[dict[str, Any]]:
 
     La clave es `motor_type` (= motor_catalog.engine_name), el mismo campo con el
     que ya viajan reglas y vehiculos.
+
+    `attachments` lleva los metadatos de las curvas del motor (ver
+    `_export_motor_attachments`). Igual que los rangos, viaja siempre completo.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -463,6 +574,7 @@ def _export_motors(conn: psycopg.Connection) -> list[dict[str, Any]]:
                     else int(row["max_overspeed_rpm"])
                 ),
                 "rpm_bands": [],
+                "attachments": [],
             },
         )
         if row.get("band") is None:
@@ -474,6 +586,11 @@ def _export_motors(conn: psycopg.Connection) -> list[dict[str, Any]]:
                 "rpm_max": None if row["rpm_max"] is None else int(row["rpm_max"]),
             }
         )
+    attachments_by_motor = _export_motor_attachments(conn)
+    for motor_type, attachments in attachments_by_motor.items():
+        motor = motors.get(motor_type)
+        if motor is not None:
+            motor["attachments"] = attachments
     return list(motors.values())
 
 

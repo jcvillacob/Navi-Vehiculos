@@ -812,6 +812,53 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             ADD COLUMN IF NOT EXISTS vocacional BOOLEAN NOT NULL DEFAULT FALSE;
             """
         )
+        # Grupos internos de vehiculos por cliente (categorias/subcategorias
+        # que el cliente define, ej. Bavaria: Regional -> CEDI). Arbol por
+        # parent_id; un vehiculo apunta a UN nodo (el mas profundo que aplique)
+        # y la cadena de padres queda implicita. Se exporta a Portal Clientes.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS customer_vehicle_groups (
+                id BIGSERIAL PRIMARY KEY,
+                customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+                parent_id BIGINT NULL REFERENCES customer_vehicle_groups(id),
+                name TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+        # Nombre unico entre hermanos del mismo cliente (0 = raiz; los ids
+        # BIGSERIAL arrancan en 1, asi que 0 es un centinela seguro).
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_vehicle_groups_sibling_name
+                ON customer_vehicle_groups (customer_id, COALESCE(parent_id, 0), LOWER(name));
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_customer_vehicle_groups_customer
+                ON customer_vehicle_groups (customer_id);
+            """
+        )
+        # Sin ON DELETE en la FK a proposito: borrar un grupo con vehiculos
+        # asignados debe fallar; el servicio exige reasignar o vaciar antes.
+        cur.execute(
+            """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS customer_group_id BIGINT NULL
+                REFERENCES customer_vehicle_groups(id);
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_vehicle_motor_assignments_group
+                ON vehicle_motor_assignments (customer_group_id)
+                WHERE customer_group_id IS NOT NULL;
+            """
+        )
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS motor_attachments (
@@ -2080,6 +2127,9 @@ def list_vehicle_assignment_summaries(search: str | None = None) -> list[Vehicle
                           AND LOWER(sibling_db.database_name) = LOWER(cd.database_name)
                     ) AS has_motor_rules,
                     a.vocacional,
+                    a.customer_group_id,
+                    grp.group_name,
+                    grp.group_path,
                     a.last_seen_at,
                     COALESCE((
                         SELECT COUNT(*)
@@ -2096,6 +2146,22 @@ def list_vehicle_assignment_summaries(search: str | None = None) -> list[Vehicle
                     ON c.id = a.customer_id
                 LEFT JOIN customer_databases cd
                     ON cd.id = a.customer_database_id
+                LEFT JOIN LATERAL (
+                    WITH RECURSIVE group_chain AS (
+                        SELECT g.id, g.parent_id, g.name, 1 AS depth
+                        FROM customer_vehicle_groups g
+                        WHERE g.id = a.customer_group_id
+                        UNION ALL
+                        SELECT p.id, p.parent_id, p.name, group_chain.depth + 1
+                        FROM customer_vehicle_groups p
+                        INNER JOIN group_chain ON p.id = group_chain.parent_id
+                        WHERE group_chain.depth < 6
+                    )
+                    SELECT
+                        MAX(name) FILTER (WHERE depth = 1) AS group_name,
+                        STRING_AGG(name, ' / ' ORDER BY depth DESC) AS group_path
+                    FROM group_chain
+                ) grp ON TRUE
                 {where_clause}
                 ORDER BY a.last_seen_at DESC, a.plate ASC;
                 """,
@@ -2134,6 +2200,9 @@ def list_vehicle_assignment_summaries(search: str | None = None) -> list[Vehicle
                 database_connection_type=effective_provider if row.get("database_name") else None,
                 has_motor_rules=bool(row.get("has_motor_rules")),
                 vocacional=bool(row.get("vocacional")),
+                customer_group_id=row.get("customer_group_id"),
+                group_name=row.get("group_name"),
+                group_path=row.get("group_path"),
                 attachments_count=int(row.get("attachments_count") or 0),
                 last_seen_at=row["last_seen_at"],
             )
@@ -2232,6 +2301,9 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     a.updated_at,
                     a.last_seen_at,
                     a.vocacional,
+                    a.customer_group_id,
+                    grp.group_name,
+                    grp.group_path,
                     vpb.provider_vehicle_id,
                     vpb.is_manual AS provider_vehicle_id_is_manual
                 FROM vehicle_motor_assignments a
@@ -2249,6 +2321,22 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     ORDER BY vpb.is_manual DESC, vpb.updated_at DESC
                     LIMIT 1
                 ) vpb ON TRUE
+                LEFT JOIN LATERAL (
+                    WITH RECURSIVE group_chain AS (
+                        SELECT g.id, g.parent_id, g.name, 1 AS depth
+                        FROM customer_vehicle_groups g
+                        WHERE g.id = a.customer_group_id
+                        UNION ALL
+                        SELECT p.id, p.parent_id, p.name, group_chain.depth + 1
+                        FROM customer_vehicle_groups p
+                        INNER JOIN group_chain ON p.id = group_chain.parent_id
+                        WHERE group_chain.depth < 6
+                    )
+                    SELECT
+                        MAX(name) FILTER (WHERE depth = 1) AS group_name,
+                        STRING_AGG(name, ' / ' ORDER BY depth DESC) AS group_path
+                    FROM group_chain
+                ) grp ON TRUE
                 {where_clause}
                 ORDER BY a.last_seen_at DESC, a.plate ASC;
                 """,
@@ -2344,6 +2432,9 @@ def get_vehicle_assignment(plate: str) -> VehicleAssignmentRecord | None:
                     a.updated_at,
                     a.last_seen_at,
                     a.vocacional,
+                    a.customer_group_id,
+                    grp.group_name,
+                    grp.group_path,
                     vpb.provider_vehicle_id,
                     vpb.is_manual AS provider_vehicle_id_is_manual
                 FROM vehicle_motor_assignments a
@@ -2361,6 +2452,22 @@ def get_vehicle_assignment(plate: str) -> VehicleAssignmentRecord | None:
                     ORDER BY vpb.is_manual DESC, vpb.updated_at DESC
                     LIMIT 1
                 ) vpb ON TRUE
+                LEFT JOIN LATERAL (
+                    WITH RECURSIVE group_chain AS (
+                        SELECT g.id, g.parent_id, g.name, 1 AS depth
+                        FROM customer_vehicle_groups g
+                        WHERE g.id = a.customer_group_id
+                        UNION ALL
+                        SELECT p.id, p.parent_id, p.name, group_chain.depth + 1
+                        FROM customer_vehicle_groups p
+                        INNER JOIN group_chain ON p.id = group_chain.parent_id
+                        WHERE group_chain.depth < 6
+                    )
+                    SELECT
+                        MAX(name) FILTER (WHERE depth = 1) AS group_name,
+                        STRING_AGG(name, ' / ' ORDER BY depth DESC) AS group_path
+                    FROM group_chain
+                ) grp ON TRUE
                 WHERE a.plate = %s
                 ORDER BY a.last_seen_at DESC, a.plate ASC
                 LIMIT 1;
@@ -4968,6 +5075,16 @@ def assign_vehicle_database(
                     access_url = %s,
                     geotab_customer_status = CASE WHEN %s THEN 'unknown' ELSE 'not_applicable' END,
                     geotab_customer_database_id = CASE WHEN %s THEN %s ELSE NULL END,
+                    -- Un grupo interno pertenece a un cliente: si el vehiculo
+                    -- cambia de cliente, la asignacion vieja se limpia.
+                    customer_group_id = CASE
+                        WHEN customer_group_id IS NOT NULL AND EXISTS (
+                            SELECT 1 FROM customer_vehicle_groups g
+                            WHERE g.id = vehicle_motor_assignments.customer_group_id
+                              AND g.customer_id = %s
+                        ) THEN customer_group_id
+                        ELSE NULL
+                    END,
                     updated_at = NOW()
                 WHERE plate = %s;
                 """,
@@ -4978,6 +5095,7 @@ def assign_vehicle_database(
                     is_geotab_db,
                     is_geotab_db,
                     selected_database["id"],
+                    selected_database["customer_id"],
                     normalized_plate,
                 ),
             )

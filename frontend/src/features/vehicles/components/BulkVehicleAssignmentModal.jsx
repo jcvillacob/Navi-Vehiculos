@@ -1,11 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { listCustomerGroups } from "../../../api/vehicleApi";
 import { getDatabaseTypeLabel } from "../../customers/providerCatalog";
 
 function commonValue(items, getValue) {
   if (!items.length) return "";
   const first = getValue(items[0]) || "";
   return items.every((item) => (getValue(item) || "") === first) ? first : "";
+}
+
+// Aplana el arbol de grupos (parent_id) a opciones con sangria por nivel.
+function flattenGroupTree(groups) {
+  const byParent = new Map();
+  groups.forEach((group) => {
+    const key = group.parent_id ?? 0;
+    if (!byParent.has(key)) {
+      byParent.set(key, []);
+    }
+    byParent.get(key).push(group);
+  });
+  const ordered = [];
+  const walk = (parentKey, depth) => {
+    (byParent.get(parentKey) || []).forEach((group) => {
+      ordered.push({ ...group, depth });
+      walk(group.id, depth + 1);
+    });
+  };
+  walk(0, 0);
+  return ordered;
 }
 
 export default function BulkVehicleAssignmentModal({
@@ -18,6 +40,32 @@ export default function BulkVehicleAssignmentModal({
 }) {
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedDatabaseId, setSelectedDatabaseId] = useState("");
+  // "" = no cambiar el grupo, "__none__" = quitar grupo, otro = id del grupo.
+  const [selectedGroupValue, setSelectedGroupValue] = useState("");
+  const [groupOptions, setGroupOptions] = useState([]);
+
+  useEffect(() => {
+    if (!open || !selectedCustomerId) {
+      setGroupOptions([]);
+      setSelectedGroupValue("");
+      return;
+    }
+    let cancelled = false;
+    listCustomerGroups(Number(selectedCustomerId))
+      .then((records) => {
+        if (!cancelled) {
+          setGroupOptions(flattenGroupTree(records).filter((group) => group.is_active));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGroupOptions([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, selectedCustomerId]);
 
   useEffect(() => {
     if (!open) return;
@@ -62,9 +110,14 @@ export default function BulkVehicleAssignmentModal({
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    await onSubmit({
+    const payload = {
       customer_database_id: selectedDatabaseId ? Number(selectedDatabaseId) : null,
-    });
+    };
+    if (selectedGroupValue !== "") {
+      payload.customer_group_id =
+        selectedGroupValue === "__none__" ? null : Number(selectedGroupValue);
+    }
+    await onSubmit(payload);
   };
 
   return (
@@ -131,6 +184,27 @@ export default function BulkVehicleAssignmentModal({
               ))}
             </select>
           </div>
+
+          {selectedCustomerId && groupOptions.length > 0 ? (
+            <div className="form-field">
+              <label htmlFor="bulk-assign-group">
+                Grupo interno <span className="form-optional">(opcional)</span>
+              </label>
+              <select
+                id="bulk-assign-group"
+                value={selectedGroupValue}
+                onChange={(event) => setSelectedGroupValue(event.target.value)}
+              >
+                <option value="">No cambiar</option>
+                <option value="__none__">Quitar grupo</option>
+                {groupOptions.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {`${"— ".repeat(group.depth)}${group.name}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
 
           <small className="support-copy">
             Si dejas la database vacia, se quitara la asignacion actual de los vehiculos seleccionados.

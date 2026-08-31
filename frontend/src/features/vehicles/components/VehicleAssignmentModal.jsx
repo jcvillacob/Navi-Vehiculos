@@ -1,8 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 
 import FileDropzone from "../../../components/FileDropzone";
+import { listCustomerGroups } from "../../../api/vehicleApi";
 import { getDatabaseTypeLabel, providerSupportsManualVehicleId } from "../../customers/providerCatalog";
 import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../../categories";
+
+// Aplana el arbol de grupos (parent_id) a opciones con sangria por nivel.
+function flattenGroupTree(groups) {
+  const byParent = new Map();
+  groups.forEach((group) => {
+    const key = group.parent_id ?? 0;
+    if (!byParent.has(key)) {
+      byParent.set(key, []);
+    }
+    byParent.get(key).push(group);
+  });
+  const ordered = [];
+  const walk = (parentKey, depth) => {
+    (byParent.get(parentKey) || []).forEach((group) => {
+      ordered.push({ ...group, depth });
+      walk(group.id, depth + 1);
+    });
+  };
+  walk(0, 0);
+  return ordered;
+}
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
@@ -78,7 +100,9 @@ export default function VehicleAssignmentModal({
   onChangeCategory = null,
   savingCategory = false,
   onChangeVocacional = null,
-  savingVocacional = false
+  savingVocacional = false,
+  onChangeGroup = null,
+  savingGroup = false
 }) {
   const [technicalNumber, setTechnicalNumber] = useState(initialTechnicalNumber);
   const [engineName, setEngineName] = useState("");
@@ -90,6 +114,37 @@ export default function VehicleAssignmentModal({
   const [selectedMotorId, setSelectedMotorId] = useState("");
   const [providerVehicleId, setProviderVehicleId] = useState("");
   const [providerVehicleIdTouched, setProviderVehicleIdTouched] = useState(false);
+  const [groupOptions, setGroupOptions] = useState([]);
+  const [groupOptionsLoading, setGroupOptionsLoading] = useState(false);
+
+  // Grupos internos del cliente del vehiculo, para la tarjeta "Grupo".
+  useEffect(() => {
+    if (!open || !vehicle?.customer_id) {
+      setGroupOptions([]);
+      return;
+    }
+    let cancelled = false;
+    setGroupOptionsLoading(true);
+    listCustomerGroups(vehicle.customer_id)
+      .then((records) => {
+        if (!cancelled) {
+          setGroupOptions(flattenGroupTree(records));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGroupOptions([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setGroupOptionsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, vehicle?.customer_id]);
 
   useEffect(() => {
     if (!open) {
@@ -341,6 +396,51 @@ export default function VehicleAssignmentModal({
                   {vehicle.vocacional ? "Vocacional" : "Comercial"}
                 </span>
               )}
+            </div>
+
+            <div className="editable-card">
+              <div className="editable-card-header">
+                <span className="editable-card-label">Grupo interno</span>
+                <span
+                  className="status"
+                  title={vehicle.group_path || "El vehiculo no pertenece a ningun grupo del cliente"}
+                >
+                  {vehicle.group_path || "Sin grupo"}
+                </span>
+              </div>
+              {!vehicle.customer_id ? (
+                <span className="editable-card-hint">Asigna primero un cliente</span>
+              ) : onChangeGroup && canEditVehicle ? (
+                <select
+                  className="editable-card-select"
+                  value={vehicle.customer_group_id ? String(vehicle.customer_group_id) : ""}
+                  onChange={(event) =>
+                    onChangeGroup(vehicle, event.target.value ? Number(event.target.value) : null)
+                  }
+                  disabled={savingGroup || groupOptionsLoading}
+                >
+                  <option value="">Sin grupo</option>
+                  {groupOptions
+                    .filter(
+                      (group) =>
+                        group.is_active || group.id === vehicle.customer_group_id
+                    )
+                    .map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {`${"— ".repeat(group.depth)}${group.name}`}
+                      </option>
+                    ))}
+                </select>
+              ) : (
+                <span className="editable-card-hint">
+                  {vehicle.group_path || "Sin grupo asignado"}
+                </span>
+              )}
+              {vehicle.customer_id && !groupOptionsLoading && groupOptions.length === 0 ? (
+                <span className="editable-card-hint">
+                  El cliente no tiene grupos; se crean en la pagina Clientes.
+                </span>
+              ) : null}
             </div>
           </div>
         </section>

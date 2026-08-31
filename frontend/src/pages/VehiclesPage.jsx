@@ -16,7 +16,7 @@ import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalo
 import { useUserPreference } from "../hooks/useUserPreference";
 import BulkVehicleAssignmentModal from "../features/vehicles/components/BulkVehicleAssignmentModal";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
-import { assignVehicleDatabase, checkVehicleConnections, fetchConnectionStats, fetchVehicleDetail, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleVocacional } from "../api/vehicleApi";
+import { assignVehicleDatabase, checkVehicleConnections, fetchConnectionStats, fetchVehicleDetail, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleGroup, setVehicleVocacional } from "../api/vehicleApi";
 import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../features/categories";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
@@ -51,6 +51,7 @@ const VEHICLE_COLUMNS = [
   { key: "engine_name", label: "Motor", width: 140, getValue: (v) => v.engine_name || "Sin catalogar" },
   { key: "technical_number", label: "TEC#", width: 110, getValue: (v) => v.technical_number },
   { key: "client_name", label: "Cliente", width: 140, getValue: (v) => v.client_name || "Sin cliente" },
+  { key: "group_path", label: "Grupo", width: 170, getValue: (v) => v.group_path || "Sin grupo" },
   {
     key: "category",
     label: "Categoria",
@@ -171,6 +172,7 @@ export default function VehiclesPage() {
   const [filterDatabase, setFilterDatabase] = useState(Array.isArray(restoredFilters.filterDatabase) ? restoredFilters.filterDatabase : []);
   const [filterConnection, setFilterConnection] = useState(Array.isArray(restoredFilters.filterConnection) ? restoredFilters.filterConnection : []);
   const [savingCategoryPlates, setSavingCategoryPlates] = useState(() => new Set());
+  const [savingGroupPlates, setSavingGroupPlates] = useState(() => new Set());
   const [savingVocacionalPlates, setSavingVocacionalPlates] = useState(() => new Set());
   const [page, setPage] = useState(Number.isInteger(restoredFilters.page) && restoredFilters.page > 0 ? restoredFilters.page : 1);
   const [pageSize, setPageSize] = useState(Number.isInteger(restoredFilters.pageSize) ? restoredFilters.pageSize : 25);
@@ -697,6 +699,33 @@ export default function VehiclesPage() {
     }
   };
 
+  const handleChangeGroup = async (vehicle, customerGroupId) => {
+    setSavingGroupPlates((prev) => new Set(prev).add(vehicle.plate));
+    try {
+      const result = await setVehicleGroup(vehicle.plate, customerGroupId);
+      const patch = {
+        customer_group_id: result.customer_group_id,
+        group_name: result.group_name,
+        group_path: result.group_path
+      };
+      patchVehicle(vehicle.plate, patch);
+      setSelectedVehicle((prev) =>
+        prev && prev.plate === vehicle.plate ? { ...prev, ...patch } : prev
+      );
+    } catch (err) {
+      pushToast(
+        "error",
+        err instanceof Error ? err.message : "No fue posible actualizar el grupo"
+      );
+    } finally {
+      setSavingGroupPlates((prev) => {
+        const next = new Set(prev);
+        next.delete(vehicle.plate);
+        return next;
+      });
+    }
+  };
+
   const handleRefreshVehicle = async (plate) => {
     setRefreshingPlates((prev) => new Set(prev).add(plate));
 
@@ -741,12 +770,20 @@ export default function VehiclesPage() {
     const plates = selectedVehicles.map((vehicle) => vehicle.plate);
     if (!plates.length) return;
 
+    // El grupo viaja aparte: tiene su propio endpoint y solo se toca si el
+    // modal lo pidio (la clave ausente significa "no cambiar").
+    const hasGroupChange = Object.prototype.hasOwnProperty.call(payload, "customer_group_id");
+    const { customer_group_id: bulkGroupId, ...assignPayload } = payload;
+
     setBulkAssigning(true);
     try {
       const failedPlates = [];
       for (const plate of plates) {
         try {
-          await assignVehicleDatabase(plate, payload);
+          await assignVehicleDatabase(plate, assignPayload);
+          if (hasGroupChange) {
+            await setVehicleGroup(plate, bulkGroupId);
+          }
         } catch {
           failedPlates.push(plate);
         }
@@ -1301,6 +1338,8 @@ export default function VehiclesPage() {
         savingCategory={selectedVehicle ? savingCategoryPlates.has(selectedVehicle.plate) : false}
         onChangeVocacional={handleChangeVocacional}
         savingVocacional={selectedVehicle ? savingVocacionalPlates.has(selectedVehicle.plate) : false}
+        onChangeGroup={handleChangeGroup}
+        savingGroup={selectedVehicle ? savingGroupPlates.has(selectedVehicle.plate) : false}
       />
 
       <BulkVehicleAssignmentModal
