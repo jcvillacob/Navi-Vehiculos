@@ -8812,3 +8812,82 @@ html[data-theme="dark"] :where(select) {
   display: flex;
   gap: 6px;
 }
+
+/* ─────────────────────────────
+   RENDIMIENTOS — refactor sep 2026
+   (filtros multi-select, columna Alertas, filas marcadas, estado stale)
+───────────────────────────── */
+.rendimientos-filter-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.rendimientos-multi-filter {
+  display: flex;
+  min-width: 0;
+}
+
+.rendimientos-multi-filter .th-multifilter {
+  width: 100%;
+}
+
+/* Variante "caja" para usarlo dentro de formularios/modales (ad-hoc). */
+.rendimientos-multi-filter-boxed .th-multifilter-trigger {
+  height: 36px;
+  padding: 0 12px;
+  justify-content: space-between;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.rendimientos-multi-filter-boxed .th-multifilter.is-active .th-multifilter-trigger {
+  border-color: var(--red);
+}
+
+.rendimientos-multi-filter-boxed .th-multifilter-dropdown {
+  left: 0;
+  right: 0;
+  min-width: 100%;
+}
+
+/* Fila con alertas/flags o estado parcial/error: borde izquierdo sutil. */
+.rendimientos-table tbody tr.row-flagged > td:first-child {
+  box-shadow: inset 3px 0 0 var(--status-partial-text);
+}
+
+.alerts-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--status-partial-bg);
+  border: 1px solid var(--status-partial-border);
+  color: var(--status-partial-text);
+  font-family: "Poppins", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.alerts-badge-none {
+  background: none;
+  border-color: transparent;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Datos previos visibles pero desactualizados tras un error de carga. */
+.rendimientos-table-shell.is-stale {
+  opacity: 0.65;
+}
