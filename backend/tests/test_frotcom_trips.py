@@ -18,6 +18,7 @@ from app.clients.frotcom_client import (
     fetch_trips_range,
     get_frotcom_month_range,
     get_frotcom_month_range_utc_bounds,
+    get_trip_based_odometers,
     sort_trips_chronologically,
     trip_canbus_distance,
     trip_distance,
@@ -78,6 +79,44 @@ class TestFetchTripsRangeChunking:
             fetch_trips_range(CONFIG, "v1", _utc(2026, 6, 1), _utc(2026, 6, 9))
 
         assert calls[-1]["dt"] == "2026-06-09T00:00:00Z"
+
+    def test_split_mode_is_forwarded_to_frotcom(self):
+        calls: list[dict] = []
+
+        def fake_get(config, path, params, **kwargs):
+            calls.append(params)
+            return []
+
+        with patch("app.clients.frotcom_client._frotcom_get", side_effect=fake_get):
+            fetch_trips_range(
+                CONFIG,
+                "v1",
+                _utc(2026, 6, 1, 5),
+                _utc(2026, 7, 1, 5),
+                trip_limits="split",
+            )
+
+        assert calls
+        assert all(call["tripLimits"] == "split" for call in calls)
+
+    def test_monthly_odometer_requests_split_trips(self):
+        crossing_segment = {
+            "id": 7,
+            "started": "2026-07-01T04:58:40Z",
+            "ended": "2026-07-01T05:00:00Z",
+            "startOdometer": 31041.157,
+            "endOdometer": 31041.165,
+        }
+        with patch(
+            "app.clients.frotcom_client.fetch_trips_range",
+            return_value=([crossing_segment], []),
+        ) as fetch:
+            result = get_trip_based_odometers(
+                CONFIG, "v1", _utc(2026, 6, 1, 5), _utc(2026, 7, 1, 5)
+            )
+
+        assert result.odo_end == pytest.approx(31041.165)
+        assert fetch.call_args.kwargs["trip_limits"] == "split"
 
     def test_dedup_by_trip_id_across_blocks(self):
         blocks = [
@@ -355,4 +394,4 @@ class TestMonthRangeUtc:
     def test_utc_bounds_are_aware(self):
         start_utc, end_utc = get_frotcom_month_range_utc_bounds(2026, 6)
         assert start_utc == datetime(2026, 6, 1, 5, 0, 0, tzinfo=timezone.utc)
-        assert end_utc == datetime(2026, 7, 1, 4, 59, 59, tzinfo=timezone.utc)
+        assert end_utc == datetime(2026, 7, 1, 5, 0, 0, tzinfo=timezone.utc)

@@ -443,6 +443,8 @@ def fetch_trips_range(
     vehicle_id: str,
     start_utc: datetime,
     end_utc: datetime,
+    *,
+    trip_limits: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     trips_by_key: dict[Any, dict[str, Any]] = {}
     warnings: list[str] = []
@@ -454,10 +456,13 @@ def fetch_trips_range(
         df = format_frotcom_utc(current)
         dt = format_frotcom_utc(block_end)
         try:
+            params: dict[str, Any] = {"df": df, "dt": dt}
+            if trip_limits:
+                params["tripLimits"] = trip_limits
             data = _frotcom_get(
                 config,
                 f"/v2/vehicles/{vehicle_id}/trips",
-                {"df": df, "dt": dt},
+                params,
                 allow_no_content=True,
             )
         except FrotcomAuthError:
@@ -561,7 +566,18 @@ def get_trip_based_odometers(
     start_utc: datetime,
     end_utc: datetime,
 ) -> FrotcomTripOdometers:
-    trips, fetch_warnings = fetch_trips_range(config, vehicle_id, start_utc, end_utc)
+    # Frotcom devuelve por defecto el viaje completo cuando cualquier parte cae
+    # dentro del rango. En un cierre mensual eso incluye el endOdometer real de
+    # viajes que empezaron el ultimo dia pero terminaron el mes siguiente. El
+    # modo ``split`` recorta esos viajes exactamente a los limites solicitados
+    # y devuelve el odometro del segmento en el corte.
+    trips, fetch_warnings = fetch_trips_range(
+        config,
+        vehicle_id,
+        start_utc,
+        end_utc,
+        trip_limits="split",
+    )
     trips_sorted, undated = sort_trips_chronologically(trips)
     result = derive_trip_odometers(trips_sorted)
     warnings = [*fetch_warnings, *result.warnings]
@@ -639,19 +655,27 @@ def get_frotcom_month_range(year: int, month_number: int) -> tuple[str, str, dat
     else:
         next_month = datetime(year, month_number + 1, 1)
     end = (next_month - timedelta(days=1)).replace(hour=23, minute=59, second=59)
-    start_utc, end_utc = get_frotcom_month_range_utc_bounds(year, month_number)
-    return format_frotcom_utc(start_utc), format_frotcom_utc(end_utc), start, end
+    start_utc, end_utc_exclusive = get_frotcom_month_range_utc_bounds(year, month_number)
+    # mileageandtime conserva el contrato historico de fin inclusivo. Para
+    # rangos mayores a dos dias Frotcom redondea effectiveDt hacia arriba, por
+    # lo que 04:59:59 termina exactamente en el corte colombiano de las 05:00Z.
+    summary_end_utc = end_utc_exclusive - timedelta(seconds=1)
+    return format_frotcom_utc(start_utc), format_frotcom_utc(summary_end_utc), start, end
 
 
 def get_frotcom_month_range_utc_bounds(year: int, month_number: int) -> tuple[datetime, datetime]:
+    """Limites UTC semiabiertos ``[inicio, siguiente_mes)`` para viajes.
+
+    Ambos caen en :00 y cumplen el requisito de cuartos de hora del modo
+    ``tripLimits=split`` de Frotcom.
+    """
     bogota = timezone(_BOGOTA_UTC_OFFSET)
     start = datetime(year, month_number, 1, 0, 0, 0, tzinfo=bogota)
     if month_number == 12:
         next_month = datetime(year + 1, 1, 1, tzinfo=bogota)
     else:
         next_month = datetime(year, month_number + 1, 1, tzinfo=bogota)
-    end = next_month - timedelta(seconds=1)
-    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+    return start.astimezone(timezone.utc), next_month.astimezone(timezone.utc)
 
 
 def liters_to_gallons(liters: float | None) -> float | None:

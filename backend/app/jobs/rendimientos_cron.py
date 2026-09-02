@@ -3,8 +3,8 @@ Daily performance calculation job.
 
 Runs the monthly performance calculation for all eligible clients.
 - Always calculates the current month.
-- On the 1st of the month, also calculates the previous month first
-  (so odometer/horometer carry-over is up to date before the current month runs).
+- During the first days of the month, also recalculates the previous month
+  first so late provider data and odometer/hourmeter carry-over stay current.
 
 Usage:
     python -m app.jobs.rendimientos_cron
@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -28,20 +29,28 @@ logger = logging.getLogger(__name__)
 
 COL_TZ_OFFSET = timezone(timedelta(hours=-5))
 
+# Frotcom y otros proveedores pueden consolidar viajes despues del primer
+# cierre. Durante estos primeros dias se vuelve a calcular el mes anterior
+# antes del actual para incorporar datos tardios y mantener la continuidad.
+PREVIOUS_MONTH_REFRESH_DAYS = max(
+    1, int(os.getenv("RENDIMIENTOS_PREVIOUS_MONTH_REFRESH_DAYS", "3"))
+)
 
-def _run() -> None:
-    now = datetime.now(COL_TZ_OFFSET)
+
+def _months_to_calculate(now: datetime) -> list[str]:
     current_month = now.strftime("%Y-%m")
-    is_first_day = now.day == 1
-
     months_to_calculate: list[str] = []
-
-    if is_first_day:
+    if now.day <= PREVIOUS_MONTH_REFRESH_DAYS:
         first_of_current = now.replace(day=1)
         previous = first_of_current - timedelta(days=1)
         months_to_calculate.append(previous.strftime("%Y-%m"))
-
     months_to_calculate.append(current_month)
+    return months_to_calculate
+
+
+def _run() -> None:
+    now = datetime.now(COL_TZ_OFFSET)
+    months_to_calculate = _months_to_calculate(now)
 
     # --- Connection snapshot ---
     logger.info("Running Geotab connection snapshot for %s ...", now.strftime("%Y-%m-%d"))
