@@ -424,6 +424,15 @@ class VehicleAssignmentRecord(BaseModel):
 
 class VehicleDatabaseAssignmentRequest(BaseModel):
     customer_database_id: int | None = Field(default=None, description="ID de la database seleccionada")
+    customer_id: int | None = Field(
+        default=None,
+        description=(
+            "Cliente del vehiculo. Solo se usa cuando no hay database: permite asignar "
+            "clientes que todavia no tienen credenciales cargadas. Clave ausente = no "
+            "modificar el cliente actual; null explicito = dejar el vehiculo sin cliente. "
+            "Si viene customer_database_id, el cliente lo define la database."
+        ),
+    )
     access_url: str | None = Field(default=None, description="Enlace de acceso externo (para databases no-Geotab)")
     provider_vehicle_id: str | None = Field(
         default=None,
@@ -902,6 +911,23 @@ class MonthlyPerformanceRecord(BaseModel):
     tipo_combustible: str | None = Field(default=None, description="Tipo de combustible")
     nombre_vehiculo: str | None = Field(default=None, description="Nombre del vehiculo")
     is_adhoc: bool = Field(default=False, description="True si fue calculado con credenciales Navitrans (ad-hoc)")
+    # --- Hardening rendimientos (sep 2026): trazabilidad de fuentes y plausibilidad ---
+    odo_start_source: str | None = Field(default=None, description="Fuente del odometro inicial (ej. ecm, gps, status_data)")
+    odo_end_source: str | None = Field(default=None, description="Fuente del odometro final")
+    horo_start_source: str | None = Field(default=None, description="Fuente del horometro inicial")
+    horo_end_source: str | None = Field(default=None, description="Fuente del horometro final")
+    fuel_end: float | None = Field(default=None, description="Lectura acumulada de combustible al cierre del mes")
+    validation_flags: list[str] = Field(
+        default_factory=list,
+        description="Flags cortos de plausibilidad (ver app/services/performance_validation.py)",
+    )
+    source_meta: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Metadatos de origen del calculo (ids de dispositivo, timestamps de lecturas, etc.)",
+    )
+    job_id: int | None = Field(default=None, description="ID del job de calculo que produjo el registro")
+    last_error: str | None = Field(default=None, description="Ultimo error del calculo para esta placa/mes")
+    is_stale: bool = Field(default=False, description="True si el registro quedo desactualizado (pendiente de recalculo)")
 
 
 class AvailabilitySummary(BaseModel):
