@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -8,6 +9,8 @@ from typing import Any
 
 import requests
 
+from app.clients.http_retry import retry_http
+
 FROTCOM_BASE_URL = "https://v2api.frotcom.com"
 FROTCOM_PROVIDER = "frotcom"
 
@@ -15,6 +18,9 @@ _LITERS_PER_GALLON = 3.7854118
 _HTTP_TIMEOUT = 45
 _HTTP_MAX_ATTEMPTS = 3
 _HTTP_RETRY_STATUSES = {429, 502, 503, 504}
+_HTTP_BASE_WAIT = 0.5
+_HTTP_MAX_WAIT = 10.0
+_HTTP_RETRY_AFTER_MAX = 10.0
 _TRIPS_CHUNK_STEP_DAYS = 6
 _TRIPS_CHUNK_SPAN_DAYS = 7  # 6 + 1 de overlap; el endpoint /trips rechaza rangos mayores a ~7 dias
 _TRIP_DATE_FIELDS = ("started", "startDate", "startTime", "start", "dateStart",
@@ -41,6 +47,8 @@ _AUTH_FAILURE_TTL_SECONDS = 60
 _TOKEN_LOCK = threading.Lock()
 _TOKEN_CACHE: dict[tuple[str, str, str], str] = {}
 _AUTH_FAILURE_CACHE: dict[tuple[str, str, str], tuple[float, str]] = {}
+
+logger = logging.getLogger(__name__)
 
 
 class FrotcomAuthError(RuntimeError):
@@ -148,25 +156,36 @@ def _frotcom_get(
     token = get_access_token(config)
     url = f"{config.base_url.rstrip('/')}{path}"
     query = {"api_key": token, **params}
-    refreshed_token = False
-    response = None
-    for attempt in range(_HTTP_MAX_ATTEMPTS):
-        response = requests.get(url, params=query, timeout=_HTTP_TIMEOUT)
-        if response.status_code == 401 and not refreshed_token:
+
+    def _do_get() -> requests.Response:
+        # Reintenta 429/502/503/504 (honrando Retry-After, tope 10 s) y errores
+        # de conexion/timeout con backoff exponencial + jitter. Un status no
+        # reintentable (200, 204, 401, 403, 404...) se devuelve tal cual.
+        return retry_http(
+            lambda: requests.get(url, params=query, timeout=_HTTP_TIMEOUT),
+            describe=f"Frotcom GET {path}",
+            max_attempts=_HTTP_MAX_ATTEMPTS,
+            base_wait=_HTTP_BASE_WAIT,
+            max_wait=_HTTP_MAX_WAIT,
+            retry_statuses=_HTTP_RETRY_STATUSES,
+            retry_after_max=_HTTP_RETRY_AFTER_MAX,
+            logger=logger,
+        )
+
+    try:
+        response = _do_get()
+        if response.status_code == 401:
+            # Token vencido: se renueva una sola vez y se repite la peticion.
             _invalidate_token(config)
             token = get_access_token(config, force_refresh=True)
             query["api_key"] = token
-            refreshed_token = True
-            continue
-        if response.status_code in _HTTP_RETRY_STATUSES and attempt < _HTTP_MAX_ATTEMPTS - 1:
-            retry_after = response.headers.get("Retry-After")
-            try:
-                delay = max(0.0, min(float(retry_after), 10.0))
-            except (TypeError, ValueError):
-                delay = 0.5 * (2**attempt)
-            time.sleep(delay)
-            continue
-        break
+            response = _do_get()
+    except requests.HTTPError as exc:
+        # retry_http agoto los intentos sobre un status reintentable.
+        failed = exc.response
+        status = getattr(failed, "status_code", None) or 0
+        body = getattr(failed, "text", "") or ""
+        raise FrotcomRequestError(path, int(status), str(body)) from exc
     if response is None:
         raise RuntimeError(f"Frotcom GET {path} no produjo respuesta.")
     if allow_no_content and response.status_code == 204:

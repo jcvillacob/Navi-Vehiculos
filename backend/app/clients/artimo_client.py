@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
+
+from app.clients.http_retry import retry_http
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_key(value: str) -> str:
@@ -169,6 +174,11 @@ class ArtimoTripWindow:
     fuel_liters: float | None
     trip_count: int = 0
     trips_after_window: int = 0
+    # Viajes dentro de la ventana que NO traen el campo (venian sumando 0.0 en
+    # silencio). El proveedor avisa y, si superan el umbral, anula la metrica.
+    missing_distance: int = 0
+    missing_hours: int = 0
+    missing_consumption: int = 0
 
     @property
     def odometer(self) -> float | None:
@@ -208,18 +218,49 @@ def select_trips_in_window(
         )
 
     inside.sort(key=lambda row: extract_trip_end(row) or datetime.min)
+    distances = [extract_distance_km(row) for row in inside]
+    hours = [extract_engine_time_hours(row) for row in inside]
+    liters = [extract_consumption_liters(row) for row in inside]
     return ArtimoTripWindow(
         close_trip=inside[-1],
-        distance_km=sum(extract_distance_km(row) or 0.0 for row in inside),
-        engine_hours=sum(extract_engine_time_hours(row) or 0.0 for row in inside),
-        fuel_liters=sum(extract_consumption_liters(row) or 0.0 for row in inside),
+        distance_km=sum(value or 0.0 for value in distances),
+        engine_hours=sum(value or 0.0 for value in hours),
+        fuel_liters=sum(value or 0.0 for value in liters),
         trip_count=len(inside),
         trips_after_window=after,
+        missing_distance=sum(1 for value in distances if value is None),
+        missing_hours=sum(1 for value in hours if value is None),
+        missing_consumption=sum(1 for value in liters if value is None),
     )
 
 
 _REPORT_PAGE_LIMIT = 50000
 _MIN_SPLIT_SECONDS = 3600
+# Tope de profundidad al partir ventanas (2**6 = 64 ventanas) y presupuesto
+# total de peticiones por llamada a `get_report_paged`. Sin ellos un recurso
+# con muchisimos puntos GPS podia disparar ~1500 requests y colgar el job.
+_MAX_SPLIT_DEPTH = 6
+_MAX_REQUESTS_PER_REPORT = 200
+_HTTP_MAX_ATTEMPTS = 3
+
+
+class ArtimoReportTooLarge(RuntimeError):
+    """El reporte no cabe en el presupuesto de peticiones / profundidad de split.
+
+    Lleva en `rows` lo recolectado hasta el corte y en `requests_made` el
+    numero de peticiones hechas, por si el llamador quiere aprovecharlas.
+    """
+
+    def __init__(self, message: str, *, rows: list[dict[str, Any]] | None = None, requests_made: int = 0) -> None:
+        super().__init__(message)
+        self.rows = rows or []
+        self.requests_made = requests_made
+
+
+@dataclass
+class _PagingBudget:
+    requests_made: int = 0
+    collected: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -279,11 +320,16 @@ class ArtimoClient:
     def login(self) -> None:
         hashed_password = hashlib.sha256(self.config.password.encode()).hexdigest()
         auth = base64.b64encode(f"{self.config.username}:{hashed_password}".encode()).decode()
-        response = self.session.post(
-            f"{self.config.auth_base_url.rstrip('/')}/auth/sign-in",
-            headers={"authorization": f"Basic {auth}"},
-            json={"userBrowserDetails": {"browser": "Chrome", "os": "Linux"}},
-            timeout=30,
+        response = retry_http(
+            lambda: self.session.post(
+                f"{self.config.auth_base_url.rstrip('/')}/auth/sign-in",
+                headers={"authorization": f"Basic {auth}"},
+                json={"userBrowserDetails": {"browser": "Chrome", "os": "Linux"}},
+                timeout=30,
+            ),
+            describe="Artimo POST /auth/sign-in",
+            max_attempts=_HTTP_MAX_ATTEMPTS,
+            logger=logger,
         )
         if response.status_code in (401, 403):
             raise ArtimoAuthError(
@@ -336,11 +382,16 @@ class ArtimoClient:
                 },
             },
         }
-        response = self.session.post(
-            f"{self.config.api_base_url.rstrip('/')}/reports/getreport/{report_id}?",
-            cookies=self.cookies,
-            json=payload,
-            timeout=60,
+        response = retry_http(
+            lambda: self.session.post(
+                f"{self.config.api_base_url.rstrip('/')}/reports/getreport/{report_id}?",
+                cookies=self.cookies,
+                json=payload,
+                timeout=60,
+            ),
+            describe=f"Artimo POST /reports/getreport ({report_type}, {start_date}..{end_date})",
+            max_attempts=_HTTP_MAX_ATTEMPTS,
+            logger=logger,
         )
         response.raise_for_status()
         body = response.json()
@@ -376,7 +427,43 @@ class ArtimoClient:
         use_group: bool | None = None,
     ) -> ArtimoReportPage:
         """Igual que `get_report`, pero parte la ventana cuando la respuesta
-        llega al tope de filas: la API trunca en silencio."""
+        llega al tope de filas: la API trunca en silencio.
+
+        Acotado por `_MAX_SPLIT_DEPTH` y `_MAX_REQUESTS_PER_REPORT`; al
+        excederlos lanza `ArtimoReportTooLarge` con lo recolectado.
+        """
+        budget = _PagingBudget()
+        return self._get_report_paged(
+            report_type,
+            start_date,
+            end_date,
+            resource_id=resource_id,
+            group_param=group_param,
+            use_group=use_group,
+            depth=0,
+            budget=budget,
+        )
+
+    def _get_report_paged(
+        self,
+        report_type: str,
+        start_date: str,
+        end_date: str,
+        *,
+        resource_id: str | None,
+        group_param: int,
+        use_group: bool | None,
+        depth: int,
+        budget: _PagingBudget,
+    ) -> ArtimoReportPage:
+        if budget.requests_made >= _MAX_REQUESTS_PER_REPORT:
+            self._raise_too_large(
+                report_type,
+                resource_id,
+                budget,
+                f"supero el presupuesto de {_MAX_REQUESTS_PER_REPORT} peticiones",
+            )
+        budget.requests_made += 1
         rows = self.get_report(
             report_type,
             start_date,
@@ -386,33 +473,67 @@ class ArtimoClient:
             use_group=use_group,
         )
         if len(rows) < _REPORT_PAGE_LIMIT:
+            budget.collected.extend(rows)
             return ArtimoReportPage(rows=rows)
 
         start = _parse_api_instant(start_date)
         end = _parse_api_instant(end_date)
         if (end - start).total_seconds() <= _MIN_SPLIT_SECONDS:
+            budget.collected.extend(rows)
             return ArtimoReportPage(rows=rows, truncated=True)
 
+        if depth >= _MAX_SPLIT_DEPTH:
+            budget.collected.extend(rows)
+            self._raise_too_large(
+                report_type,
+                resource_id,
+                budget,
+                f"la ventana {start_date}..{end_date} sigue truncada tras {_MAX_SPLIT_DEPTH} niveles de split",
+            )
+
         middle = start + (end - start) / 2
-        first = self.get_report_paged(
+        first = self._get_report_paged(
             report_type,
             start_date,
             _format_api_instant(middle),
             resource_id=resource_id,
             group_param=group_param,
             use_group=use_group,
+            depth=depth + 1,
+            budget=budget,
         )
-        second = self.get_report_paged(
+        second = self._get_report_paged(
             report_type,
             _format_api_instant(middle + timedelta(milliseconds=1)),
             end_date,
             resource_id=resource_id,
             group_param=group_param,
             use_group=use_group,
+            depth=depth + 1,
+            budget=budget,
         )
         return ArtimoReportPage(
             rows=_dedupe_rows(first.rows + second.rows),
             truncated=first.truncated or second.truncated,
+        )
+
+    @staticmethod
+    def _raise_too_large(
+        report_type: str,
+        resource_id: str | None,
+        budget: _PagingBudget,
+        reason: str,
+    ) -> None:
+        message = (
+            f"Reporte Artimo '{report_type}' demasiado grande para el recurso "
+            f"{resource_id or '(grupo)'}: {reason} "
+            f"({budget.requests_made} peticiones, {len(budget.collected)} filas recolectadas)."
+        )
+        logger.warning(message)
+        raise ArtimoReportTooLarge(
+            message,
+            rows=_dedupe_rows(budget.collected),
+            requests_made=budget.requests_made,
         )
 
     def get_month_range(self, year: int, month: int) -> tuple[str, str]:

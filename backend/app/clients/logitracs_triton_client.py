@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -12,8 +13,26 @@ from urllib.parse import quote, unquote, urlsplit
 import requests
 from bs4 import BeautifulSoup
 
+from app.clients.http_retry import retry_http
+
 
 logger = logging.getLogger(__name__)
+
+
+def _read_timeout_from_env(default: float = 60.0) -> float:
+    raw = os.environ.get("LOGITRACS_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# (connect, read) en segundos. El read se ajusta con LOGITRACS_TIMEOUT_SECONDS.
+LOGITRACS_TIMEOUT: tuple[float, float] = (10.0, _read_timeout_from_env())
+LOGITRACS_MAX_ATTEMPTS = 3
 
 
 def _normalize_triton_base_url(value: str) -> str:
@@ -137,6 +156,16 @@ class LogitracsTritonClient:
         if token:
             self.session.headers["X-XSRF-TOKEN"] = token
 
+    def _get(self, url: str, *, describe: str, **kwargs: Any) -> requests.Response:
+        """GET con timeout y reintentos (conexión/timeout/429/5xx)."""
+        kwargs.setdefault("timeout", LOGITRACS_TIMEOUT)
+        return retry_http(
+            lambda: self.session.get(url, **kwargs),
+            describe=f"LogiTracs {describe}",
+            max_attempts=LOGITRACS_MAX_ATTEMPTS,
+            logger=logger,
+        )
+
     @staticmethod
     def _decode_jwt_payload(jwt: str) -> dict[str, Any]:
         payload = jwt.split(".")[1]
@@ -163,7 +192,7 @@ class LogitracsTritonClient:
         logivim_base = self.logivim_base_url
 
         # Paso 1: GET Login page for cookies
-        r1 = self.session.get(f"{triton_base}/Login")
+        r1 = self._get(f"{triton_base}/Login", describe="GET Login")
         r1.raise_for_status()
         self._inject_xsrf()
 
@@ -203,13 +232,13 @@ class LogitracsTritonClient:
             "Upgrade-Insecure-Requests": "1",
         })
         sso_url = f"{logivim_base}/loginLogitracs/usuario/{quote(self.email_usuario, safe='@')}"
-        resp_sso = self.session.get(sso_url, allow_redirects=True)
+        resp_sso = self._get(sso_url, describe="SSO LogiVIM", allow_redirects=True)
         resp_sso.raise_for_status()
         self._inject_xsrf()
 
         self.session.headers["Referer"] = resp_sso.url
         ver_info_url = f"{logivim_base}/ver-informacion-especifica"
-        r_vi = self.session.get(ver_info_url, allow_redirects=True)
+        r_vi = self._get(ver_info_url, describe="ver-informacion-especifica", allow_redirects=True)
         r_vi.raise_for_status()
         self._inject_xsrf()
 
@@ -218,7 +247,7 @@ class LogitracsTritonClient:
             login_html = resp_sso.text
             login_page_url = resp_sso.url
         else:
-            r_login = self.session.get(f"{logivim_base}/login", allow_redirects=True)
+            r_login = self._get(f"{logivim_base}/login", describe="GET login web", allow_redirects=True)
             r_login.raise_for_status()
             login_html = r_login.text
             login_page_url = r_login.url
@@ -241,6 +270,7 @@ class LogitracsTritonClient:
                 "Referer": login_page_url,
             },
             allow_redirects=True,
+            timeout=LOGITRACS_TIMEOUT,
         )
         self._inject_xsrf()
 
@@ -259,7 +289,7 @@ class LogitracsTritonClient:
         informe_url = f"{logivim_base}/informeOperacionalFlota"
 
         # GET to retrieve _token
-        r_informe = self.session.get(informe_url, allow_redirects=True)
+        r_informe = self._get(informe_url, describe="GET informeOperacionalFlota", allow_redirects=True)
         r_informe.raise_for_status()
         self._inject_xsrf()
 
