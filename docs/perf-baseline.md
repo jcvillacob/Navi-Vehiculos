@@ -99,3 +99,25 @@ Además, el cron diario (`rendimientos_cron`) ahora corre con `compute_availabil
 **Plan cerrado 2026-07-11.** Resultado neto: job diario ~23.5 min → ~9-10 min estimado
 (verificar en el próximo run del cron con los logs de instrumentación); refresco de
 disponibilidad 25 min → 80 s; lecturas UI 3-5× más rápidas.
+
+## 5. Resultado Fase 3 sep-2026 (2026-09-02): multicall cross-vehículo + workers + ventanas de combustible
+
+Contexto: plan en `docs/plan-rendimientos-mejoras-sep2026.md`. Medición real sobre Harina del Valle
+(db_id=11, 40 devices, 2026-08, solo lectura, mismo scope antes/después).
+
+| Escenario | Tiempo |
+|---|---|
+| (a) baseline: `get_month_data_bundle` secuencial, 5 Gets/device con series completas | **61.0 s** (1.53 s/dev) |
+| (b) `get_month_data_bundles` 5 Gets mes completo, chunk 20 devices | 145 s — un multi_call de 100 Gets superó el timeout HTTP de 60 s y reintentó (264k filas de combustible) |
+| (c) `get_month_data_bundles` 7 Gets con ventanas borde de combustible, chunk 14 (default) | **16.9 s** (0.42 s/dev); chunk 7/14/20 → 18.6/15.7/13.9 s |
+| (d) provider completo, `GEOTAB_MAX_WORKERS=1` | 18.8 s (0.47 s/placa) |
+| (d) provider completo, `GEOTAB_MAX_WORKERS=3` (default) | **10.0 s** (0.25 s/placa) |
+
+- Equivalencia verificada: 0 diferencias de shape ni de primera/última lectura de combustible entre (a) y (c);
+  summary idéntico (34 calculated / 5 partial / 1 unbound). Filas de combustible transferidas 264.002 → 160.
+- Volumen restante dominado por odómetro (172k filas, hasta 8k/device), necesario para el escaneo de retrocesos.
+- Rate limiter: 1.327 tokens consumidos, 0 esperas, 0 penalizaciones.
+- Lección de (b): un multi_call demasiado grande de series completas revienta el timeout; por eso la segunda
+  pasada de series completas (ventana vacía) va agrupada de a 4 (`GEOTAB_BUNDLE_FULL_SERIES_PER_MULTICALL`).
+- Proyección flota Geotab (334 placas sep-2026): ~5 min → ~1.5 min. Job diario completo (706 targets) estimado
+  ~7-10 min → ~3-4 min; pendiente medir con el cron de las 05:00.

@@ -1,5 +1,11 @@
 # Revisión y plan de mejora — módulo Rendimientos (2026-09-02)
 
+> **Estado 2026-09-02 (noche): Fases 1-5 implementadas** en la rama `feat/integration-vocacional-export`.
+> Semántica actual en `docs/CALCULO_RENDIMIENTOS.md`; mediciones en `docs/perf-baseline.md` §5.
+> Pendiente de decisión de negocio: umbrales de plausibilidad, unidad de combustible LogiTracs,
+> homologación de `hours_gps`, y aplicar `revalidate_performance --apply` al histórico (118/1445 filas cambian).
+> No implementado por decisión: D6 (homologar `hours_gps`) — solo documentado.
+
 Revisión completa del pipeline `/rendimientos` (cálculo mensual por proveedor, jobs, API de lectura, tabla y frontend).
 Método: 5 auditorías paralelas (Geotab/multicall, resiliencia de jobs, lógica de datos, frontend, API/BD) más
 verificación directa contra `navi_db` y el código. Todo lo listado tiene evidencia `archivo:línea` o consulta SQL.
