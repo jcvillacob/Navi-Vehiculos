@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
-  fetchConnectionStats,
+  fetchConnectionStatsRange,
   fetchMonthlyAvailability,
   fetchMonthlyPerformance,
 } from "../../../api/vehicleApi";
-import { generateMonthRange } from "../../../utils/formatters";
 
 const EMPTY_PAYLOAD = { summary: null, rows: [] };
 
@@ -51,11 +50,14 @@ function mergeConnectionStats(results) {
   return merged;
 }
 
-// TODO(backend): reemplazar por un endpoint de rango
-// `fetchConnectionStats(monthFrom, monthTo)` y eliminar el fan-out por mes.
+/**
+ * Una sola llamada de rango al backend (`{ months: { "YYYY-MM": [...] } }`);
+ * se recorre en orden cronologico para que el merge sea determinista.
+ */
 async function loadConnectionStatsRange(monthFrom, monthTo) {
-  const months = generateMonthRange(monthFrom, monthTo);
-  const results = await Promise.all(months.map((m) => fetchConnectionStats(m).catch(() => [])));
+  const response = await fetchConnectionStatsRange(monthFrom, monthTo);
+  const byMonth = response?.months && typeof response.months === "object" ? response.months : {};
+  const results = Object.keys(byMonth).sort().map((m) => byMonth[m]);
   return mergeConnectionStats(results);
 }
 

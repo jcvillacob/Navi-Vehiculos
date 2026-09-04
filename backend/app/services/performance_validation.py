@@ -56,6 +56,9 @@ METRIC_FIELDS: tuple[str, ...] = (
     "fuel_end",
 )
 
+# Metricas cubiertas por el CHECK mvp_nonneg_chk: nunca deben persistirse negativas.
+_NULLABLE_ON_NEGATIVE = ("kms_ecm", "kms_gps", "hours_ecm", "hours_gps", "fuel_gallons", "fuel_end")
+
 # Todas las flags que puede emitir esta capa (documentacion + limpieza idempotente).
 ALL_FLAGS: frozenset[str] = frozenset(
     {
@@ -267,7 +270,22 @@ def _validate(
     ]
     if negatives:
         detail = ", ".join(f"{name}={_fmt(val)}" for name, val in negatives)
-        c.add("negative_value", f"valores negativos en {detail}", "error")
+        c.add("negative_value", f"valores negativos en {detail}; metricas anuladas", "error")
+        # Se anulan las metricas negativas: el CHECK mvp_nonneg_chk de la tabla
+        # rechazaria la fila y tumbaria el job completo. El valor crudo queda en el warning.
+        for name, _val in negatives:
+            if name in _NULLABLE_ON_NEGATIVE:
+                c.set_metric(name, None)
+        if "kms_ecm" in dict(negatives):
+            kms_ecm = None
+        if "kms_gps" in dict(negatives):
+            kms_gps = None
+        if "hours_ecm" in dict(negatives):
+            hours_ecm = None
+        if "hours_gps" in dict(negatives):
+            hours_gps = None
+        if "fuel_gallons" in dict(negatives):
+            fuel = None
 
     # 2. Retrocesos de odometro/horometro -> anular ECM, partial.
     if odo_start is not None and odo_end is not None and odo_end < odo_start:

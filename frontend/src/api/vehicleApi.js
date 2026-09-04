@@ -733,6 +733,16 @@ export async function fetchConnectionStats(month) {
   return parseJsonOrThrow(response, "Error obteniendo estadisticas de conexion");
 }
 
+/**
+ * Stats de conexion para un rango inclusivo de meses (max 12) en una sola
+ * llamada. Devuelve `{ months: { "YYYY-MM": [...filas como fetchConnectionStats...] } }`.
+ */
+export async function fetchConnectionStatsRange(monthFrom, monthTo) {
+  const params = new URLSearchParams({ month_from: monthFrom, month_to: monthTo });
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/connection-stats?${params}`));
+  return parseJsonOrThrow(response, "Error obteniendo estadisticas de conexion");
+}
+
 export async function fetchConnectionCalendar(plate, monthFrom, monthTo) {
   const normalizedPlate = (plate || "").trim().toUpperCase();
   const params = new URLSearchParams({

@@ -42,6 +42,18 @@ def get_monthly_performance(
     ),
     plate_search: str | None = Query(default=None, min_length=1, max_length=32),
     motor_group: str | None = Query(default=None, min_length=1, max_length=120),
+    motor_groups: list[str] | None = Query(
+        default=None,
+        description="Filtro opcional por varios grupos de motor (se combina con motor_group)",
+    ),
+    status: list[str] | None = Query(
+        default=None,
+        description="Filtro opcional por estado(s): calculated | partial | unbound | no_data | error",
+    ),
+    source_provider: list[str] | None = Query(
+        default=None,
+        description="Filtro opcional por proveedor(es) origen (geotab, artimo, frotcom, ...)",
+    ),
     _user: dict = Depends(require_permission("rendimientos.view")),
 ) -> MonthlyPerformanceResponse:
     effective_from = month_from or month
@@ -59,6 +71,9 @@ def get_monthly_performance(
             customer_database_id=customer_database_id,
             plate_search=plate_search,
             motor_group=motor_group,
+            motor_groups=motor_groups,
+            status=status,
+            source_provider=source_provider,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

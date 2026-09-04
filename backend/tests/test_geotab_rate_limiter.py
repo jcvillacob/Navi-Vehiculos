@@ -17,6 +17,16 @@ from app.clients.geotab_rate_limiter import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _enable_module_logger():
+    """El fileConfig de alembic (conftest de sesion) deja disabled=True en loggers app.*."""
+    lg = logging.getLogger("app.clients.geotab_rate_limiter")
+    prev = lg.disabled
+    lg.disabled = False
+    yield
+    lg.disabled = prev
+
+
 class FakeClock:
     def __init__(self, start: float = 1000.0) -> None:
         self.now = start

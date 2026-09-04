@@ -292,11 +292,23 @@ def test_negative_value_is_error():
     assert "negative_value" in out.validation_flags
     assert out.calculation_status == "error"
     assert any("kms_ecm" in w for w in plaus_warnings(out))
+    # la metrica negativa se anula para no violar mvp_nonneg_chk al persistir
+    assert out.kms_ecm is None
+    assert out.hours_ecm == 10
 
 
 def test_negative_fuel_end_is_error():
     out = validate_record(make(fuel_end=-1), days_in_month=DAYS)
     assert out.calculation_status == "error"
+    assert out.fuel_end is None
+
+
+def test_negative_odo_kept_but_flagged():
+    # odo_* no esta en el CHECK: se conserva el valor crudo, solo se marca error
+    out = validate_record(make(odo_start=-5, odo_end=100, kms_ecm=105), days_in_month=DAYS)
+    assert out.calculation_status == "error"
+    assert out.odo_start == -5
+    assert out.kms_ecm == 105
 
 
 # --------------------------------------------------------------------------

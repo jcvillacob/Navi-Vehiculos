@@ -17,6 +17,7 @@ from app.services.availability_dashboard import (
     get_availability_overview,
     get_cloudfleet_coverage,
 )
+from app.services.rendimientos_jobs import summarize_recent_jobs
 from app.services.taller_ordenes import peek_cached_orders
 
 _logger = logging.getLogger(__name__)
@@ -165,7 +166,73 @@ def get_operational_alerts() -> dict[str, Any]:
     }
 
 
+# ── Digest de jobs de rendimientos ──────────────────────────────────────────
+
+RENDIMIENTOS_DIGEST_HOURS = 24
+
+_JOB_ALERT_LABELS = {
+    "error": "Jobs en error",
+    "availability_warning": "Jobs done con advertencia de disponibilidad",
+    "high_error_ratio": "Jobs done con >20% de placas en error",
+}
+
+
+def format_rendimientos_digest_lines(jobs_summary: dict[str, Any]) -> list[str]:
+    """
+    Funcion pura. Convierte el resumen de `summarize_recent_jobs` en las lineas
+    de la seccion "Rendimientos — últimas N h" del digest (mismo formato que las
+    alertas operativas: una linea por item, con prefijo " - ").
+    """
+    hours = int(jobs_summary.get("hours") or RENDIMIENTOS_DIGEST_HOURS)
+    counts = jobs_summary.get("counts") or {}
+    total = int(jobs_summary.get("total") or 0)
+    alerts = list(jobs_summary.get("alerts") or [])
+
+    lines = [f"Rendimientos — últimas {hours} h: {total} job(s)"]
+    if total == 0:
+        lines.append(" - Sin jobs en el periodo.")
+        return lines
+
+    counts_text = ", ".join(
+        f"{status}={int(counts.get(status) or 0)}"
+        for status in ("queued", "running", "done", "error")
+    )
+    extra = {k: v for k, v in counts.items() if k not in ("queued", "running", "done", "error") and v}
+    if extra:
+        counts_text += ", " + ", ".join(f"{k}={v}" for k, v in sorted(extra.items()))
+    lines.append(f" - Por status: {counts_text}")
+
+    for kind in ("error", "availability_warning", "high_error_ratio"):
+        subset = [a for a in alerts if a.get("kind") == kind]
+        if not subset:
+            continue
+        lines.append(f" - {_JOB_ALERT_LABELS[kind]} ({len(subset)}):")
+        for alert in subset:
+            lines.append(
+                "    · job={id} mes={month} origen={triggered_by}: {detail}".format(
+                    id=alert.get("id"),
+                    month=alert.get("month"),
+                    triggered_by=alert.get("triggered_by"),
+                    detail=alert.get("detail") or "—",
+                )
+            )
+    if not alerts:
+        lines.append(" - Sin jobs con problemas.")
+    return lines
+
+
+def get_rendimientos_jobs_digest(hours: int = RENDIMIENTOS_DIGEST_HOURS) -> dict[str, Any]:
+    """
+    Seccion de jobs de rendimientos para el digest diario: resumen crudo
+    (`summarize_recent_jobs`) + lineas ya formateadas.
+    """
+    summary = summarize_recent_jobs(hours)
+    return {**summary, "lines": format_rendimientos_digest_lines(summary)}
+
+
 __all__ = [
     "evaluate_alerts",
+    "format_rendimientos_digest_lines",
     "get_operational_alerts",
+    "get_rendimientos_jobs_digest",
 ]

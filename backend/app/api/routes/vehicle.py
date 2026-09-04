@@ -29,6 +29,7 @@ from app.services.motor_catalog import (
     check_all_geotab_connections,
     get_connection_calendar,
     get_connection_stats,
+    get_connection_stats_range,
     get_vehicle_assignment,
     list_vehicle_assignments,
     list_vehicle_assignment_summaries,
@@ -341,12 +342,29 @@ def check_vehicle_connections(
 
 @router.get(
     "/connection-stats",
-    description="Estadisticas de conexion por vehiculo para un mes dado",
+    description=(
+        "Estadisticas de conexion por vehiculo. Con `month` devuelve la lista del mes; "
+        "con `month_from`+`month_to` (inclusivo, max 12 meses) devuelve "
+        "{\"months\": {\"YYYY-MM\": [...]}}."
+    ),
 )
 def vehicle_connection_stats(
-    month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="Mes en formato YYYY-MM"),
+    month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$", description="Mes en formato YYYY-MM"),
+    month_from: str | None = Query(None, pattern=r"^\d{4}-\d{2}$", description="Mes inicial YYYY-MM"),
+    month_to: str | None = Query(None, pattern=r"^\d{4}-\d{2}$", description="Mes final YYYY-MM"),
     _user: dict = Depends(require_permission("rendimientos.view")),
-) -> list[dict]:
+) -> list[dict] | dict:
+    if month_from or month_to:
+        if not (month_from and month_to):
+            raise HTTPException(
+                status_code=400, detail="month_from y month_to deben enviarse juntos"
+            )
+        try:
+            return {"months": get_connection_stats_range(month_from, month_to)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not month:
+        raise HTTPException(status_code=400, detail="Debe enviar month o month_from+month_to")
     return get_connection_stats(month)
 
 

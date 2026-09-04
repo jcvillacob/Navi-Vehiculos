@@ -32,6 +32,10 @@ def _make_target(
             "codigo_empresa": "GRUPOK",
             "triton_login_url": "https://triton.logitracs.com/Logitracs.Triton/api/Usuarios/Login",
             "logivim_base_url": "https://triton.logitracs.com/LogiVIMwebTriton/public",
+            # Sin unidad confirmada el combustible se omite y el registro queda
+            # `partial` (ver test_provider_data_sanity); aqui se fija para que
+            # los asserts de `calculated` sigan midiendo binding/odometro.
+            "logitracs_fuel_unit": "gal",
         },
     )
     defaults.update(overrides)

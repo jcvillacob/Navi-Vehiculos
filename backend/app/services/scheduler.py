@@ -24,6 +24,7 @@ from app.services.auth_service import cleanup_expired_refresh_tokens
 from app.services.backup_service import create_postgres_backup
 from app.services.geotab_taller import sweep_expired_grace as _sweep_taller_grace
 from app.services.geotab_taller_sync import reconcile_all_taller_vehicles_with_geotab as _reconcile_taller_vehicles
+from app.services.rendimientos_jobs import reap_stale_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ _TALLER_SWEEP_MINUTES = 5
 _TALLER_PREWARM_MINUTES = 10
 _TALLER_SYNC_INTERVAL_MINUTES = int(os.getenv("TALLER_SYNC_INTERVAL_MINUTES", "30"))
 _BACKUP_HOUR = int(os.getenv("BACKUP_HOUR", "2"))
+_STALE_REAPER_INTERVAL_MINUTES = 10
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -125,6 +127,20 @@ def start() -> None:
         max_instances=1,
         misfire_grace_time=2 * 60 * 60,
     )
+    scheduler.add_job(
+        _safe_reap_stale_jobs,
+        trigger=IntervalTrigger(minutes=_STALE_REAPER_INTERVAL_MINUTES),
+        id="rendimientos_stale_reaper",
+        name="Reap orphaned rendimientos jobs (queued/running sin heartbeat)",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+
+    # Al arrancar se reapean solo jobs sin heartbeat por > 15 min: un 'running'
+    # reciente puede pertenecer al cron corriendo en otro proceso.
+    _safe_reap_stale_jobs()
+
     scheduler.start()
     _scheduler = scheduler
 
@@ -145,6 +161,18 @@ def shutdown() -> None:
         logger.exception("Fallo apagando el scheduler")
     finally:
         _scheduler = None
+
+
+def _safe_reap_stale_jobs() -> int:
+    """Wrapper del reaper de jobs de rendimientos huerfanos; nunca lanza."""
+    try:
+        reaped = reap_stale_jobs()
+        if reaped:
+            logger.warning("Reaper rendimientos: %d job(s) huerfanos marcados como error.", reaped)
+        return reaped
+    except Exception:
+        logger.exception("Fallo en reaper de jobs de rendimientos")
+        return 0
 
 
 def _safe_cleanup_refresh_tokens() -> int:
@@ -199,9 +227,16 @@ def _safe_operational_alerts_digest() -> dict[str, Any] | None:
     Wrapper del digest diario de alertas operativas. Corre a las 06:00 Bogota,
     despues del cron de rendimientos de las 05:00. v1 solo loggea; aqui se
     enchufaria el envio por SMTP en el futuro.
+
+    Incluye la seccion "Rendimientos — últimas 24 h" (jobs por status, jobs en
+    error, done con advertencia de disponibilidad y >20% de placas en error).
+    Si esa seccion falla se loggea y el resto del digest sigue.
     """
     try:
-        from app.services.operational_alerts import get_operational_alerts
+        from app.services.operational_alerts import (
+            get_operational_alerts,
+            get_rendimientos_jobs_digest,
+        )
 
         payload = get_operational_alerts()
         counts = payload.get("counts") or {}
@@ -219,6 +254,18 @@ def _safe_operational_alerts_digest() -> dict[str, Any] | None:
                 alert.get("title"),
                 alert.get("detail"),
             )
+
+        try:
+            jobs_digest = get_rendimientos_jobs_digest()
+        except Exception:
+            logger.exception("Fallo la seccion de jobs de rendimientos del digest")
+            jobs_digest = None
+        if jobs_digest is not None:
+            for line in jobs_digest.get("lines") or []:
+                logger.info("%s", line)
+            payload["rendimientos_jobs"] = {
+                k: v for k, v in jobs_digest.items() if k != "lines"
+            }
         return payload
     except Exception:
         logger.exception("Fallo en digest de alertas operativas")

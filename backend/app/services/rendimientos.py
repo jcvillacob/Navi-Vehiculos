@@ -13,10 +13,17 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.clients.geotab_client import (
-    find_device_by_plate,
+    _classify_error as _classify_geotab_error,
+    _find_device_in_collection,
+    _sort_by_datetime as _sort_geotab_by_datetime,
+    _status_data_call as _geotab_status_data_call,
+    build_plate_index,
     get_authenticated_client,
+    get_cached_devices,
     get_geotab_month_range,
     get_status_data_for_month,
+    lookup_plate_index,
+    multi_call_with_retry,
 )
 from app.schemas.vehicle import (
     CpkCutoffPreviewRequest,
@@ -29,6 +36,7 @@ from app.schemas.vehicle import (
 )
 from app.core.config import load_geotab_config
 from app.core.db import db_conn
+from app.services.job_control import JobCancelled, check_stop
 from app.services.motor_catalog import _database_dsn, _ensure_motor_tables
 from app.services.performance_providers import (
     _DIAG_ENGINE_HOURS,
@@ -38,6 +46,7 @@ from app.services.performance_providers import (
     get_monthly_performance_provider,
 )
 from app.services.performance_types import BindingSnapshot, PerformanceTarget
+from app.services.performance_validation import days_in_month as _days_in_month, validate_record
 from app.services.provider_registry import infer_provider_key, supports_monthly_performance
 
 
@@ -45,6 +54,28 @@ _logger = logging.getLogger(__name__)
 
 
 _PERF_TABLES_DDL_DONE = False
+
+# A4/A5: las rutas de solo lectura (listar rendimientos, filtros ad-hoc, preview
+# CPK, retrocesos granulares) no necesitan re-verificar el esquema ni
+# re-sincronizar tipos de proveedor en cada request. Con este flag lo hacen
+# una sola vez por proceso; el calculo sigue llamando _ensure_performance_tables.
+_READ_PATH_TABLES_READY = False
+
+# Estados de un corte que sirven como "mes anterior" para encadenar lecturas
+# (D5). Un mes anterior en error/no_data/unbound no aporta odo_end/horo_end
+# confiables: el provider cae a la primera lectura del mes.
+_CHAINABLE_STATUSES = frozenset({"calculated", "partial"})
+
+# Estados validos de calculation_status (filtro A3 + CHECK mvp_status_chk).
+KNOWN_CALCULATION_STATUSES: tuple[str, ...] = ("calculated", "partial", "unbound", "no_data", "error")
+
+
+def _ensure_read_path_tables(conn: psycopg.Connection) -> None:
+    global _READ_PATH_TABLES_READY
+    if _READ_PATH_TABLES_READY:
+        return
+    _ensure_performance_tables(conn)
+    _READ_PATH_TABLES_READY = True
 
 
 def _ensure_performance_tables(conn: psycopg.Connection) -> None:
@@ -151,6 +182,55 @@ def _run_performance_tables_ddl_inner(conn: psycopg.Connection) -> None:
         cur.execute("ALTER TABLE monthly_vehicle_performance ADD COLUMN IF NOT EXISTS geotab_regression_count INTEGER NOT NULL DEFAULT 0;")
         cur.execute("ALTER TABLE monthly_vehicle_performance ADD COLUMN IF NOT EXISTS geotab_regression_total_km DOUBLE PRECISION NOT NULL DEFAULT 0;")
         cur.execute("ALTER TABLE monthly_vehicle_performance ADD COLUMN IF NOT EXISTS geotab_regression_total_hours DOUBLE PRECISION NOT NULL DEFAULT 0;")
+        # Hardening sep 2026 (espejo de la migracion 20260902_0001 para entornos
+        # donde la tabla la crea este bootstrap, p. ej. la DB de tests).
+        cur.execute(_PERF_HARDENING_COLUMNS_DDL)
+        for statement in _PERF_HARDENING_INDEXES_DDL:
+            cur.execute(statement)
+
+
+_PERF_HARDENING_COLUMNS_DDL = """
+ALTER TABLE monthly_vehicle_performance
+    ADD COLUMN IF NOT EXISTS odo_start_source TEXT NULL,
+    ADD COLUMN IF NOT EXISTS odo_end_source TEXT NULL,
+    ADD COLUMN IF NOT EXISTS horo_start_source TEXT NULL,
+    ADD COLUMN IF NOT EXISTS horo_end_source TEXT NULL,
+    ADD COLUMN IF NOT EXISTS fuel_end DOUBLE PRECISION NULL,
+    ADD COLUMN IF NOT EXISTS validation_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS source_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS job_id BIGINT NULL,
+    ADD COLUMN IF NOT EXISTS last_error TEXT NULL,
+    ADD COLUMN IF NOT EXISTS is_stale BOOLEAN NOT NULL DEFAULT FALSE;
+"""
+
+_PERF_HARDENING_CONSTRAINTS_DDL = """
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'mvp_status_chk') THEN
+        ALTER TABLE monthly_vehicle_performance ADD CONSTRAINT mvp_status_chk
+            CHECK (calculation_status IN ('calculated','partial','unbound','no_data','error')) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'mvp_period_chk') THEN
+        ALTER TABLE monthly_vehicle_performance ADD CONSTRAINT mvp_period_chk
+            CHECK (period_month ~ '^\\d{4}-(0[1-9]|1[0-2])$') NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'mvp_nonneg_chk') THEN
+        ALTER TABLE monthly_vehicle_performance ADD CONSTRAINT mvp_nonneg_chk
+            CHECK (COALESCE(kms_ecm,0) >= 0 AND COALESCE(kms_gps,0) >= 0 AND COALESCE(hours_ecm,0) >= 0
+                   AND COALESCE(hours_gps,0) >= 0 AND COALESCE(fuel_gallons,0) >= 0) NOT VALID;
+    END IF;
+END $$;
+"""
+
+_PERF_HARDENING_INDEXES_DDL = (
+    "CREATE INDEX IF NOT EXISTS monthly_vehicle_performance_job_idx "
+    "ON monthly_vehicle_performance (job_id);",
+    _PERF_HARDENING_CONSTRAINTS_DDL,
+    "CREATE INDEX IF NOT EXISTS monthly_vehicle_performance_period_customer_idx "
+    "ON monthly_vehicle_performance (period_month, customer_id);",
+    "CREATE INDEX IF NOT EXISTS monthly_vehicle_performance_plate_period_idx "
+    "ON monthly_vehicle_performance (plate, period_month);",
+)
 
 
 def _normalize_month(value: str) -> tuple[str, int, int]:
@@ -167,6 +247,27 @@ def _previous_month(month: str) -> str:
     if value == 1:
         return f"{year - 1}-12"
     return f"{year}-{value - 1:02d}"
+
+
+def _next_month(month: str) -> str:
+    _, year, value = _normalize_month(month)
+    if value == 12:
+        return f"{year + 1}-01"
+    return f"{year}-{value + 1:02d}"
+
+
+def _current_month_bogota() -> str:
+    return datetime.now(_BOGOTA_TZ).strftime("%Y-%m")
+
+
+def _plausibility_overrides(target: PerformanceTarget | None) -> dict[str, Any] | None:
+    """Overrides de umbrales por database: ``customer_databases.provider_config
+    ['plausibility_overrides']`` (ya viene cargado en PerformanceTarget)."""
+    if target is None:
+        return None
+    config = target.provider_config if isinstance(target.provider_config, dict) else {}
+    overrides = config.get("plausibility_overrides")
+    return overrides if isinstance(overrides, dict) else None
 
 
 _SYSTEM_DB_CACHE: tuple[int, int] | None = None
@@ -325,6 +426,16 @@ def _build_record(row: dict[str, Any]) -> MonthlyPerformanceRecord:
         tipo_combustible=row.get("tipo_combustible"),
         nombre_vehiculo=row.get("nombre_vehiculo"),
         is_adhoc=bool(row.get("is_adhoc", False)),
+        odo_start_source=row.get("odo_start_source"),
+        odo_end_source=row.get("odo_end_source"),
+        horo_start_source=row.get("horo_start_source"),
+        horo_end_source=row.get("horo_end_source"),
+        fuel_end=row.get("fuel_end"),
+        validation_flags=[str(flag) for flag in (row.get("validation_flags") or []) if flag is not None],
+        source_meta=dict(row.get("source_meta") or {}) if isinstance(row.get("source_meta"), dict) else {},
+        job_id=row.get("job_id"),
+        last_error=row.get("last_error"),
+        is_stale=bool(row.get("is_stale", False)),
     )
 
 
@@ -539,6 +650,28 @@ def _fetch_cpk_targets_by_plate(
     return targets
 
 
+def _resolve_geotab_device_cached(
+    target: PerformanceTarget,
+    index_cache: dict[tuple[str, str, str], dict],
+    *,
+    preferred_id: str | None = None,
+) -> dict | None:
+    """G10: resuelve el device por placa usando el inventario cacheado
+    (`get_cached_devices`, TTL 5 min) + indice de placas, en vez de los Gets
+    por campo de `find_device_by_plate`. Mismo desempate que Rendimientos."""
+    cache_key = (target.username, target.password, target.database_name or "")
+    plate_index = index_cache.get(cache_key)
+    if plate_index is None:
+        devices = get_cached_devices(target.username, target.password, target.database_name or "")
+        plate_index = build_plate_index(devices)
+        index_cache[cache_key] = plate_index
+    plate_prefix = target.provider_config.get("plate_prefix")
+    matches = lookup_plate_index(plate_index, plate=target.plate, plate_prefix=plate_prefix)
+    return _find_device_in_collection(
+        matches, plate=target.plate, plate_prefix=plate_prefix, preferred_id=preferred_id
+    )
+
+
 def preview_cpk_cutoffs(payload: CpkCutoffPreviewRequest) -> CpkCutoffPreviewResponse:
     """
     Calcula una previsualizacion de cortes CPK/CPH por tanqueo sin persistir
@@ -555,12 +688,18 @@ def preview_cpk_cutoffs(payload: CpkCutoffPreviewRequest) -> CpkCutoffPreviewRes
     ]
     plates = sorted({plate for plate, _, _ in normalized_rows if plate})
 
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_performance_tables(conn)
+    with db_conn(row_factory=dict_row) as conn:
+        _ensure_read_path_tables(conn)
         targets_by_plate = _fetch_cpk_targets_by_plate(conn, plates=plates)
         bindings = _load_binding_map(conn, [target for target in targets_by_plate.values() if target.customer_database_id])
 
+    try:
+        preview_days = _days_in_month(payload.month)
+    except ValueError:
+        preview_days = 31
+
     api_cache: dict[tuple[str, str, str], Any] = {}
+    plate_index_cache: dict[tuple[str, str, str], dict] = {}
     response_rows: list[CpkCutoffPreviewRow] = []
 
     for plate, raw_start, raw_end in normalized_rows:
@@ -649,7 +788,11 @@ def preview_cpk_cutoffs(payload: CpkCutoffPreviewRequest) -> CpkCutoffPreviewRes
             binding = bindings.get((target.provider_key, target.customer_database_id, target.plate))
             device_id = binding.provider_vehicle_id if binding and binding.is_manual else None
             if not device_id:
-                device = find_device_by_plate(api, target.plate, plate_prefix=target.provider_config.get("plate_prefix"))
+                device = _resolve_geotab_device_cached(
+                    target,
+                    plate_index_cache,
+                    preferred_id=binding.provider_vehicle_id if binding else None,
+                )
                 device_id = str(device.get("id") or "").strip() if device else None
             if not device_id:
                 response_rows.append(
@@ -671,6 +814,13 @@ def preview_cpk_cutoffs(payload: CpkCutoffPreviewRequest) -> CpkCutoffPreviewRes
                 to_date=end_utc,
                 previous_record=None,
                 cutoff_mode=True,
+            )
+            # Plausibilidad sin mes anterior (la ventana es el corte por tanqueo).
+            record = validate_record(
+                record,
+                days_in_month=preview_days,
+                previous=None,
+                overrides=_plausibility_overrides(target),
             )
             status = "valid" if record.calculation_status in {"calculated", "partial"} else "error"
             warnings = list(record.warnings or [])
@@ -742,8 +892,8 @@ def lookup_geotab_granular_regressions(
     if not normalized_plate:
         raise ValueError("Placa inválida para la verificación granular.")
 
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_performance_tables(conn)
+    with db_conn(row_factory=dict_row) as conn:
+        _ensure_read_path_tables(conn)
         targets = _fetch_cpk_targets_by_plate(conn, plates=[normalized_plate])
         target = targets.get(normalized_plate)
         bindings = _load_binding_map(
@@ -770,17 +920,35 @@ def lookup_geotab_granular_regressions(
             api_cache[api_key] = api
 
     device_id = str(provider_vehicle_id or "").strip()
+    binding = bindings.get((target.provider_key, target.customer_database_id, target.plate))
     if not device_id:
-        binding = bindings.get((target.provider_key, target.customer_database_id, target.plate))
         device_id = str(binding.provider_vehicle_id or "").strip() if binding and binding.is_manual else ""
     if not device_id:
-        device = find_device_by_plate(api, target.plate, plate_prefix=target.provider_config.get("plate_prefix"))
+        device = _resolve_geotab_device_cached(
+            target, {}, preferred_id=binding.provider_vehicle_id if binding else None
+        )
         device_id = str(device.get("id") or "").strip() if device else ""
     if not device_id:
         raise ValueError("No fue posible resolver el dispositivo en Geotab para esta placa.")
 
-    odo_readings = get_status_data_for_month(api, device_id, _DIAG_ODOMETER, from_date, to_date)
-    hours_readings = get_status_data_for_month(api, device_id, _DIAG_ENGINE_HOURS, from_date, to_date)
+    # G10: odometro + horometro en UN multi_call (antes dos Gets secuenciales).
+    try:
+        results = multi_call_with_retry(
+            api,
+            [
+                _geotab_status_data_call(device_id, _DIAG_ODOMETER, from_date, to_date),
+                _geotab_status_data_call(device_id, _DIAG_ENGINE_HOURS, from_date, to_date),
+            ],
+        )
+        if len(results) != 2:
+            raise RuntimeError(f"multi_call devolvio {len(results)} resultados para 2 llamadas")
+        odo_readings = _sort_geotab_by_datetime(results[0])
+        hours_readings = _sort_geotab_by_datetime(results[1])
+    except Exception as exc:
+        if _classify_geotab_error(exc) != "fatal":
+            raise
+        odo_readings = get_status_data_for_month(api, device_id, _DIAG_ODOMETER, from_date, to_date)
+        hours_readings = get_status_data_for_month(api, device_id, _DIAG_ENGINE_HOURS, from_date, to_date)
     odometer = _analyze_geotab_regressions(
         odo_readings,
         label="odómetro",
@@ -843,7 +1011,18 @@ def _load_existing_records(
                 mp.geotab_regression_total_hours,
                 mp.calculation_status,
                 mp.warnings,
-                mp.calculated_at
+                mp.calculated_at,
+                mp.is_adhoc,
+                mp.odo_start_source,
+                mp.odo_end_source,
+                mp.horo_start_source,
+                mp.horo_end_source,
+                mp.fuel_end,
+                mp.validation_flags,
+                mp.source_meta,
+                mp.job_id,
+                mp.last_error,
+                mp.is_stale
             FROM monthly_vehicle_performance mp
             LEFT JOIN customers c
                 ON c.id = mp.customer_id
@@ -949,13 +1128,71 @@ def _upsert_binding(
         )
 
 
+# Cuando un grupo provider/database entero falla, el orquestador upsertea la
+# placa como 'error' con metricas NULL. Si ya existia un corte bueno
+# ('calculated'/'partial') NO lo destruimos: conservamos metricas y estado,
+# y solo anexamos el texto del error a warnings (R3).
+_UPSERT_PRESERVE_CONDITION = (
+    "EXCLUDED.calculation_status = 'error' "
+    # Un 'error' emitido por el validador (negative_value) describe datos del
+    # propio mes y SI debe reemplazar la fila; solo se preserva ante fallos de
+    # proveedor/grupo, que no traen flags de plausibilidad.
+    "AND NOT (EXCLUDED.validation_flags ? 'negative_value') "
+    "AND monthly_vehicle_performance.calculation_status IN ('calculated', 'partial')"
+)
+_UPSERT_PRESERVED_COLUMNS = (
+    "odo_start",
+    "odo_end",
+    "horo_start",
+    "horo_end",
+    "kms_ecm",
+    "kms_gps",
+    "hours_ecm",
+    "hours_gps",
+    "fuel_gallons",
+    "geotab_regression_count",
+    "geotab_regression_total_km",
+    "geotab_regression_total_hours",
+    "calculation_status",
+    # Hardening sep 2026: la trazabilidad de fuentes y las flags de plausibilidad
+    # acompanan a las metricas que protegen.
+    "fuel_end",
+    "odo_start_source",
+    "odo_end_source",
+    "horo_start_source",
+    "horo_end_source",
+    "validation_flags",
+    # source_meta guarda fuel_source y demas metadatos que el encadenamiento del
+    # mes siguiente necesita; si se pierde en un error, la cadena se rompe.
+    "source_meta",
+)
+
+
+def _upsert_preserve_expr(column: str) -> str:
+    return (
+        f"{column} = CASE WHEN {_UPSERT_PRESERVE_CONDITION} "
+        f"THEN monthly_vehicle_performance.{column} ELSE EXCLUDED.{column} END"
+    )
+
+
+_UPSERT_PRESERVED_SET_SQL = ",\n                ".join(
+    _upsert_preserve_expr(column) for column in _UPSERT_PRESERVED_COLUMNS
+)
+
+
 def _upsert_monthly_record(
     conn: psycopg.Connection,
     record: MonthlyPerformanceRecord,
 ) -> MonthlyPerformanceRecord:
+    # last_error: si el registro llega en 'error' sin texto explicito, usamos el
+    # primer warning (es el mensaje que arma el orquestador/provider).
+    last_error = record.last_error
+    if last_error is None and record.calculation_status == "error" and record.warnings:
+        last_error = str(record.warnings[0])
+
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            """
+            f"""
             INSERT INTO monthly_vehicle_performance (
                 customer_id,
                 customer_database_id,
@@ -980,12 +1217,24 @@ def _upsert_monthly_record(
                 calculation_status,
                 warnings,
                 is_adhoc,
+                odo_start_source,
+                odo_end_source,
+                horo_start_source,
+                horo_end_source,
+                fuel_end,
+                validation_flags,
+                source_meta,
+                job_id,
+                last_error,
+                is_stale,
                 calculated_at,
                 updated_at
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s::jsonb, %s, NOW(), NOW()
+                %s, %s, %s, %s, %s::jsonb, %s,
+                %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s,
+                NOW(), NOW()
             )
             ON CONFLICT (customer_database_id, plate, period_month)
             DO UPDATE SET
@@ -994,22 +1243,16 @@ def _upsert_monthly_record(
                 provider_vehicle_id = EXCLUDED.provider_vehicle_id,
                 technical_number = EXCLUDED.technical_number,
                 engine_name = EXCLUDED.engine_name,
-                odo_start = EXCLUDED.odo_start,
-                odo_end = EXCLUDED.odo_end,
-                horo_start = EXCLUDED.horo_start,
-                horo_end = EXCLUDED.horo_end,
-                kms_ecm = EXCLUDED.kms_ecm,
-                kms_gps = EXCLUDED.kms_gps,
-                hours_ecm = EXCLUDED.hours_ecm,
-                hours_gps = EXCLUDED.hours_gps,
-                fuel_gallons = EXCLUDED.fuel_gallons,
-                geotab_regression_count = EXCLUDED.geotab_regression_count,
-                geotab_regression_total_km = EXCLUDED.geotab_regression_total_km,
-                geotab_regression_total_hours = EXCLUDED.geotab_regression_total_hours,
-                calculation_status = EXCLUDED.calculation_status,
-                warnings = EXCLUDED.warnings,
+                {_UPSERT_PRESERVED_SET_SQL},
+                warnings = CASE WHEN {_UPSERT_PRESERVE_CONDITION}
+                    THEN COALESCE(monthly_vehicle_performance.warnings, '[]'::jsonb) || EXCLUDED.warnings
+                    ELSE EXCLUDED.warnings END,
                 is_adhoc = EXCLUDED.is_adhoc,
-                calculated_at = NOW(),
+                job_id = EXCLUDED.job_id,
+                last_error = EXCLUDED.last_error,
+                is_stale = EXCLUDED.is_stale,
+                calculated_at = CASE WHEN {_UPSERT_PRESERVE_CONDITION}
+                    THEN monthly_vehicle_performance.calculated_at ELSE NOW() END,
                 updated_at = NOW()
             RETURNING
                 customer_id,
@@ -1037,6 +1280,16 @@ def _upsert_monthly_record(
                 calculation_status,
                 warnings,
                 is_adhoc,
+                odo_start_source,
+                odo_end_source,
+                horo_start_source,
+                horo_end_source,
+                fuel_end,
+                validation_flags,
+                source_meta,
+                job_id,
+                last_error,
+                is_stale,
                 calculated_at;
             """,
             (
@@ -1063,6 +1316,16 @@ def _upsert_monthly_record(
                 record.calculation_status,
                 Jsonb(record.warnings),
                 record.is_adhoc,
+                record.odo_start_source,
+                record.odo_end_source,
+                record.horo_start_source,
+                record.horo_end_source,
+                record.fuel_end,
+                Jsonb(list(record.validation_flags or [])),
+                Jsonb(dict(record.source_meta or {})),
+                record.job_id,
+                last_error,
+                bool(record.is_stale),
                 record.client_name,
                 record.database_name,
             ),
@@ -1072,6 +1335,7 @@ def _upsert_monthly_record(
     if row is None:
         raise RuntimeError("No fue posible guardar el corte mensual.")
     return _build_record(row)
+
 
 def _build_summary(rows: list[MonthlyPerformanceRecord]) -> MonthlyPerformanceSummary:
     counter = Counter(row.calculation_status for row in rows)
@@ -1085,22 +1349,90 @@ def _build_summary(rows: list[MonthlyPerformanceRecord]) -> MonthlyPerformanceSu
     )
 
 
+def _filter_chainable_previous(
+    previous_records: dict[tuple[int, str], MonthlyPerformanceRecord],
+    *,
+    month: str,
+    job_id: int | None = None,
+) -> dict[tuple[int, str], MonthlyPerformanceRecord]:
+    """D5: solo un mes anterior 'calculated'/'partial' sirve para encadenar
+    lecturas. Los demas se descartan y el provider usa la primera lectura del mes."""
+    chainable = {
+        key: record
+        for key, record in previous_records.items()
+        if record.calculation_status in _CHAINABLE_STATUSES
+    }
+    dropped = len(previous_records) - len(chainable)
+    if dropped:
+        _logger.debug(
+            "Rendimientos %s (job %s): %d registros del mes anterior descartados como base de encadenamiento (estado no calculable)",
+            month,
+            job_id,
+            dropped,
+        )
+    return chainable
+
+
+def _mark_next_month_stale(
+    conn: psycopg.Connection,
+    *,
+    customer_database_id: int,
+    next_month: str,
+    plates: list[str],
+    job_id: int | None = None,
+) -> int:
+    """D5: marca ``is_stale`` en los cortes de ``next_month`` de las placas
+    recien recalculadas (su odo_start/horo_start dependia del mes anterior)."""
+    unique_plates = sorted(set(plates))
+    if not unique_plates:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE monthly_vehicle_performance
+            SET is_stale = TRUE, updated_at = NOW()
+            WHERE customer_database_id = %s
+              AND period_month = %s
+              AND plate = ANY(%s)
+              AND is_stale = FALSE;
+            """,
+            (customer_database_id, next_month, unique_plates),
+        )
+        affected = getattr(cur, "rowcount", -1)
+    if affected:
+        _logger.info(
+            "Rendimientos (job %s): %s cortes de %s marcados is_stale en database_id=%s",
+            job_id,
+            affected if affected >= 0 else "?",
+            next_month,
+            customer_database_id,
+        )
+    return affected if isinstance(affected, int) and affected >= 0 else 0
+
+
 def calculate_monthly_performance(
     payload: MonthlyPerformanceCalculateRequest,
     progress_callback: Callable[[int, int], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    job_id: int | None = None,
 ) -> MonthlyPerformanceResponse:
     month, year, month_number = _normalize_month(payload.month)
     previous_month = _previous_month(month)
     phase_start = time.perf_counter()
+    check_stop(should_stop)
 
     def _emit_progress(processed: int, total: int) -> None:
-        if progress_callback is None:
-            return
-        try:
-            progress_callback(processed, total)
-        except Exception:
-            # No queremos que un fallo del callback rompa el calculo
-            pass
+        if progress_callback is not None:
+            try:
+                progress_callback(processed, total)
+            except JobCancelled:
+                raise
+            except Exception:
+                # No queremos que un fallo del callback rompa el calculo
+                pass
+        # Cancelacion cooperativa con granularidad por placa: los providers
+        # llaman on_target_done -> _bump_target_done -> aqui.
+        check_stop(should_stop)
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_performance_tables(conn)
@@ -1135,8 +1467,15 @@ def calculate_monthly_performance(
             return MonthlyPerformanceResponse(month=month, summary=MonthlyPerformanceSummary(), rows=[])
 
         existing_records = _load_existing_records(conn, month, targets)
-        previous_records = _load_existing_records(conn, previous_month, targets)
+        previous_records = _filter_chainable_previous(
+            _load_existing_records(conn, previous_month, targets),
+            month=month,
+            job_id=job_id,
+        )
         bindings = _load_binding_map(conn, targets)
+        month_days = _days_in_month(month)
+        next_month = _next_month(month)
+        cascade_stale = next_month <= _current_month_bogota()
 
         grouped_targets: dict[tuple[str, int], list[PerformanceTarget]] = defaultdict(list)
         rows: list[MonthlyPerformanceRecord] = []
@@ -1156,6 +1495,7 @@ def calculate_monthly_performance(
         _emit_progress(processed_targets, total_targets)
 
         for (provider_key, _database_id), database_targets in grouped_targets.items():
+            check_stop(should_stop)
             sample_target = database_targets[0]
             is_adhoc_group = adhoc_db_id is not None and _database_id == adhoc_db_id
             provider = get_monthly_performance_provider(provider_key)
@@ -1176,6 +1516,8 @@ def calculate_monthly_performance(
                             calculation_status="error",
                             warnings=[f"El proveedor {target.provider_key} aun no tiene adapter de rendimientos."],
                             is_adhoc=is_adhoc_group,
+                            job_id=job_id,
+                            last_error=f"El proveedor {target.provider_key} aun no tiene adapter de rendimientos.",
                         ),
                     )
                     rows.append(saved)
@@ -1203,19 +1545,42 @@ def calculate_monthly_performance(
                         previous_records=previous_records,
                         bindings=bindings,
                         on_target_done=_bump_target_done,
+                        should_stop=should_stop,
                     )
                 finally:
                     db_call_elapsed = time.perf_counter() - db_call_start
                     _logger.info(
-                        "Rendimientos %s: %s/%s -> %d placas en %.1fs (%.2fs/placa)",
+                        "Rendimientos %s (job %s): %s/%s -> %d placas en %.1fs (%.2fs/placa)",
                         month,
+                        job_id,
                         provider_key,
                         sample_target.database_name or _database_id,
                         len(database_targets),
                         db_call_elapsed,
                         db_call_elapsed / len(database_targets) if database_targets else 0.0,
                     )
+            except JobCancelled:
+                # Descartamos el grupo parcial (rows/bindings sin commit) y
+                # dejamos que el orquestador cierre el job.
+                conn.rollback()
+                _logger.info(
+                    "Rendimientos %s (job %s): cancelado en grupo provider=%s database_id=%s (%d placas)",
+                    month,
+                    job_id,
+                    provider_key,
+                    _database_id,
+                    len(database_targets),
+                )
+                raise
             except Exception as exc:
+                _logger.exception(
+                    "Rendimientos %s (job %s): fallo grupo provider=%s database_id=%s (%d placas)",
+                    month,
+                    job_id,
+                    provider_key,
+                    _database_id,
+                    len(database_targets),
+                )
                 for target in database_targets:
                     saved = _upsert_monthly_record(
                         conn,
@@ -1232,6 +1597,8 @@ def calculate_monthly_performance(
                             calculation_status="error",
                             warnings=[f"No fue posible consultar {sample_target.provider_key}: {exc}"],
                             is_adhoc=is_adhoc_group,
+                            job_id=job_id,
+                            last_error=f"No fue posible consultar {sample_target.provider_key}: {exc}",
                         ),
                     )
                     rows.append(saved)
@@ -1249,28 +1616,54 @@ def calculate_monthly_performance(
                     last_error=binding_update.last_error,
                 )
 
+            targets_by_key = {(target.customer_database_id, target.plate): target for target in database_targets}
+            upserted_plates: list[str] = []
             for record in provider_result.records:
+                record_key = (record.customer_database_id, record.plate)
+                record = validate_record(
+                    record,
+                    days_in_month=month_days,
+                    previous=previous_records.get(record_key),
+                    overrides=_plausibility_overrides(targets_by_key.get(record_key)),
+                )
+                record_updates: dict[str, Any] = {"job_id": job_id, "is_stale": False}
                 if is_adhoc_group:
-                    record = record.model_copy(update={"is_adhoc": True})
+                    record_updates["is_adhoc"] = True
+                record = record.model_copy(update=record_updates)
                 rows.append(_upsert_monthly_record(conn, record))
+                upserted_plates.append(record.plate)
+
+            # D5: el mes siguiente encadena desde odo_end/horo_end de este mes;
+            # al reescribirlo, marcamos M+1 como desactualizado (solo si ya existe
+            # en el calendario: no tiene sentido para meses futuros).
+            if cascade_stale and upserted_plates:
+                _mark_next_month_stale(
+                    conn,
+                    customer_database_id=_database_id,
+                    next_month=next_month,
+                    plates=upserted_plates,
+                    job_id=job_id,
+                )
 
             # Reconciliacion: el provider pudo haber bumpeado per-placa (in_flight)
             # o haber retornado temprano sin bumpear (early-return de error). Usamos
             # el numero real de records para no contar dos veces ni undercount.
             processed_targets += max(len(provider_result.records), in_flight_processed["value"])
-            _emit_progress(processed_targets, total_targets)
 
             # Commit per-database: libera los row locks de monthly_vehicle_performance
             # y vehicle_provider_bindings entre databases para que otras consultas
             # (UI listando rendimientos, vehiculos, etc.) no se queden esperando.
+            # Va ANTES del progreso para que una cancelacion no tire el grupo ya completo.
             conn.commit()
+            _emit_progress(processed_targets, total_targets)
 
         conn.commit()
 
     rows.sort(key=lambda row: ((row.client_name or "").lower(), (row.database_name or "").lower(), row.plate))
     _logger.info(
-        "Rendimientos %s: fase completa en %.1fs (%d targets, %d grupos provider/database)",
+        "Rendimientos %s (job %s): fase completa en %.1fs (%d targets, %d grupos provider/database)",
         month,
+        job_id,
         time.perf_counter() - phase_start,
         total_targets,
         len(grouped_targets),
@@ -1279,6 +1672,83 @@ def calculate_monthly_performance(
 
 
 _STATUS_PRIORITY = {"error": 0, "unbound": 1, "no_data": 2, "partial": 3, "calculated": 4}
+
+
+def _flatten_range_warnings(aggregated: Any) -> list[str]:
+    """
+    ``jsonb_agg(mp.warnings)`` devuelve una lista de listas (una por mes, NULL
+    si el mes no tenia warnings). La aplanamos y deduplicamos conservando el
+    orden cronologico para exponerla en la consulta por rango.
+    """
+    flattened: list[str] = []
+    seen: set[str] = set()
+    for month_warnings in aggregated or []:
+        if not month_warnings:
+            continue
+        if isinstance(month_warnings, str):
+            month_warnings = [month_warnings]
+        for warning in month_warnings:
+            if warning is None:
+                continue
+            text = str(warning)
+            if text in seen:
+                continue
+            seen.add(text)
+            flattened.append(text)
+    return flattened
+
+
+_DUPLICATE_PLATE_FLAG = "duplicate_plate"
+
+
+def _flag_duplicate_plates(rows: list[MonthlyPerformanceRecord]) -> list[MonthlyPerformanceRecord]:
+    """D12: una misma placa en varias databases se marca (no se elimina) para
+    que el usuario sepa que sumar sus metricas puede duplicarlas."""
+    plate_databases: dict[str, set[int]] = defaultdict(set)
+    for row in rows:
+        plate_databases[row.plate].add(row.customer_database_id)
+    duplicated = {plate: dbs for plate, dbs in plate_databases.items() if len(dbs) > 1}
+    if not duplicated:
+        return rows
+
+    flagged: list[MonthlyPerformanceRecord] = []
+    for row in rows:
+        databases = duplicated.get(row.plate)
+        if not databases:
+            flagged.append(row)
+            continue
+        flags = list(row.validation_flags or [])
+        if _DUPLICATE_PLATE_FLAG not in flags:
+            flags.append(_DUPLICATE_PLATE_FLAG)
+        warning = (
+            f"Plausibilidad: la placa aparece en {len(databases)} databases; "
+            "las métricas pueden duplicarse al sumar."
+        )
+        warnings = list(row.warnings or [])
+        if warning not in warnings:
+            warnings.append(warning)
+        flagged.append(row.model_copy(update={"validation_flags": flags, "warnings": warnings}))
+    return flagged
+
+
+def _normalize_status_filter(status: list[str] | None) -> list[str]:
+    clean = sorted({str(value).strip().lower() for value in (status or []) if str(value).strip()})
+    unknown = [value for value in clean if value not in KNOWN_CALCULATION_STATUSES]
+    if unknown:
+        raise ValueError(
+            f"Estado(s) invalido(s): {', '.join(unknown)}. "
+            f"Valores permitidos: {', '.join(KNOWN_CALCULATION_STATUSES)}."
+        )
+    return clean
+
+
+_RANGE_STATUS_CASE_SQL = """CASE
+                            WHEN BOOL_OR(mp.calculation_status = 'error') THEN 'error'
+                            WHEN BOOL_OR(mp.calculation_status = 'unbound') THEN 'unbound'
+                            WHEN BOOL_OR(mp.calculation_status = 'no_data') THEN 'no_data'
+                            WHEN BOOL_OR(mp.calculation_status = 'partial') THEN 'partial'
+                            ELSE 'calculated'
+                        END"""
 
 
 def list_monthly_performance(
@@ -1290,6 +1760,9 @@ def list_monthly_performance(
     customer_database_id: int | None = None,
     plate_search: str | None = None,
     motor_group: str | None = None,
+    motor_groups: list[str] | None = None,
+    status: list[str] | None = None,
+    source_provider: list[str] | None = None,
 ) -> MonthlyPerformanceResponse:
     norm_from, _, _ = _normalize_month(month_from)
     norm_to, _, _ = _normalize_month(month_to)
@@ -1297,10 +1770,21 @@ def list_monthly_performance(
         norm_from, norm_to = norm_to, norm_from
     is_range = norm_from != norm_to
     normalized_plate = (plate_search or "").strip().upper()
-    normalized_motor_group = (motor_group or "").strip()
+    normalized_motor_groups = sorted(
+        {str(value).strip() for value in ([motor_group] if motor_group else []) + (motor_groups or []) if str(value or "").strip()}
+    )
+    normalized_status = _normalize_status_filter(status)
+    normalized_providers = sorted({str(value).strip() for value in (source_provider or []) if str(value).strip()})
 
     params: list[Any] = [norm_from, norm_to]
-    where_clauses = ["mp.period_month >= %s", "mp.period_month <= %s"]
+    where_clauses = [
+        "mp.period_month >= %s",
+        "mp.period_month <= %s",
+        # Un rendimiento normal solo es vigente si la placa sigue asignada a la
+        # misma base que lo genero. Esto evita mezclar filas historicas de una
+        # base anterior cuando una flota se mueve a otra base/cliente.
+        "(mp.is_adhoc OR a.plate IS NOT NULL)",
+    ]
     effective_customer_ids = sorted(
         {
             int(value)
@@ -1317,12 +1801,25 @@ def list_monthly_performance(
     if normalized_plate:
         where_clauses.append("UPPER(mp.plate) LIKE %s")
         params.append(f"%{normalized_plate}%")
-    if normalized_motor_group:
-        where_clauses.append("COALESCE(mp.engine_name, '') = %s")
-        params.append(normalized_motor_group)
+    if normalized_motor_groups:
+        where_clauses.append("COALESCE(mp.engine_name, '') = ANY(%s)")
+        params.append(normalized_motor_groups)
+    if normalized_providers:
+        where_clauses.append("mp.source_provider = ANY(%s)")
+        params.append(normalized_providers)
+    # En un solo mes el estado se filtra directo; en rango va por HAVING sobre
+    # el estado agregado (peor estado del rango), ver abajo.
+    if normalized_status and not is_range:
+        where_clauses.append("mp.calculation_status = ANY(%s)")
+        params.append(normalized_status)
+
+    having_sql = ""
+    if normalized_status and is_range:
+        having_sql = f"HAVING {_RANGE_STATUS_CASE_SQL} = ANY(%s)"
+        params.append(normalized_status)
 
     with db_conn(row_factory=dict_row) as conn:
-        _ensure_performance_tables(conn)
+        _ensure_read_path_tables(conn)
         with conn.cursor() as cur:
             if not is_range:
                 cur.execute(
@@ -1354,6 +1851,16 @@ def list_monthly_performance(
                         mp.warnings,
                         mp.is_adhoc,
                         mp.calculated_at,
+                        mp.odo_start_source,
+                        mp.odo_end_source,
+                        mp.horo_start_source,
+                        mp.horo_end_source,
+                        mp.fuel_end,
+                        mp.validation_flags,
+                        mp.source_meta,
+                        mp.job_id,
+                        mp.last_error,
+                        mp.is_stale,
                         a.vin,
                         a.cpl,
                         a.marca,
@@ -1370,6 +1877,8 @@ def list_monthly_performance(
                         ON cd.id = mp.customer_database_id
                     LEFT JOIN vehicle_motor_assignments a
                         ON a.plate = mp.plate
+                       AND a.customer_id = mp.customer_id
+                       AND a.customer_database_id = mp.customer_database_id
                     WHERE {" AND ".join(where_clauses)}
                     ORDER BY c.name ASC NULLS LAST, cd.database_name ASC NULLS LAST, mp.plate ASC;
                     """,
@@ -1406,16 +1915,25 @@ def list_monthly_performance(
                         SUM(mp.geotab_regression_count) AS geotab_regression_count,
                         SUM(mp.geotab_regression_total_km) AS geotab_regression_total_km,
                         SUM(mp.geotab_regression_total_hours) AS geotab_regression_total_hours,
-                        CASE
-                            WHEN BOOL_OR(mp.calculation_status = 'error') THEN 'error'
-                            WHEN BOOL_OR(mp.calculation_status = 'unbound') THEN 'unbound'
-                            WHEN BOOL_OR(mp.calculation_status = 'no_data') THEN 'no_data'
-                            WHEN BOOL_OR(mp.calculation_status = 'partial') THEN 'partial'
-                            ELSE 'calculated'
-                        END AS calculation_status,
-                        jsonb_path_query_array(jsonb_agg(mp.warnings), '$[*][*]') AS warnings,
+                        {_RANGE_STATUS_CASE_SQL} AS calculation_status,
+                        jsonb_agg(mp.warnings ORDER BY mp.period_month ASC) AS warnings,
                         MAX(mp.calculated_at) AS calculated_at,
                         BOOL_OR(mp.is_adhoc) AS is_adhoc,
+                        (ARRAY_AGG(mp.odo_start_source ORDER BY mp.period_month ASC)
+                            FILTER (WHERE mp.odo_start IS NOT NULL))[1] AS odo_start_source,
+                        (ARRAY_AGG(mp.odo_end_source ORDER BY mp.period_month DESC)
+                            FILTER (WHERE mp.odo_end IS NOT NULL))[1] AS odo_end_source,
+                        (ARRAY_AGG(mp.horo_start_source ORDER BY mp.period_month ASC)
+                            FILTER (WHERE mp.horo_start IS NOT NULL))[1] AS horo_start_source,
+                        (ARRAY_AGG(mp.horo_end_source ORDER BY mp.period_month DESC)
+                            FILTER (WHERE mp.horo_end IS NOT NULL))[1] AS horo_end_source,
+                        (ARRAY_AGG(mp.fuel_end ORDER BY mp.period_month DESC)
+                            FILTER (WHERE mp.fuel_end IS NOT NULL))[1] AS fuel_end,
+                        jsonb_agg(mp.validation_flags ORDER BY mp.period_month ASC) AS validation_flags,
+                        '{{}}'::jsonb AS source_meta,
+                        (ARRAY_AGG(mp.job_id ORDER BY mp.period_month DESC))[1] AS job_id,
+                        (ARRAY_AGG(mp.last_error ORDER BY mp.period_month DESC))[1] AS last_error,
+                        BOOL_OR(mp.is_stale) AS is_stale,
                         a.vin,
                         a.cpl,
                         a.marca,
@@ -1423,6 +1941,7 @@ def list_monthly_performance(
                         a.ano_modelo,
                         a.tipo_combustible,
                         a.nombre_vehiculo,
+                        a.vocacional,
                         COALESCE(a.category, c.category, 'Ninguna') AS category
                     FROM monthly_vehicle_performance mp
                     LEFT JOIN customers c
@@ -1431,19 +1950,25 @@ def list_monthly_performance(
                         ON cd.id = mp.customer_database_id
                     LEFT JOIN vehicle_motor_assignments a
                         ON a.plate = mp.plate
+                       AND a.customer_id = mp.customer_id
+                       AND a.customer_database_id = mp.customer_database_id
                     WHERE {" AND ".join(where_clauses)}
                     GROUP BY mp.customer_id, mp.customer_database_id, c.name, cd.database_name,
                              mp.plate, mp.technical_number, mp.engine_name,
                              a.vin, a.cpl, a.marca, a.linea, a.ano_modelo, a.tipo_combustible, a.nombre_vehiculo,
-                             a.category, c.category
+                             a.vocacional, a.category, c.category
+                    {having_sql}
                     ORDER BY c.name ASC NULLS LAST, cd.database_name ASC NULLS LAST, mp.plate ASC;
                     """,
                     params,
                 )
                 rows = []
                 for row in cur.fetchall():
-                    row["warnings"] = []
+                    row["warnings"] = _flatten_range_warnings(row.get("warnings"))
+                    row["validation_flags"] = _flatten_range_warnings(row.get("validation_flags"))
                     rows.append(_build_record(row))
+
+    rows = _flag_duplicate_plates(rows)
 
     return MonthlyPerformanceResponse(
         month=norm_from,
@@ -1458,7 +1983,8 @@ def list_adhoc_filter_options() -> dict[str, Any]:
     """
     Retorna los valores unicos de filtro para vehiculos sin customer_database_id.
     """
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+    with db_conn(row_factory=dict_row) as conn:
+        _ensure_read_path_tables(conn)
         with conn.cursor() as cur:
             cur.execute(
                 """

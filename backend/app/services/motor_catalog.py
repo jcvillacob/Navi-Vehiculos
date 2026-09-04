@@ -5413,66 +5413,98 @@ def save_connection_snapshot() -> dict[str, Any]:
     return result
 
 
-def get_connection_stats(month: str) -> list[dict[str, Any]]:
-    """Return per-vehicle connection stats for a given month (YYYY-MM)."""
+CONNECTION_STATS_MAX_MONTHS = 12
+
+
+def _connection_stats_month_range(month_from: str, month_to: str) -> list[str]:
+    """
+    Lista inclusiva de meses 'YYYY-MM' entre month_from y month_to (se
+    intercambian si vienen invertidos). Levanta ValueError si el formato es
+    invalido o si el rango supera CONNECTION_STATS_MAX_MONTHS meses.
+    """
+    try:
+        y1, m1 = (int(x) for x in month_from.split("-"))
+        y2, m2 = (int(x) for x in month_to.split("-"))
+        datetime(y1, m1, 1)
+        datetime(y2, m2, 1)
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("month_from y month_to deben tener formato YYYY-MM") from exc
+    if (y1, m1) > (y2, m2):
+        y1, m1, y2, m2 = y2, m2, y1, m1
+    span = (y2 - y1) * 12 + (m2 - m1) + 1
+    if span > CONNECTION_STATS_MAX_MONTHS:
+        raise ValueError(
+            f"El rango de connection-stats no puede superar {CONNECTION_STATS_MAX_MONTHS} meses "
+            f"(pedido: {span})"
+        )
+    months: list[str] = []
+    y, m = y1, m1
+    for _ in range(span):
+        months.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    return months
+
+
+def _connection_stats_for_month(cur: Any, month: str) -> list[dict[str, Any]]:
+    """Consulta y arma las stats de conexion por placa de UN mes con un cursor abierto."""
     month_start = f"{month}-01"
 
-    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
-        _ensure_motor_tables(conn)
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    plate,
-                    COUNT(*) FILTER (WHERE status IN ('connected', 'disconnected')) AS days_checked,
-                    COUNT(*) FILTER (WHERE status = 'connected') AS days_connected,
-                    COUNT(*) FILTER (WHERE status = 'disconnected') AS days_disconnected,
-                    COUNT(*) FILTER (WHERE status = 'not_found') AS days_not_found,
-                    COUNT(*) FILTER (WHERE status = 'error') AS days_error
-                FROM vehicle_connection_log
-                WHERE check_date >= %s::date
-                  AND check_date < (%s::date + INTERVAL '1 month')
-                GROUP BY plate;
-                """,
-                (month_start, month_start),
-            )
-            agg_rows = cur.fetchall()
+    cur.execute(
+        """
+        SELECT
+            plate,
+            COUNT(*) FILTER (WHERE status IN ('connected', 'disconnected')) AS days_checked,
+            COUNT(*) FILTER (WHERE status = 'connected') AS days_connected,
+            COUNT(*) FILTER (WHERE status = 'disconnected') AS days_disconnected,
+            COUNT(*) FILTER (WHERE status = 'not_found') AS days_not_found,
+            COUNT(*) FILTER (WHERE status = 'error') AS days_error
+        FROM vehicle_connection_log
+        WHERE check_date >= %s::date
+          AND check_date < (%s::date + INTERVAL '1 month')
+        GROUP BY plate;
+        """,
+        (month_start, month_start),
+    )
+    agg_rows = cur.fetchall()
 
-            cur.execute(
-                """
-                SELECT DISTINCT ON (plate) plate, check_date, status
-                FROM vehicle_connection_log
-                WHERE check_date >= %s::date
-                  AND check_date < (%s::date + INTERVAL '1 month')
-                ORDER BY plate, check_date DESC;
-                """,
-                (month_start, month_start),
-            )
-            latest_by_plate = {row["plate"]: row for row in cur.fetchall()}
+    cur.execute(
+        """
+        SELECT DISTINCT ON (plate) plate, check_date, status
+        FROM vehicle_connection_log
+        WHERE check_date >= %s::date
+          AND check_date < (%s::date + INTERVAL '1 month')
+        ORDER BY plate, check_date DESC;
+        """,
+        (month_start, month_start),
+    )
+    latest_by_plate = {row["plate"]: row for row in cur.fetchall()}
 
-            streak_plates = [
-                p for p, row in latest_by_plate.items() if row["status"] == "disconnected"
-            ]
-            streaks: dict[str, int] = {}
-            for plate in streak_plates:
-                cur.execute(
-                    """
-                    SELECT status
-                    FROM vehicle_connection_log
-                    WHERE plate = %s
-                      AND check_date >= %s::date
-                      AND check_date < (%s::date + INTERVAL '1 month')
-                    ORDER BY check_date DESC;
-                    """,
-                    (plate, month_start, month_start),
-                )
-                count = 0
-                for row in cur.fetchall():
-                    if row["status"] == "disconnected":
-                        count += 1
-                    else:
-                        break
-                streaks[plate] = count
+    streak_plates = [
+        p for p, row in latest_by_plate.items() if row["status"] == "disconnected"
+    ]
+    streaks: dict[str, int] = {}
+    for plate in streak_plates:
+        cur.execute(
+            """
+            SELECT status
+            FROM vehicle_connection_log
+            WHERE plate = %s
+              AND check_date >= %s::date
+              AND check_date < (%s::date + INTERVAL '1 month')
+            ORDER BY check_date DESC;
+            """,
+            (plate, month_start, month_start),
+        )
+        count = 0
+        for row in cur.fetchall():
+            if row["status"] == "disconnected":
+                count += 1
+            else:
+                break
+        streaks[plate] = count
 
     stats = []
     for row in agg_rows:
@@ -5495,6 +5527,31 @@ def get_connection_stats(month: str) -> list[dict[str, Any]]:
         })
 
     return stats
+
+
+def get_connection_stats(month: str) -> list[dict[str, Any]]:
+    """Return per-vehicle connection stats for a given month (YYYY-MM)."""
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            return _connection_stats_for_month(cur, month)
+
+
+def get_connection_stats_range(month_from: str, month_to: str) -> dict[str, list[dict[str, Any]]]:
+    """
+    Stats de conexion por placa para cada mes del rango inclusivo
+    [month_from, month_to] ('YYYY-MM'), en una sola conexion:
+    {"2026-06": [...misma forma que get_connection_stats...], "2026-07": [...]}.
+    Maximo CONNECTION_STATS_MAX_MONTHS meses (ValueError si se excede).
+    """
+    months = _connection_stats_month_range(month_from, month_to)
+    result: dict[str, list[dict[str, Any]]] = {}
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            for month in months:
+                result[month] = _connection_stats_for_month(cur, month)
+    return result
 
 
 def get_connection_calendar(

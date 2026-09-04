@@ -177,7 +177,7 @@ def test_run_job_availability_only_skips_performance(monkeypatch):
     )
 
     monkeypatch.setattr(jobs, "_fetch_job", lambda conn, job_id: job)
-    monkeypatch.setattr(jobs, "_mark_running", lambda job_id: None)
+    monkeypatch.setattr(jobs, "_claim_job", lambda job_id: job)
     monkeypatch.setattr(jobs, "_bump_total", lambda job_id, *, extra_total: None)
     monkeypatch.setattr(jobs, "_count_availability_targets", lambda payload: 3)
 
@@ -196,7 +196,7 @@ def test_run_job_availability_only_skips_performance(monkeypatch):
 
     monkeypatch.setattr(jobs, "run_availability_phase", fake_run_availability_phase)
 
-    def fake_calculate_monthly_performance(payload, progress_callback=None):
+    def fake_calculate_monthly_performance(payload, progress_callback=None, should_stop=None, **_kw):
         raise AssertionError("no debe llamarse")
 
     monkeypatch.setattr(jobs, "calculate_monthly_performance", fake_calculate_monthly_performance)
@@ -240,7 +240,7 @@ def test_run_job_normal_calls_performance(monkeypatch):
     )
 
     monkeypatch.setattr(jobs, "_fetch_job", lambda conn, job_id: job)
-    monkeypatch.setattr(jobs, "_mark_running", lambda job_id: None)
+    monkeypatch.setattr(jobs, "_claim_job", lambda job_id: job)
     monkeypatch.setattr(jobs, "_mark_done", lambda job_id, summary: None)
 
     called: dict[str, bool] = {}
@@ -248,7 +248,7 @@ def test_run_job_normal_calls_performance(monkeypatch):
     class FakeResult:
         summary = MonthlyPerformanceSummary()
 
-    def fake_calculate_monthly_performance(payload, progress_callback=None):
+    def fake_calculate_monthly_performance(payload, progress_callback=None, should_stop=None, **_kw):
         called["performance"] = True
         return FakeResult()
 
