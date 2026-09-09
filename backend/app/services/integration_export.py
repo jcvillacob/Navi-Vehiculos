@@ -388,10 +388,14 @@ def _export_vehicles(
                 -- Clientes la usa para is_active: 'Ninguna' = inactivo, las
                 -- gestionadas (Flota Administrada / Experiencia Superior) = activo.
                 COALESCE(a.category, c.category, 'Ninguna') AS category,
-                -- "ID externo" del binding geotab: para una database geotab este
-                -- provider_vehicle_id ES el id del device (lo que ve la UI y usan
-                -- los calculos). a.geotab_device_id solo lo llena la validacion y
-                -- suele venir NULL, por eso Portal Clientes prefiere el binding.
+                -- "ID externo" del binding del PROVEEDOR de la database: para una
+                -- database geotab es el id del device; para una frotcom, artimo o
+                -- logitracs es el id del vehiculo en ese proveedor. Portal Clientes
+                -- lo guarda en `vehicles.geotab_device_id` (nombre historico) y es la
+                -- identidad con la que su ETL y su alcance de flota resuelven el
+                -- vehiculo en analytics; sin el, los vehiculos de proveedores
+                -- distintos de Geotab quedaban fuera de todo calculo. La columna
+                -- a.geotab_device_id solo la llena la validacion y suele venir NULL.
                 -- Mismo criterio que la lista de vehiculos (manual primero, luego
                 -- el mas reciente).
                 geotab_binding.provider_vehicle_id AS geotab_binding_device_id
@@ -400,12 +404,14 @@ def _export_vehicles(
                 ON mc.technical_number = a.technical_number
             LEFT JOIN customers c
                 ON c.id = a.customer_id
+            LEFT JOIN customer_databases cdb
+                ON cdb.id = a.customer_database_id
             LEFT JOIN LATERAL (
                 SELECT vpb.provider_vehicle_id, vpb.updated_at
                 FROM vehicle_provider_bindings vpb
                 WHERE vpb.plate = a.plate
                   AND vpb.customer_database_id = a.customer_database_id
-                  AND vpb.provider = 'geotab'
+                  AND vpb.provider = COALESCE(cdb.connection_type, 'geotab')
                   AND vpb.provider_vehicle_id IS NOT NULL
                 ORDER BY vpb.is_manual DESC, vpb.updated_at DESC
                 LIMIT 1
