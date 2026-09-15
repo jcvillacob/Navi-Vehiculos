@@ -227,6 +227,28 @@ def _exported_vehicle(plate: str) -> dict:
     return next(v for v in payload["vehicles"] if v["plate"] == plate)
 
 
+def test_snapshot_excluye_pendientes_de_placa(vehicle):
+    # Un vehiculo registrado sin placa lleva una placa temporal (P-000001):
+    # exportarla crearia un vehiculo con identidad falsa en Portal Clientes.
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vehicle_motor_assignments
+                    (plate, vin, technical_number, customer_id, customer_database_id,
+                     plate_pending)
+                VALUES ('P-009999', '3HCEJTAR1VL418226', 'TEC-1', %s, %s, TRUE);
+                """,
+                (vehicle["customer_id"], vehicle["database_id"]),
+            )
+        conn.commit()
+
+    plates = {v["plate"] for v in integration_export.export_vehicles()["vehicles"]}
+
+    assert "ABC123" in plates
+    assert "P-009999" not in plates
+
+
 def test_snapshot_uses_geotab_binding_as_device_id(vehicle):
     # Sin geotab_device_id en la columna, el snapshot toma el "ID externo" del
     # binding geotab (provider_vehicle_id) como device id para Portal Clientes.
