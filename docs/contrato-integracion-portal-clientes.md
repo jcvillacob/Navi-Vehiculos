@@ -168,6 +168,18 @@ Mismos shapes que las secciones correspondientes del snapshot, con paginación p
 `vehicles` (flotas grandes; `limit` máx. 2000). La respuesta de `/vehicles` incluye
 `limit`, `offset` y `count` además del array `vehicles`.
 
+### 2.2.1 Vehículos excluidos del snapshot
+
+Un vehículo consultado por VIN que Fénix no resuelve a placa se registra en Navi
+Vehículos con una **placa temporal** (`P-000001`, columna `plate_pending = TRUE`)
+para no perder su cliente, database ni motor. Esas filas **no se exportan**: la
+placa es la clave natural del vehículo en Portal Clientes y una temporal crearía
+un vehículo con identidad falsa.
+
+Cuando en Navi Vehículos completan la placa real (`PUT /api/v1/vehicle/{placa
+temporal}/plate`), la fila entra al snapshot en el siguiente sync como un
+vehículo nuevo, con su `updated_at` refrescado.
+
 ### 2.3 Reglas por tipo de motor (`motor_type`)
 
 Una database física puede tener vehículos de **distinto motor**. Las reglas de

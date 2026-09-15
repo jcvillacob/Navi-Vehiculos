@@ -620,6 +620,20 @@ export async function assignVehicleDatabase(plate, payload) {
   return parseJsonOrThrow(response, "Error actualizando cliente y database del vehiculo");
 }
 
+/**
+ * Completa la placa real de un vehiculo registrado como pendiente de placa.
+ * El historial (bindings, rendimientos, disponibilidad) viaja con el vehiculo.
+ */
+export async function updateVehiclePlate(currentPlate, newPlate) {
+  const normalizedPlate = currentPlate.trim().toUpperCase();
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/plate`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ plate: newPlate.trim().toUpperCase() }),
+  });
+  return parseJsonOrThrow(response, "Error asignando la placa del vehiculo");
+}
+
 export async function refreshVehicle(plate) {
   const normalizedPlate = plate.trim().toUpperCase();
   const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/refresh`), {

@@ -15,8 +15,9 @@ import { useVehicleAssignments } from "../features/engineLookup/hooks/useVehicle
 import { useMotorsCatalog } from "../features/engineLookup/hooks/useMotorsCatalog";
 import { useUserPreference } from "../hooks/useUserPreference";
 import BulkVehicleAssignmentModal from "../features/vehicles/components/BulkVehicleAssignmentModal";
+import PendingPlateModal from "../features/vehicles/components/PendingPlateModal";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
-import { assignVehicleDatabase, checkVehicleConnections, fetchConnectionStats, fetchVehicleDetail, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleGroup, setVehicleVocacional } from "../api/vehicleApi";
+import { assignVehicleDatabase, checkVehicleConnections, fetchConnectionStats, fetchVehicleDetail, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleGroup, setVehicleVocacional, updateVehiclePlate } from "../api/vehicleApi";
 import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../features/categories";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
@@ -171,9 +172,13 @@ export default function VehiclesPage() {
   const [filterMotor, setFilterMotor] = useState(Array.isArray(restoredFilters.filterMotor) ? restoredFilters.filterMotor : []);
   const [filterDatabase, setFilterDatabase] = useState(Array.isArray(restoredFilters.filterDatabase) ? restoredFilters.filterDatabase : []);
   const [filterConnection, setFilterConnection] = useState(Array.isArray(restoredFilters.filterConnection) ? restoredFilters.filterConnection : []);
+  // Vehiculos registrados por VIN sin placa real: se listan igual, con badge.
+  const [onlyPendingPlate, setOnlyPendingPlate] = useState(false);
   const [savingCategoryPlates, setSavingCategoryPlates] = useState(() => new Set());
   const [savingGroupPlates, setSavingGroupPlates] = useState(() => new Set());
   const [savingVocacionalPlates, setSavingVocacionalPlates] = useState(() => new Set());
+  const [savingPlates, setSavingPlates] = useState(() => new Set());
+  const [pendingPlateVehicle, setPendingPlateVehicle] = useState(null);
   const [page, setPage] = useState(Number.isInteger(restoredFilters.page) && restoredFilters.page > 0 ? restoredFilters.page : 1);
   const [pageSize, setPageSize] = useState(Number.isInteger(restoredFilters.pageSize) ? restoredFilters.pageSize : 25);
   const [sort, setSort] = useState(
@@ -350,8 +355,16 @@ export default function VehiclesPage() {
         return filterConnection.includes(status);
       });
     }
+    if (onlyPendingPlate) {
+      result = result.filter((v) => v.plate_pending);
+    }
     return result;
-  }, [vehicles, filterClient, filterCategory, filterMotor, filterDatabase, filterConnection, connectionResults]);
+  }, [vehicles, filterClient, filterCategory, filterMotor, filterDatabase, filterConnection, connectionResults, onlyPendingPlate]);
+
+  const pendingPlateCount = useMemo(
+    () => vehicles.filter((v) => v.plate_pending).length,
+    [vehicles]
+  );
 
   const activeColumns = useMemo(() => {
     const byKey = new Map(VEHICLE_COLUMNS.map((col) => [col.key, col]));
@@ -726,6 +739,35 @@ export default function VehiclesPage() {
     }
   };
 
+  const handleFilterPendingPlates = () => {
+    setOnlyPendingPlate((current) => !current);
+    resetPage();
+  };
+
+  const handleAssignPlate = (vehicle) => {
+    setPendingPlateVehicle(vehicle);
+  };
+
+  const handleSubmitPendingPlate = async (newPlate) => {
+    const vehicle = pendingPlateVehicle;
+    if (!vehicle) return;
+
+    setSavingPlates((prev) => new Set(prev).add(vehicle.plate));
+    try {
+      await updateVehiclePlate(vehicle.plate, newPlate);
+      setPendingPlateVehicle(null);
+      pushToast("info", `Placa asignada: ${vehicle.plate} → ${newPlate}`);
+      // La placa es la llave del listado: se recarga en vez de parchear la fila.
+      await loadVehicles(search);
+    } finally {
+      setSavingPlates((prev) => {
+        const next = new Set(prev);
+        next.delete(vehicle.plate);
+        return next;
+      });
+    }
+  };
+
   const handleRefreshVehicle = async (plate) => {
     setRefreshingPlates((prev) => new Set(prev).add(plate));
 
@@ -965,6 +1007,21 @@ export default function VehiclesPage() {
           </p>
         ) : null}
 
+        {pendingPlateCount > 0 ? (
+          <div className="notice-banner notice-soft">
+            <span aria-hidden="true">·</span>
+            <p>
+              {pendingPlateCount}{" "}
+              {pendingPlateCount === 1 ? "vehiculo esta" : "vehiculos estan"} pendientes de placa
+              (registrados por VIN, sin placa en Fenix). Quedan fuera de Rendimientos hasta que se
+              complete la placa.{" "}
+              <button type="button" className="button-secondary button-sm" onClick={handleFilterPendingPlates}>
+                {onlyPendingPlate ? "Ver todos" : "Ver solo pendientes"}
+              </button>
+            </p>
+          </div>
+        ) : null}
+
         <div className="vehicles-table-shell">
           <table className="vehicles-table">
             <thead>
@@ -1093,6 +1150,17 @@ export default function VehiclesPage() {
                             >
                               <strong>{vehicle.plate}</strong>
                             </Link>
+                            {vehicle.plate_pending ? (
+                              <button
+                                type="button"
+                                className="button-secondary button-sm plate-pending-badge"
+                                onClick={() => handleAssignPlate(vehicle)}
+                                disabled={savingPlates.has(vehicle.plate)}
+                                title="Registrado sin placa: asignale la placa real"
+                              >
+                                {savingPlates.has(vehicle.plate) ? "Guardando..." : "Placa pendiente"}
+                              </button>
+                            ) : null}
                           </td>
                         );
                       }
@@ -1349,6 +1417,14 @@ export default function VehiclesPage() {
         vehicles={selectedVehicles}
         onClose={() => setBulkAssignOpen(false)}
         onSubmit={handleBulkAssignVehicles}
+      />
+
+      <PendingPlateModal
+        open={Boolean(pendingPlateVehicle)}
+        vehicle={pendingPlateVehicle}
+        loading={pendingPlateVehicle ? savingPlates.has(pendingPlateVehicle.plate) : false}
+        onClose={() => setPendingPlateVehicle(null)}
+        onSubmit={handleSubmitPendingPlate}
       />
 
       <ColumnSelectorDrawer

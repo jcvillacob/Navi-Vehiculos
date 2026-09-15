@@ -45,6 +45,13 @@ export default function BulkLookupResults({ results }) {
     [results]
   );
 
+  // Registrados con placa temporal: entraron al listado, pero les falta la
+  // placa real y quedan fuera de Rendimientos hasta que se complete.
+  const pendingPlateResults = useMemo(
+    () => results.filter((item) => item.response?.plate_pending),
+    [results]
+  );
+
   const toggleFilter = (filterKey) => {
     if (filterKey === "all") {
       setSelectedFilters(["all"]);
@@ -94,6 +101,19 @@ export default function BulkLookupResults({ results }) {
           </button>
         </div>
       </header>
+
+      {pendingPlateResults.length > 0 ? (
+        <div className="notice-banner notice-soft">
+          <span aria-hidden="true">·</span>
+          <p>
+            {pendingPlateResults.length}{" "}
+            {pendingPlateResults.length === 1 ? "vehiculo quedo" : "vehiculos quedaron"} registrados
+            <strong> pendientes de placa</strong>: Fenix no tiene placa para su VIN. Ya tienen
+            cliente, database y motor asociados; asignales la placa real desde Vehiculos para que
+            entren a Rendimientos.
+          </p>
+        </div>
+      ) : null}
 
       <div className="bulk-filter-chips">
         {FILTER_OPTIONS.map((filter) => {
@@ -145,7 +165,15 @@ export default function BulkLookupResults({ results }) {
               <tr key={`${result.identifier}-${result.rowNumber}`} className={getRowClass(result.status)}>
                 <td data-label="#">{result.rowNumber}</td>
                 <td data-label="Dispositivo"><strong>{result.identifier}</strong></td>
-                <td data-label="Placa">{result.response?.plate || "-"}</td>
+                <td data-label="Placa">
+                  {result.response?.plate_pending ? (
+                    <span className="status status-partial" title={`Registrado como ${result.response.plate}: falta la placa real`}>
+                      Pendiente
+                    </span>
+                  ) : (
+                    result.response?.plate || "-"
+                  )}
+                </td>
                 <td data-label="Marca">{result.response?.marca || "-"}</td>
                 <td data-label="Linea">{result.response?.linea || "-"}</td>
                 <td data-label="Modelo">{result.response?.source_details?.fenix?.modelo || "-"}</td>

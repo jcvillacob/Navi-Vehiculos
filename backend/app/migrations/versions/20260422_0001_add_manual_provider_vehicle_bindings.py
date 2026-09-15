@@ -55,7 +55,7 @@ def upgrade() -> None:
             ) THEN
                 ALTER TABLE vehicle_provider_bindings
                 ADD CONSTRAINT vehicle_provider_bindings_plate_fkey
-                FOREIGN KEY (plate) REFERENCES vehicle_motor_assignments(plate) ON DELETE CASCADE;
+                FOREIGN KEY (plate) REFERENCES vehicle_motor_assignments(plate) ON DELETE CASCADE ON UPDATE CASCADE;
             END IF;
         END $$;
         """

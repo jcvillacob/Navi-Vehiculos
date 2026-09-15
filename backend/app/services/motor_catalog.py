@@ -511,6 +511,62 @@ def _list_available_cpls_by_technical_numbers(
 
 _MOTOR_TABLES_DDL_DONE = False
 
+PENDING_PLATE_PREFIX = "P-"
+
+
+def is_pending_plate(plate: str | None) -> bool:
+    """Una placa temporal nunca es una placa real: el prefijo lleva guion."""
+    if not plate:
+        return False
+    return plate.strip().upper().startswith(PENDING_PLATE_PREFIX)
+
+
+def _ensure_plate_update_cascade(conn: psycopg.Connection) -> None:
+    """Recrea con ON UPDATE CASCADE las FK que apuntan a la placa.
+
+    Completar una placa pendiente es un UPDATE del PK: sin el cascade las
+    tablas hijas (bindings, rendimientos, disponibilidad, logs) bloquearian
+    el cambio o quedarian apuntando a una placa que ya no existe.
+    """
+    # El caller puede traer cualquier row_factory: se fija dict_row aqui.
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT to_regclass('vehicle_motor_assignments') AS reg;")
+        row = cur.fetchone()
+        if not row or not row["reg"]:
+            return
+
+        cur.execute(
+            """
+            SELECT
+                con.conname,
+                child.relname AS child_table,
+                con.confdeltype,
+                pg_get_constraintdef(con.oid) AS definition
+            FROM pg_constraint con
+            INNER JOIN pg_class child ON child.oid = con.conrelid
+            INNER JOIN pg_class parent ON parent.oid = con.confrelid
+            WHERE con.contype = 'f'
+              AND parent.relname = 'vehicle_motor_assignments'
+              AND con.confupdtype <> 'c';
+            """
+        )
+        stale = cur.fetchall()
+
+        for constraint in stale:
+            definition = constraint["definition"]
+            if "ON UPDATE" in definition:
+                # Alguien ya eligio otra accion a proposito: no la pisamos.
+                continue
+            child_table = constraint["child_table"]
+            conname = constraint["conname"]
+            cur.execute(
+                f'ALTER TABLE {child_table} DROP CONSTRAINT "{conname}";'
+            )
+            cur.execute(
+                f'ALTER TABLE {child_table} ADD CONSTRAINT "{conname}" '
+                f"{definition} ON UPDATE CASCADE;"
+            )
+
 
 def _ensure_motor_tables(conn: psycopg.Connection) -> None:
     """
@@ -754,6 +810,18 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             ADD COLUMN IF NOT EXISTS nombre_vehiculo TEXT NULL;
             """
         )
+        # Un vehiculo consultado por VIN puede no traer placa desde Fenix. Se
+        # registra igual con una placa temporal (P-000001) para no perder el
+        # cliente/database/credenciales; plate_pending marca que falta la real.
+        cur.execute(
+            """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS plate_pending BOOLEAN NOT NULL DEFAULT FALSE;
+            """
+        )
+        cur.execute("CREATE SEQUENCE IF NOT EXISTS vehicle_pending_plate_seq;")
+        # La placa es PK: al completarla hay que arrastrar las tablas hijas.
+        _ensure_plate_update_cascade(conn)
         cur.execute(
             """
             ALTER TABLE vehicle_motor_assignments
@@ -1296,7 +1364,7 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             """
             CREATE TABLE IF NOT EXISTS vehicle_connection_log (
                 id BIGSERIAL PRIMARY KEY,
-                plate VARCHAR(10) NOT NULL REFERENCES vehicle_motor_assignments(plate),
+                plate VARCHAR(10) NOT NULL REFERENCES vehicle_motor_assignments(plate) ON UPDATE CASCADE,
                 check_date DATE NOT NULL,
                 status TEXT NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2094,6 +2162,7 @@ def list_vehicle_assignment_summaries(search: str | None = None) -> list[Vehicle
                 f"""
                 SELECT
                     a.plate,
+                    a.plate_pending,
                     a.customer_id,
                     a.customer_database_id,
                     a.vin,
@@ -2179,6 +2248,7 @@ def list_vehicle_assignment_summaries(search: str | None = None) -> list[Vehicle
         summaries.append(
             VehicleAssignmentSummary(
                 plate=row["plate"],
+                plate_pending=bool(row.get("plate_pending")),
                 customer_id=row.get("customer_id"),
                 customer_database_id=row.get("customer_database_id"),
                 vin=row.get("vin"),
@@ -2257,6 +2327,7 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                 f"""
                 SELECT
                     a.plate,
+                    a.plate_pending,
                     a.customer_id,
                     a.customer_database_id,
                     a.vin,
@@ -2388,6 +2459,7 @@ def get_vehicle_assignment(plate: str) -> VehicleAssignmentRecord | None:
                 """
                 SELECT
                     a.plate,
+                    a.plate_pending,
                     a.customer_id,
                     a.customer_database_id,
                     a.vin,
@@ -2514,14 +2586,30 @@ def register_vehicle_assignment(
     ano_modelo: str | None = None,
     tipo_combustible: str | None = None,
     nombre_vehiculo: str | None = None,
-) -> None:
-    normalized_plate = plate.strip().upper()
+) -> str | None:
+    """Registra el vehiculo y devuelve la placa con la que quedo guardado.
+
+    Sin placa (consulta por VIN que Fenix no resuelve a placa) el vehiculo se
+    registra igual con una placa temporal marcada plate_pending, para que el
+    cliente/database y las credenciales queden asociadas desde ya. Despues
+    solo hay que completar la placa con set_vehicle_plate.
+    """
+    normalized_plate = (plate or "").strip().upper()
+    normalized_vin = _normalize_optional_text(vin)
     normalized_technical_number = technical_number.strip()
-    if not normalized_plate or not normalized_technical_number:
-        return
+    if not normalized_technical_number:
+        return None
+    if not normalized_plate and not normalized_vin:
+        # Sin placa y sin VIN no hay nada que identifique al vehiculo.
+        return None
 
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
+        plate_pending = False
+
+        if not normalized_plate:
+            normalized_plate, plate_pending = _resolve_pending_plate(conn, normalized_vin)
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -2538,9 +2626,10 @@ def register_vehicle_assignment(
                     linea,
                     ano_modelo,
                     tipo_combustible,
-                    nombre_vehiculo
+                    nombre_vehiculo,
+                    plate_pending
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (plate)
                 DO UPDATE SET
                     vin = EXCLUDED.vin,
@@ -2560,7 +2649,7 @@ def register_vehicle_assignment(
                 """,
                 (
                     normalized_plate,
-                    _normalize_optional_text(vin),
+                    normalized_vin,
                     _normalize_optional_text(geotab_status) or "unknown",
                     _normalize_optional_text(engine_number),
                     normalized_technical_number,
@@ -2572,9 +2661,107 @@ def register_vehicle_assignment(
                     _normalize_optional_text(ano_modelo),
                     _normalize_optional_text(tipo_combustible),
                     _normalize_optional_text(nombre_vehiculo),
+                    plate_pending,
                 ),
             )
         conn.commit()
+
+    return normalized_plate
+
+
+def _resolve_pending_plate(conn: psycopg.Connection, vin: str | None) -> tuple[str, bool]:
+    """Placa con la que guardar un vehiculo que llego sin placa.
+
+    Si el VIN ya esta registrado se reusa esa fila (aunque tenga placa real,
+    para no duplicar el vehiculo); si no, se toma la siguiente placa temporal
+    de la secuencia.
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        if vin:
+            cur.execute(
+                """
+                SELECT plate, plate_pending
+                FROM vehicle_motor_assignments
+                WHERE UPPER(COALESCE(vin, '')) = %s
+                ORDER BY plate_pending ASC, plate ASC
+                LIMIT 1;
+                """,
+                (vin.upper(),),
+            )
+            existing = cur.fetchone()
+            if existing:
+                return existing["plate"], bool(existing["plate_pending"])
+
+        cur.execute("SELECT nextval('vehicle_pending_plate_seq') AS seq;")
+        seq = cur.fetchone()["seq"]
+
+    return f"{PENDING_PLATE_PREFIX}{int(seq):06d}", True
+
+
+def set_vehicle_plate(current_plate: str, new_plate: str) -> dict:
+    """Completa la placa real de un vehiculo registrado como pendiente.
+
+    El UPDATE del PK arrastra las tablas hijas por ON UPDATE CASCADE, asi que
+    el historial (bindings, rendimientos, disponibilidad) sigue al vehiculo.
+    """
+    normalized_current = (current_plate or "").strip().upper()
+    normalized_new = (new_plate or "").strip().upper()
+
+    if not normalized_current:
+        raise ValueError("La placa actual es obligatoria.")
+    if not normalized_new:
+        raise ValueError("La placa nueva es obligatoria.")
+    if len(normalized_new) > 10:
+        raise ValueError("La placa nueva no puede superar 10 caracteres.")
+    if is_pending_plate(normalized_new):
+        raise ValueError("La placa nueva no puede usar el prefijo de placas pendientes.")
+    if normalized_new == normalized_current:
+        raise ValueError("La placa nueva es igual a la actual.")
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT plate, plate_pending
+                FROM vehicle_motor_assignments
+                WHERE plate = %s;
+                """,
+                (normalized_current,),
+            )
+            current_row = cur.fetchone()
+            if current_row is None:
+                raise ValueError("El vehiculo no existe en la base de asociaciones.")
+            if not current_row["plate_pending"]:
+                raise ValueError(
+                    "El vehiculo ya tiene placa definitiva: no se puede reasignar."
+                )
+
+            cur.execute(
+                "SELECT plate FROM vehicle_motor_assignments WHERE plate = %s;",
+                (normalized_new,),
+            )
+            if cur.fetchone() is not None:
+                raise ValueError("Ya existe un vehiculo registrado con esa placa.")
+
+            cur.execute(
+                """
+                UPDATE vehicle_motor_assignments
+                SET plate = %s,
+                    plate_pending = FALSE,
+                    updated_at = NOW()
+                WHERE plate = %s;
+                """,
+                (normalized_new, normalized_current),
+            )
+        conn.commit()
+
+    return {
+        "updated": True,
+        "previous_plate": normalized_current,
+        "plate": normalized_new,
+        "plate_pending": False,
+    }
 
 
 def update_vehicle_metadata(

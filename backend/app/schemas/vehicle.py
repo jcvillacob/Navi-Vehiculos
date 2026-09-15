@@ -135,6 +135,13 @@ class VehicleSourceDetails(BaseModel):
 
 class VehicleLookupResponse(BaseModel):
     plate: str | None = Field(default=None, description="Placa consultada")
+    plate_pending: bool = Field(
+        default=False,
+        description=(
+            "La placa devuelta es temporal: Fenix no resolvio una placa real y el "
+            "vehiculo quedo registrado pendiente de placa"
+        ),
+    )
     lookup_value: str = Field(..., description="Valor usado para la consulta")
     lookup_type: str = Field(..., description="plate | vin")
     vin: str | None = Field(default=None, description="VIN obtenido desde Geotab")
@@ -300,6 +307,10 @@ class VehicleAssignmentSummary(BaseModel):
     provider_vehicle_id, access_url, fechas internas, etc.)."""
 
     plate: str = Field(..., description="Placa del vehiculo")
+    plate_pending: bool = Field(
+        default=False,
+        description="La placa es temporal: el vehiculo se registro sin placa real",
+    )
     customer_id: int | None = Field(default=None, description="ID local del cliente")
     customer_database_id: int | None = Field(default=None, description="ID local de la database")
     vin: str | None = Field(default=None, description="VIN asociado")
@@ -334,6 +345,10 @@ class VehicleAssignmentSummary(BaseModel):
 
 class VehicleAssignmentRecord(BaseModel):
     plate: str = Field(..., description="Placa del vehiculo")
+    plate_pending: bool = Field(
+        default=False,
+        description="La placa es temporal: el vehiculo se registro sin placa real",
+    )
     customer_id: int | None = Field(default=None, description="ID local del cliente")
     customer_database_id: int | None = Field(default=None, description="ID local de la database")
     vin: str | None = Field(default=None, description="VIN asociado")
@@ -495,6 +510,17 @@ class VehicleGroupUpdateRequest(BaseModel):
         default=None,
         gt=0,
         description="Grupo interno del cliente; None limpia la asignacion.",
+    )
+
+
+class VehiclePlateUpdateRequest(BaseModel):
+    """Completa la placa real de un vehiculo registrado como pendiente."""
+
+    plate: str = Field(
+        ...,
+        min_length=1,
+        max_length=10,
+        description="Placa definitiva del vehiculo",
     )
 
 

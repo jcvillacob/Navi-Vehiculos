@@ -62,6 +62,7 @@ POST /rendimientos/calculate ──► rendimientos_jobs.create_job ──► ru
 
 - `_fetch_targets`: `vehicle_motor_assignments` con `customer_database_id IS NOT NULL`, filtrable por `customer_id`, `customer_ids`, `customer_database_id`. El proveedor se infiere con `provider_registry.infer_provider_key(connection_type, database_name, access_url, provider_config)`; se descartan los que no soportan rendimientos (`supports_monthly_performance`).
 - Ad-hoc (`include_adhoc` / `adhoc_only`): placas **sin** database, consultadas con las credenciales globales de Navitrans Geotab (`GEOTAB_USERNAME/PASSWORD/DATABASE`) bajo el cliente sintético `__navitrans_system__` (`_ensure_system_database`). Filtros: `adhoc_plates`, `adhoc_filters` (`marca`, `linea`, `nombre_vehiculo`). Estas filas llevan `is_adhoc = TRUE` y se muestran como cliente "Navitrans" / database "Geotab Global".
+- **Pendientes de placa excluidos**: los vehículos registrados sin placa real (placa temporal `P-000001`, `plate_pending = TRUE`) quedan fuera de ambos caminos (`NOT a.plate_pending`). Sin placa no hay nada que buscarle al proveedor, y calcularlos solo produciría `no_data`. Entran al cálculo en cuanto alguien complete la placa desde Vehículos.
 
 ### 2.2 Encadenamiento con el mes anterior (D5)
 

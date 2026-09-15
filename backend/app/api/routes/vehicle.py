@@ -19,6 +19,7 @@ from app.schemas.vehicle import (
     VehicleDatabaseAssignmentRequest,
     VehicleGroupUpdateRequest,
     VehicleLookupResponse,
+    VehiclePlateUpdateRequest,
     VehicleReprocessJob,
     VehicleReprocessJobRequest,
     VehicleVocacionalUpdateRequest,
@@ -31,11 +32,13 @@ from app.services.motor_catalog import (
     get_connection_stats,
     get_connection_stats_range,
     get_vehicle_assignment,
+    is_pending_plate,
     list_vehicle_assignments,
     list_vehicle_assignment_summaries,
     register_vehicle_assignment,
     revalidate_vehicle_customer_geotab,
     set_vehicle_category,
+    set_vehicle_plate,
     set_vehicle_vocacional,
 )
 from app.services.vehicle_groups import set_vehicle_group
@@ -261,6 +264,20 @@ def manual_assign_vehicle(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.put("/{plate}/plate")
+def update_vehicle_plate(
+    payload: VehiclePlateUpdateRequest,
+    plate: str = Path(..., min_length=1, max_length=10, description="Placa temporal actual"),
+    _user: dict = Depends(require_permission("vehicles.edit")),
+) -> dict:
+    """Completa la placa real de un vehiculo registrado como pendiente."""
+    try:
+        return set_vehicle_plate(plate, payload.plate)
+    except ValueError as exc:
+        status_code = 404 if "no existe en la base" in str(exc).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
 @router.put("/{plate}/category")
 def update_vehicle_category(
     payload: VehicleCategoryUpdateRequest,
@@ -305,6 +322,19 @@ def refresh_vehicle_assignment(
     plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
     _user: dict = Depends(require_permission("vehicles.refresh")),
 ) -> VehicleLookupResponse:
+    # Una placa temporal no existe en Fenix: se refresca por VIN, que es lo
+    # unico que identifica al vehiculo mientras esta pendiente de placa.
+    if is_pending_plate(plate):
+        record = get_vehicle_assignment(plate)
+        if record is None:
+            raise HTTPException(status_code=404, detail="El vehiculo no existe.")
+        if not record.vin:
+            raise HTTPException(
+                status_code=400,
+                detail="El vehiculo esta pendiente de placa y no tiene VIN: no hay con que consultarlo.",
+            )
+        return lookup_vehicle_service(record.vin, force=True)
+
     return lookup_vehicle_service(plate, force=True)
 
 

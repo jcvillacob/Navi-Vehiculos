@@ -454,6 +454,8 @@ def _eligible_plates(customer_id: int | None = None) -> set[str]:
     where = [
         "c.name <> %s",
         "COALESCE(a.category, c.category, 'Ninguna') = ANY(%s)",
+        # Pendiente de placa: los jobs no lo calculan, no cuenta en cobertura.
+        "NOT a.plate_pending",
     ]
     params: list[Any] = [_SYSTEM_CUSTOMER_NAME, list(AVAILABILITY_CATEGORIES)]
     if customer_id is not None:

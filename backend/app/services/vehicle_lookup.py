@@ -30,6 +30,7 @@ from app.services.motor_catalog import (
     get_cached_vehicle_lookup,
     get_vehicle_database_assignment,
     get_vehicle_geotab_customer_status,
+    is_pending_plate,
     register_vehicle_assignment,
     update_vehicle_metadata,
 )
@@ -630,26 +631,39 @@ def lookup_vehicle(
                 message="Consulta parcial: el motor no existe en Cummins.",
             )
 
-        if plate:
-            register_vehicle_assignment(
-                plate=plate,
-                technical_number=technical_config,
-                cpl=cpl,
-                geotab_status=geotab_status,
-                vin=vin,
-                engine_number=engine_number,
-                marca=fenix_details.get("marca"),
-                linea=fenix_details.get("linea"),
-                ano_modelo=fenix_details.get("ano_modelo"),
-                tipo_combustible=fenix_details.get("tipo_combustible"),
-                nombre_vehiculo=fenix_details.get("nombre_vehiculo"),
-                marketing_model_name=marketing_model_name,
-                service_model_name=service_model_name,
-            )
+        # Sin placa (VIN que Fenix no resuelve) el vehiculo se registra igual con
+        # una placa temporal: asi conserva cliente, database y credenciales, y
+        # despues solo hay que completar la placa.
+        registered_plate = register_vehicle_assignment(
+            plate=plate,
+            technical_number=technical_config,
+            cpl=cpl,
+            geotab_status=geotab_status,
+            vin=vin,
+            engine_number=engine_number,
+            marca=fenix_details.get("marca"),
+            linea=fenix_details.get("linea"),
+            ano_modelo=fenix_details.get("ano_modelo"),
+            tipo_combustible=fenix_details.get("tipo_combustible"),
+            nombre_vehiculo=fenix_details.get("nombre_vehiculo"),
+            marketing_model_name=marketing_model_name,
+            service_model_name=service_model_name,
+        )
+
+        plate_pending = False
+        if not plate and registered_plate:
+            plate = registered_plate
+            plate_pending = is_pending_plate(registered_plate)
 
         message = "Consulta completada."
         if warnings:
             message = "Consulta completada con advertencias."
+        if plate_pending:
+            warnings.append(
+                "Fenix no tiene placa para este VIN. El vehiculo quedo registrado "
+                f"como {plate} (pendiente de placa): asignale la placa real cuando la tengas."
+            )
+            message = "Registrado pendiente de placa."
 
         geotab_customer_info = get_vehicle_geotab_customer_status(plate)
 
@@ -674,6 +688,7 @@ def lookup_vehicle(
 
         return VehicleLookupResponse(
             plate=plate,
+            plate_pending=plate_pending,
             lookup_value=normalized_identifier,
             lookup_type=lookup_type,
             vin=vin,
@@ -696,7 +711,7 @@ def lookup_vehicle(
                 "cummins": cummins_details,
             },
             warnings=warnings,
-            status="ok",
+            status="partial" if plate_pending else "ok",
             message=message,
         )
     except Exception:

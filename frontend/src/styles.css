@@ -7257,6 +7257,11 @@ select.control-sm {
   border-left: 3px solid transparent;
 }
 
+.plate-pending-badge {
+  margin-top: 4px;
+  display: block;
+}
+
 .bulk-message-cell {
   display: inline-block;
   max-width: 260px;

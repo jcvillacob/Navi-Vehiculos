@@ -343,11 +343,15 @@ def _export_vehicles(
     # rendimientos aun no corrio en este entorno.
     _ensure_performance_tables(conn)
 
-    where_clause = ""
+    # Los vehiculos pendientes de placa llevan una placa temporal (P-000001):
+    # exportarla a Portal Clientes crearia un vehiculo con identidad falsa.
+    # Entran al snapshot cuando les completen la placa real.
+    where_parts: list[str] = ["NOT a.plate_pending"]
     params: list[Any] = []
     if since is not None:
-        where_clause = "WHERE a.updated_at > %s OR geotab_binding.updated_at > %s"
+        where_parts.append("(a.updated_at > %s OR geotab_binding.updated_at > %s)")
         params.extend([since, since])
+    where_clause = f"WHERE {' AND '.join(where_parts)}"
 
     pagination_clause = ""
     if limit is not None:

@@ -104,7 +104,7 @@ def _run_performance_tables_ddl_inner(conn: psycopg.Connection) -> None:
             """
             CREATE TABLE IF NOT EXISTS vehicle_provider_bindings (
                 id BIGSERIAL PRIMARY KEY,
-                plate VARCHAR(10) NOT NULL REFERENCES vehicle_motor_assignments(plate) ON DELETE CASCADE,
+                plate VARCHAR(10) NOT NULL REFERENCES vehicle_motor_assignments(plate) ON DELETE CASCADE ON UPDATE CASCADE,
                 customer_database_id BIGINT NOT NULL REFERENCES customer_databases(id) ON DELETE CASCADE,
                 provider TEXT NOT NULL,
                 provider_vehicle_id TEXT NULL,
@@ -130,7 +130,7 @@ def _run_performance_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 ) THEN
                     ALTER TABLE vehicle_provider_bindings
                     ADD CONSTRAINT vehicle_provider_bindings_plate_fkey
-                    FOREIGN KEY (plate) REFERENCES vehicle_motor_assignments(plate) ON DELETE CASCADE;
+                    FOREIGN KEY (plate) REFERENCES vehicle_motor_assignments(plate) ON DELETE CASCADE ON UPDATE CASCADE;
                 END IF;
             END $$;
             """
@@ -147,7 +147,7 @@ def _run_performance_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 id BIGSERIAL PRIMARY KEY,
                 customer_id BIGINT NULL REFERENCES customers(id),
                 customer_database_id BIGINT NOT NULL REFERENCES customer_databases(id) ON DELETE CASCADE,
-                plate VARCHAR(10) NOT NULL REFERENCES vehicle_motor_assignments(plate) ON DELETE CASCADE,
+                plate VARCHAR(10) NOT NULL REFERENCES vehicle_motor_assignments(plate) ON DELETE CASCADE ON UPDATE CASCADE,
                 period_month TEXT NOT NULL,
                 source_provider TEXT NOT NULL,
                 provider_vehicle_id TEXT NULL,
@@ -335,7 +335,9 @@ def _fetch_adhoc_targets(
     if not clean_plates and not clean_marcas and not clean_lineas and not clean_nombres:
         return []
 
-    where_clauses = ["a.customer_database_id IS NULL"]
+    # Un vehiculo pendiente de placa no se puede buscar en el proveedor: se
+    # excluye hasta que le completen la placa real.
+    where_clauses = ["a.customer_database_id IS NULL", "NOT a.plate_pending"]
     params: list[Any] = []
 
     if clean_plates:
@@ -447,7 +449,8 @@ def _fetch_targets(
     customer_database_id: int | None,
 ) -> list[PerformanceTarget]:
     params: list[Any] = []
-    where_clauses = ["a.customer_database_id IS NOT NULL"]
+    # Idem: sin placa real no hay nada que consultarle al proveedor.
+    where_clauses = ["a.customer_database_id IS NOT NULL", "NOT a.plate_pending"]
     effective_customer_ids = sorted(
         {
             int(value)
