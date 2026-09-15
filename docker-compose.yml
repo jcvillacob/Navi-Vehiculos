@@ -47,6 +47,15 @@ services:
       - ./.env
     environment:
       - CORS_ORIGINS=http://localhost:${APP_PORT:-8091}
+      # `redis` es ambiguo en la red externa navi-red-central: otras stacks
+      # publican el mismo alias. El nombre unico evita que una recarga del
+      # backend termine conectada al Redis de otra aplicacion.
+      - REDIS_URL=redis://navi-vehiculos-redis:6379/0
+      # `minio` tiene el mismo problema que `redis`: en navi-red-central el
+      # alias lo publican varias stacks y el backend terminaba autenticando
+      # contra el MinIO de otra aplicacion (InvalidAccessKeyId), asi que la
+      # descarga de adjuntos de motor respondia 500. El nombre unico lo fija.
+      - MINIO_ENDPOINT=navi-vehiculos-minio:9000
     depends_on:
       db:
         condition: service_healthy
