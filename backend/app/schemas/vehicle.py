@@ -321,6 +321,21 @@ class VehicleAssignmentSummary(BaseModel):
     ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo (Fenix)")
     tipo_combustible: str | None = Field(default=None, description="Tipo de combustible (Fenix)")
     nombre_vehiculo: str | None = Field(default=None, description="Nombre del vehiculo (Fenix)")
+    body_type: str | None = Field(
+        default=None,
+        description="Carroceria efectiva (Tractocamion, Volqueta, Mixer...). None = sin clasificar",
+    )
+    body_type_is_derived: bool = Field(
+        default=True,
+        description="Si la carroceria se dedujo del nombre Fenix en vez de un override manual",
+    )
+    axle_config: str | None = Field(
+        default=None, description="Configuracion de ejes efectiva (4X2, 6X4, 8X4...)"
+    )
+    axle_config_is_derived: bool = Field(
+        default=True,
+        description="Si los ejes se dedujeron del nombre Fenix en vez de un override manual",
+    )
     engine_name: str | None = Field(default=None, description="Nombre visible del motor")
     engine_number: str | None = Field(default=None, description="Numero de motor")
     client_name: str | None = Field(default=None, description="Cliente asociado al vehiculo")
@@ -381,6 +396,21 @@ class VehicleAssignmentRecord(BaseModel):
     ano_modelo: str | None = Field(default=None, description="Año modelo del vehiculo (Fenix)")
     tipo_combustible: str | None = Field(default=None, description="Tipo de combustible (Fenix)")
     nombre_vehiculo: str | None = Field(default=None, description="Nombre del vehiculo (Fenix)")
+    body_type: str | None = Field(
+        default=None,
+        description="Carroceria efectiva (Tractocamion, Volqueta, Mixer...). None = sin clasificar",
+    )
+    body_type_is_derived: bool = Field(
+        default=True,
+        description="Si la carroceria se dedujo del nombre Fenix en vez de un override manual",
+    )
+    axle_config: str | None = Field(
+        default=None, description="Configuracion de ejes efectiva (4X2, 6X4, 8X4...)"
+    )
+    axle_config_is_derived: bool = Field(
+        default=True,
+        description="Si los ejes se dedujeron del nombre Fenix en vez de un override manual",
+    )
     engine_name: str | None = Field(default=None, description="Nombre visible del motor")
     client_name: str | None = Field(default=None, description="Cliente asociado al vehiculo")
     category: CustomerCategory = Field(
@@ -470,6 +500,30 @@ class VehicleVocacionalUpdateRequest(BaseModel):
     vocacional: bool = Field(
         ...,
         description="True si el vehiculo es de uso vocacional, False en caso contrario.",
+    )
+
+
+class VehicleBodyTypeUpdateRequest(BaseModel):
+    """Override manual de carroceria y ejes.
+
+    Ambos campos son independientes y se envian siempre: None o cadena vacia
+    borra el override y el valor vuelve a derivarse del nombre Fenix.
+    """
+
+    body_type: str | None = Field(
+        default=None,
+        description=(
+            "Carroceria override del vehiculo. None = derivar del nombre Fenix; "
+            "Tractocamion | Mixer | Volqueta | Chasis camion | Chasis bus | "
+            "Camioneta | Camion | Buseta | Bus | Van | Grua = fijar override."
+        ),
+    )
+    axle_config: str | None = Field(
+        default=None,
+        description=(
+            "Configuracion de ejes override (por ejemplo 6X4). "
+            "None = derivar del nombre Fenix."
+        ),
     )
 
 

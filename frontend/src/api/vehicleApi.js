@@ -659,6 +659,25 @@ export async function setVehicleCategory(plate, category) {
 }
 
 /**
+ * Fija (o limpia) el override de carroceria y ejes de un vehiculo.
+ *
+ * Ambos valores se envian siempre: null en cualquiera de los dos borra ese
+ * override y el valor vuelve a derivarse del nombre Fenix del vehiculo.
+ * @param {string} plate
+ * @param {string|null} bodyType - "Tractocamion" | "Volqueta" | ... o null.
+ * @param {string|null} axleConfig - "6X4", "4X2", ... o null.
+ */
+export async function setVehicleBodyType(plate, bodyType, axleConfig) {
+  const normalizedPlate = plate.trim().toUpperCase();
+  const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/${normalizedPlate}/body-type`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body_type: bodyType ?? null, axle_config: axleConfig ?? null }),
+  });
+  return parseJsonOrThrow(response, "Error actualizando la carroceria del vehiculo");
+}
+
+/**
  * Marca o desmarca un vehiculo como vocacional.
  * @param {string} plate
  * @param {boolean} vocacional

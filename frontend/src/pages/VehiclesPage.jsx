@@ -17,11 +17,13 @@ import { useUserPreference } from "../hooks/useUserPreference";
 import BulkVehicleAssignmentModal from "../features/vehicles/components/BulkVehicleAssignmentModal";
 import PendingPlateModal from "../features/vehicles/components/PendingPlateModal";
 import VehicleAssignmentModal from "../features/vehicles/components/VehicleAssignmentModal";
-import { assignVehicleDatabase, checkVehicleConnections, fetchConnectionStats, fetchVehicleDetail, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleCategory, setVehicleGroup, setVehicleVocacional, updateVehiclePlate } from "../api/vehicleApi";
+import { assignVehicleDatabase, checkVehicleConnections, fetchConnectionStats, fetchVehicleDetail, manualAssignVehicle, refreshVehicle, revalidateCustomerGeotab, setVehicleBodyType, setVehicleCategory, setVehicleGroup, setVehicleVocacional, updateVehiclePlate } from "../api/vehicleApi";
 import { CUSTOMER_CATEGORIES, categoryBadgeClass } from "../features/categories";
+import { AXLE_CONFIGS, BODY_TYPES, UNCLASSIFIED_BODY_TYPE, bodyTypeWithAxles } from "../features/bodyTypes";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 const VEHICLE_CATEGORY_FILTER_OPTIONS = ["Ninguna", ...CUSTOMER_CATEGORIES];
+const VEHICLE_BODY_TYPE_FILTER_OPTIONS = [...BODY_TYPES, UNCLASSIFIED_BODY_TYPE];
 const CONNECTION_FILTER_OPTIONS = [
   { value: "connected", label: "Activos" },
   { value: "disconnected", label: "Inactivos" },
@@ -59,6 +61,13 @@ const VEHICLE_COLUMNS = [
     width: 160,
     getSortValue: (v) => v.category || "Ninguna",
     getExportValue: (v) => v.category || "Ninguna",
+  },
+  {
+    key: "body_type",
+    label: "Carroceria",
+    width: 170,
+    getSortValue: (v) => bodyTypeWithAxles(v),
+    getExportValue: (v) => bodyTypeWithAxles(v),
   },
   {
     key: "vocacional",
@@ -169,12 +178,14 @@ export default function VehiclesPage() {
   );
   const [filterClient, setFilterClient] = useState(Array.isArray(restoredFilters.filterClient) ? restoredFilters.filterClient : []);
   const [filterCategory, setFilterCategory] = useState(Array.isArray(restoredFilters.filterCategory) ? restoredFilters.filterCategory : []);
+  const [filterBodyType, setFilterBodyType] = useState(Array.isArray(restoredFilters.filterBodyType) ? restoredFilters.filterBodyType : []);
   const [filterMotor, setFilterMotor] = useState(Array.isArray(restoredFilters.filterMotor) ? restoredFilters.filterMotor : []);
   const [filterDatabase, setFilterDatabase] = useState(Array.isArray(restoredFilters.filterDatabase) ? restoredFilters.filterDatabase : []);
   const [filterConnection, setFilterConnection] = useState(Array.isArray(restoredFilters.filterConnection) ? restoredFilters.filterConnection : []);
   // Vehiculos registrados por VIN sin placa real: se listan igual, con badge.
   const [onlyPendingPlate, setOnlyPendingPlate] = useState(false);
   const [savingCategoryPlates, setSavingCategoryPlates] = useState(() => new Set());
+  const [savingBodyTypePlates, setSavingBodyTypePlates] = useState(() => new Set());
   const [savingGroupPlates, setSavingGroupPlates] = useState(() => new Set());
   const [savingVocacionalPlates, setSavingVocacionalPlates] = useState(() => new Set());
   const [savingPlates, setSavingPlates] = useState(() => new Set());
@@ -190,6 +201,7 @@ export default function VehiclesPage() {
   // Solo la fila en edicion monta un <select> nativo; las demas muestran el badge.
   // Asi evitamos cientos de selects nativos en el DOM (coste de paint + hit-testing).
   const [editingCategoryPlate, setEditingCategoryPlate] = useState(null);
+  const [editingBodyTypePlate, setEditingBodyTypePlate] = useState(null);
   const [reprocessPromptPlates, setReprocessPromptPlates] = useState(null);
   const [reprocessSkipGeotab, setReprocessSkipGeotab] = useState(false);
   const selectAllRef = useRef(null);
@@ -342,6 +354,9 @@ export default function VehiclesPage() {
     if (filterCategory.length) {
       result = result.filter((v) => filterCategory.includes(v.category || "Ninguna"));
     }
+    if (filterBodyType.length) {
+      result = result.filter((v) => filterBodyType.includes(v.body_type || UNCLASSIFIED_BODY_TYPE));
+    }
     if (filterMotor.length) {
       result = result.filter((v) => filterMotor.includes(v.engine_name));
     }
@@ -359,7 +374,7 @@ export default function VehiclesPage() {
       result = result.filter((v) => v.plate_pending);
     }
     return result;
-  }, [vehicles, filterClient, filterCategory, filterMotor, filterDatabase, filterConnection, connectionResults, onlyPendingPlate]);
+  }, [vehicles, filterClient, filterCategory, filterBodyType, filterMotor, filterDatabase, filterConnection, connectionResults, onlyPendingPlate]);
 
   const pendingPlateCount = useMemo(
     () => vehicles.filter((v) => v.plate_pending).length,
@@ -407,6 +422,7 @@ export default function VehiclesPage() {
   const resetPage = useCallback(() => setPage(1), []);
   const handleFilterClient = useCallback((next) => { setFilterClient(next); resetPage(); }, [resetPage]);
   const handleFilterCategory = useCallback((next) => { setFilterCategory(next); resetPage(); }, [resetPage]);
+  const handleFilterBodyType = useCallback((next) => { setFilterBodyType(next); resetPage(); }, [resetPage]);
   const handleFilterMotor = useCallback((next) => { setFilterMotor(next); resetPage(); }, [resetPage]);
   const handleFilterDatabase = useCallback((next) => { setFilterDatabase(next); resetPage(); }, [resetPage]);
   const handleFilterConnection = useCallback((next) => { setFilterConnection(next); resetPage(); }, [resetPage]);
@@ -681,6 +697,38 @@ export default function VehiclesPage() {
       );
     } finally {
       setSavingCategoryPlates((prev) => {
+        const next = new Set(prev);
+        next.delete(vehicle.plate);
+        return next;
+      });
+    }
+  };
+
+  // La carroceria y los ejes se derivan del nombre Fenix; lo que se guarda
+  // aqui es solo el override. "__derive__" lo borra y vuelve a derivar.
+  const handleChangeBodyType = async (vehicle, { bodyType, axleConfig }) => {
+    const nextBodyType = bodyType === "__derive__" ? null : bodyType;
+    const nextAxleConfig = axleConfig === "__derive__" ? null : axleConfig;
+    setSavingBodyTypePlates((prev) => new Set(prev).add(vehicle.plate));
+    try {
+      const result = await setVehicleBodyType(vehicle.plate, nextBodyType, nextAxleConfig);
+      const patch = {
+        body_type: result.body_type,
+        body_type_is_derived: result.body_type_is_derived,
+        axle_config: result.axle_config,
+        axle_config_is_derived: result.axle_config_is_derived
+      };
+      patchVehicle(vehicle.plate, patch);
+      setSelectedVehicle((prev) =>
+        prev && prev.plate === vehicle.plate ? { ...prev, ...patch } : prev
+      );
+    } catch (err) {
+      pushToast(
+        "error",
+        err instanceof Error ? err.message : "No fue posible actualizar la carroceria"
+      );
+    } finally {
+      setSavingBodyTypePlates((prev) => {
         const next = new Set(prev);
         next.delete(vehicle.plate);
         return next;
@@ -1036,7 +1084,7 @@ export default function VehiclesPage() {
                   />
                 </th>
                 {activeColumns.map((col) => {
-                  const isFilterColumn = [ "client_name", "category", "engine_name", "database_name", "db_connection" ].includes(col.key);
+                  const isFilterColumn = [ "client_name", "category", "body_type", "engine_name", "database_name", "db_connection" ].includes(col.key);
                   return (
                     <th key={col.key} style={col.width ? { width: col.width } : undefined}>
                       <div
@@ -1059,6 +1107,16 @@ export default function VehiclesPage() {
                             options={VEHICLE_CATEGORY_FILTER_OPTIONS}
                             selected={filterCategory}
                             onChange={handleFilterCategory}
+                            open={openFilterKey === col.key}
+                            onOpenChange={(isOpen) => setOpenFilterKey(isOpen ? col.key : null)}
+                          />
+                        )}
+                        {col.key === "body_type" && (
+                          <MultiSelectFilter
+                            label={col.label}
+                            options={VEHICLE_BODY_TYPE_FILTER_OPTIONS}
+                            selected={filterBodyType}
+                            onChange={handleFilterBodyType}
                             open={openFilterKey === col.key}
                             onOpenChange={(isOpen) => setOpenFilterKey(isOpen ? col.key : null)}
                           />
@@ -1138,6 +1196,7 @@ export default function VehiclesPage() {
                                   search,
                                   filterClient,
                                   filterCategory,
+                                  filterBodyType,
                                   filterMotor,
                                   filterDatabase,
                                   filterConnection,
@@ -1241,6 +1300,106 @@ export default function VehiclesPage() {
                                 onClick={() => setEditingCategoryPlate(vehicle.plate)}
                                 disabled={savingCategoryPlates.has(vehicle.plate)}
                                 title="Cambiar categoria"
+                              >
+                                {badge}
+                              </button>
+                            )}
+                          </td>
+                        );
+                      }
+                      if (col.key === "body_type") {
+                        const derived = vehicle.body_type_is_derived && vehicle.axle_config_is_derived;
+                        const isUnclassified = !vehicle.body_type && !vehicle.axle_config;
+                        const badge = (
+                          <span
+                            className={`body-type-badge${isUnclassified ? " is-unclassified" : ""}${derived ? " is-derived" : ""}`}
+                            title={
+                              isUnclassified
+                                ? "El nombre Fenix no indica la carroceria: asignala a mano"
+                                : derived
+                                  ? `Deducida del nombre Fenix: ${vehicle.nombre_vehiculo || "-"}`
+                                  : "Carroceria fijada a mano"
+                            }
+                          >
+                            {bodyTypeWithAxles(vehicle)}
+                          </span>
+                        );
+                        if (!canEditVehicles) {
+                          return (
+                            <td key={col.key} data-label={col.label}>
+                              {badge}
+                            </td>
+                          );
+                        }
+                        const isEditingBodyType = editingBodyTypePlate === vehicle.plate;
+                        const isSavingBodyType = savingBodyTypePlates.has(vehicle.plate);
+                        return (
+                          <td key={col.key} data-label={col.label}>
+                            {isEditingBodyType ? (
+                              <div className="body-type-cell-editor">
+                                <select
+                                  className="category-cell-select"
+                                  value={vehicle.body_type_is_derived ? "__derive__" : vehicle.body_type}
+                                  autoFocus
+                                  disabled={isSavingBodyType}
+                                  onChange={(event) =>
+                                    handleChangeBodyType(vehicle, {
+                                      bodyType: event.target.value,
+                                      axleConfig: vehicle.axle_config_is_derived
+                                        ? "__derive__"
+                                        : vehicle.axle_config
+                                    })
+                                  }
+                                  aria-label={`Carroceria de ${vehicle.plate}`}
+                                >
+                                  <option value="__derive__">
+                                    Deducir del nombre ({vehicle.body_type || "sin clasificar"})
+                                  </option>
+                                  {BODY_TYPES.map((option) => (
+                                    <option key={option} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                </select>
+                                <select
+                                  className="category-cell-select"
+                                  value={vehicle.axle_config_is_derived ? "__derive__" : vehicle.axle_config}
+                                  disabled={isSavingBodyType}
+                                  onChange={(event) =>
+                                    handleChangeBodyType(vehicle, {
+                                      bodyType: vehicle.body_type_is_derived
+                                        ? "__derive__"
+                                        : vehicle.body_type,
+                                      axleConfig: event.target.value
+                                    })
+                                  }
+                                  aria-label={`Configuracion de ejes de ${vehicle.plate}`}
+                                >
+                                  <option value="__derive__">
+                                    Deducir del nombre ({vehicle.axle_config || "sin ejes"})
+                                  </option>
+                                  {AXLE_CONFIGS.map((option) => (
+                                    <option key={option} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  className="button-secondary button-sm"
+                                  onClick={() => setEditingBodyTypePlate(null)}
+                                  disabled={isSavingBodyType}
+                                >
+                                  Listo
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="category-cell-trigger"
+                                onClick={() => setEditingBodyTypePlate(vehicle.plate)}
+                                disabled={isSavingBodyType}
+                                title="Cambiar carroceria"
                               >
                                 {badge}
                               </button>

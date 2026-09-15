@@ -70,6 +70,12 @@ from app.services.provider_registry import (
     public_provider_config,
     uses_access_url,
 )
+from app.services.vehicle_body_type import (
+    normalize_axle_config,
+    normalize_body_type,
+    resolve_axle_config,
+    resolve_body_type,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -107,6 +113,27 @@ def _normalize_category(value: str | None, *, default: str = "Ninguna") -> str:
             "Categoria invalida. Usa: " + ", ".join(CUSTOMER_CATEGORIES) + "."
         )
     return cleaned
+
+
+def _resolve_body_type_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """Carroceria y ejes efectivos de una fila de vehicle_motor_assignments.
+
+    Las columnas `body_type` / `axle_config` de la fila son solo el override
+    manual; el valor que se expone sale del nombre Fenix cuando no hay override.
+    """
+    nombre_vehiculo = row.get("nombre_vehiculo")
+    body_type, body_type_is_derived = resolve_body_type(
+        nombre_vehiculo, row.get("body_type")
+    )
+    axle_config, axle_config_is_derived = resolve_axle_config(
+        nombre_vehiculo, row.get("axle_config")
+    )
+    return {
+        "body_type": body_type,
+        "body_type_is_derived": body_type_is_derived,
+        "axle_config": axle_config,
+        "axle_config_is_derived": axle_config_is_derived,
+    }
 
 
 def _normalize_range_mode(value: str | None, *, default: str = "reglas") -> str:
@@ -808,6 +835,20 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             """
             ALTER TABLE vehicle_motor_assignments
             ADD COLUMN IF NOT EXISTS nombre_vehiculo TEXT NULL;
+            """
+        )
+        # Overrides manuales de carroceria/ejes. NULL = derivar de
+        # nombre_vehiculo (ver app/services/vehicle_body_type.py).
+        cur.execute(
+            """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS body_type TEXT NULL;
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE vehicle_motor_assignments
+            ADD COLUMN IF NOT EXISTS axle_config TEXT NULL;
             """
         )
         # Un vehiculo consultado por VIN puede no traer placa desde Fenix. Se
@@ -2173,6 +2214,8 @@ def list_vehicle_assignment_summaries(search: str | None = None) -> list[Vehicle
                     a.ano_modelo,
                     a.tipo_combustible,
                     a.nombre_vehiculo,
+                    a.body_type,
+                    a.axle_config,
                     a.engine_number,
                     m.engine_name,
                     c.name AS client_name,
@@ -2245,6 +2288,7 @@ def list_vehicle_assignment_summaries(search: str | None = None) -> list[Vehicle
             database_name=row.get("database_name"),
             access_url=row.get("access_url"),
         )
+        body_type_fields = _resolve_body_type_fields(row)
         summaries.append(
             VehicleAssignmentSummary(
                 plate=row["plate"],
@@ -2259,6 +2303,7 @@ def list_vehicle_assignment_summaries(search: str | None = None) -> list[Vehicle
                 ano_modelo=row.get("ano_modelo"),
                 tipo_combustible=row.get("tipo_combustible"),
                 nombre_vehiculo=row.get("nombre_vehiculo"),
+                **body_type_fields,
                 engine_name=row.get("engine_name"),
                 engine_number=row.get("engine_number"),
                 client_name=row.get("client_name"),
@@ -2346,6 +2391,8 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
                     a.ano_modelo,
                     a.tipo_combustible,
                     a.nombre_vehiculo,
+                    a.body_type,
+                    a.axle_config,
                     m.engine_name,
                     c.name AS client_name,
                     COALESCE(a.category, c.category, 'Ninguna') AS category,
@@ -2436,6 +2483,7 @@ def list_vehicle_assignments(search: str | None = None) -> list[VehicleAssignmen
         payload["database_connection_type"] = effective_provider if payload.get("database_name") else None
         payload["provider_vehicle_id"] = row.get("provider_vehicle_id")
         payload["is_provider_vehicle_id_manual"] = bool(row.get("provider_vehicle_id_is_manual"))
+        payload.update(_resolve_body_type_fields(row))
         records.append(
             VehicleAssignmentRecord(
                 **payload,
@@ -2478,6 +2526,8 @@ def get_vehicle_assignment(plate: str) -> VehicleAssignmentRecord | None:
                     a.ano_modelo,
                     a.tipo_combustible,
                     a.nombre_vehiculo,
+                    a.body_type,
+                    a.axle_config,
                     m.engine_name,
                     c.name AS client_name,
                     COALESCE(a.category, c.category, 'Ninguna') AS category,
@@ -2569,11 +2619,12 @@ def get_vehicle_assignment(plate: str) -> VehicleAssignmentRecord | None:
     payload["database_connection_type"] = effective_provider if payload.get("database_name") else None
     payload["provider_vehicle_id"] = row.get("provider_vehicle_id")
     payload["is_provider_vehicle_id_manual"] = bool(row.get("provider_vehicle_id_is_manual"))
+    payload.update(_resolve_body_type_fields(row))
     return VehicleAssignmentRecord(**payload, attachments=matching_attachments)
 
 
 def register_vehicle_assignment(
-    plate: str,
+    plate: str | None,
     technical_number: str,
     cpl: str | None = None,
     marketing_model_name: str | None = None,
@@ -2869,6 +2920,42 @@ def set_vehicle_category(plate: str, category: str | None) -> dict[str, Any]:
         "category_is_inherited": bool(effective["category_is_inherited"]),
         "customer_category": effective["customer_category"],
     }
+
+
+def set_vehicle_body_type(
+    plate: str,
+    body_type: str | None,
+    axle_config: str | None,
+) -> dict[str, Any]:
+    """Fija (o limpia) el override de carroceria y ejes de un vehiculo.
+
+    None o cadena vacia en cualquiera de los dos limpia ese override y el valor
+    vuelve a derivarse de `nombre_vehiculo`. Devuelve los valores efectivos.
+    """
+    normalized_plate = plate.strip().upper()
+    if not normalized_plate:
+        raise ValueError("La placa es obligatoria.")
+    body_type_override = normalize_body_type(body_type)
+    axle_config_override = normalize_axle_config(axle_config)
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE vehicle_motor_assignments
+                SET body_type = %s, axle_config = %s, updated_at = NOW()
+                WHERE plate = %s
+                RETURNING plate, nombre_vehiculo, body_type, axle_config;
+                """,
+                (body_type_override, axle_config_override, normalized_plate),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("El vehiculo no existe.")
+        conn.commit()
+
+    return {"plate": normalized_plate, **_resolve_body_type_fields(row)}
 
 
 def set_vehicle_vocacional(plate: str, vocacional: bool) -> dict[str, Any]:

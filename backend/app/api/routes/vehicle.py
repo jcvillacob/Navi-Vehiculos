@@ -15,6 +15,7 @@ from app.schemas.vehicle import (
     ManualVehicleAssignmentRequest,
     VehicleAssignmentRecord,
     VehicleAssignmentSummary,
+    VehicleBodyTypeUpdateRequest,
     VehicleCategoryUpdateRequest,
     VehicleDatabaseAssignmentRequest,
     VehicleGroupUpdateRequest,
@@ -37,6 +38,7 @@ from app.services.motor_catalog import (
     list_vehicle_assignment_summaries,
     register_vehicle_assignment,
     revalidate_vehicle_customer_geotab,
+    set_vehicle_body_type,
     set_vehicle_category,
     set_vehicle_plate,
     set_vehicle_vocacional,
@@ -286,6 +288,20 @@ def update_vehicle_category(
 ) -> dict:
     try:
         return set_vehicle_category(plate, payload.category)
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.put("/{plate}/body-type")
+def update_vehicle_body_type(
+    payload: VehicleBodyTypeUpdateRequest,
+    plate: str = Path(..., min_length=1, max_length=10, description="Placa del vehiculo"),
+    _user: dict = Depends(require_permission("vehicles.edit")),
+) -> dict:
+    """Fija el override de carroceria/ejes. Vacio = volver a derivar del nombre Fenix."""
+    try:
+        return set_vehicle_body_type(plate, payload.body_type, payload.axle_config)
     except ValueError as exc:
         status_code = 404 if "no existe" in str(exc).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
