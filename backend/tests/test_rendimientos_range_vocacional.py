@@ -104,6 +104,7 @@ def test_range_query_includes_vocacional_in_select_and_group_by(monkeypatch):
     assert "a.vocacional" in group_by_part
     # a.nombre_vehiculo sigue estando junto a vocacional en ambos lados.
     assert "a.nombre_vehiculo" in select_part and "a.nombre_vehiculo" in group_by_part
+    assert "ARRAY_AGG(DISTINCT mp.period_month ORDER BY mp.period_month) AS period_months" in select_part
 
 
 def test_single_month_query_still_includes_vocacional(monkeypatch):
@@ -142,6 +143,21 @@ def test_build_record_maps_vocacional_from_row():
 
     record = rendimientos._build_record(_range_row(vocacional=None))
     assert record.vocacional is False
+
+
+def test_build_record_exposes_all_months_in_a_range():
+    record = rendimientos._build_record(
+        _range_row(period_month="2026-01", period_months=["2026-03", "2026-01", "2026-03"])
+    )
+
+    assert record.period_month == "2026-01"
+    assert record.period_months == ["2026-01", "2026-03"]
+
+
+def test_build_record_falls_back_to_period_month_for_single_month_rows():
+    record = rendimientos._build_record(_range_row(period_month="2026-02"))
+
+    assert record.period_months == ["2026-02"]
 
 
 def test_range_rows_expose_vocacional_end_to_end(monkeypatch):

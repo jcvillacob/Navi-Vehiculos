@@ -255,7 +255,8 @@ Rango (`month_from ≠ month_to`), agregado por (cliente, database, placa):
 | `source_provider`, `provider_vehicle_id`, `job_id`, `last_error` | Del mes más reciente. |
 | `is_stale`, `is_adhoc` | `BOOL_OR`. |
 | `source_meta` | `{}` (no se agrega). |
-| `period_month` | `MIN`; la respuesta trae `month_from`/`month_to`. |
+| `period_month` | `MIN` por compatibilidad; la respuesta trae `month_from`/`month_to`. |
+| `period_months` | Lista ordenada de los meses que sí tienen corte para la placa dentro del rango. La UI y el Excel muestran esta lista para no ocultar el detalle temporal del acumulado. |
 
 Placas duplicadas (D12, `_flag_duplicate_plates`): si la misma placa aparece en más de una database dentro del resultado, cada fila recibe la flag `duplicate_plate` y el warning `Plausibilidad: la placa aparece en N databases; las métricas pueden duplicarse al sumar.` No se elimina ninguna fila.
 

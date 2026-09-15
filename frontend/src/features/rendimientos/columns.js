@@ -82,7 +82,12 @@ export const RENDIMIENTOS_COLUMNS = [
   {
     key: "period_month",
     label: "Mes",
-    getValue: (row) => formatMonthLabel(row.period_month),
+    getValue: (row) => {
+      const months = Array.isArray(row.period_months) && row.period_months.length > 0
+        ? row.period_months
+        : [row.period_month];
+      return months.map(formatMonthLabel).join(", ");
+    },
     getSortValue: (row) => row.period_month || "",
   },
   metric("odo_start", "Odo ini", KM_DIGITS),

@@ -404,6 +404,11 @@ def _build_record(row: dict[str, Any]) -> MonthlyPerformanceRecord:
         engine_name=row.get("engine_name"),
         category=row.get("category") or "Ninguna",
         period_month=str(row["period_month"]),
+        period_months=sorted({
+            str(month)
+            for month in (row.get("period_months") or [row["period_month"]])
+            if month
+        }),
         odo_start=row.get("odo_start"),
         odo_end=row.get("odo_end"),
         horo_start=row.get("horo_start"),
@@ -1902,6 +1907,7 @@ def list_monthly_performance(
                         mp.technical_number,
                         mp.engine_name,
                         MIN(mp.period_month) AS period_month,
+                        ARRAY_AGG(DISTINCT mp.period_month ORDER BY mp.period_month) AS period_months,
                         (ARRAY_AGG(mp.odo_start ORDER BY mp.period_month ASC)
                             FILTER (WHERE mp.odo_start IS NOT NULL))[1] AS odo_start,
                         (ARRAY_AGG(mp.odo_end ORDER BY mp.period_month DESC)

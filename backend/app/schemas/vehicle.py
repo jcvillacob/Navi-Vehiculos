@@ -964,6 +964,10 @@ class MonthlyPerformanceRecord(BaseModel):
         description="Categoria del vehiculo (Flota Administrada, Experiencia Superior, Ninguna)",
     )
     period_month: str = Field(..., description="Mes del corte en formato YYYY-MM")
+    period_months: list[str] = Field(
+        default_factory=list,
+        description="Meses incluidos en el acumulado, en formato YYYY-MM",
+    )
     odo_start: float | None = Field(default=None, description="Odometro inicial")
     odo_end: float | None = Field(default=None, description="Odometro final")
     horo_start: float | None = Field(default=None, description="Horometro inicial")
