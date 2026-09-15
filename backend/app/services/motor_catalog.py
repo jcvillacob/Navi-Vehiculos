@@ -3656,6 +3656,83 @@ _CREDENTIAL_COLUMNS = """
 """
 
 
+def _find_sibling_credential(
+    conn: psycopg.Connection,
+    database_id: int,
+    username: str,
+    *,
+    exclude_credential_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Busca ese usuario en el pool de la db fisica, saltando la fila propia.
+
+    Todas las filas hermanas comparten un unico pool en la rotacion, asi que
+    repetir el mismo usuario en dos filas no agrega un acceso nuevo: solo hace
+    que la LRU elija esa cuenta el doble de veces y consuma antes su cupo de
+    sesiones en MyGeotab. El UNIQUE de la tabla es por fila y no puede ver el
+    database_name, que vive en otra tabla, asi que la unicidad efectiva se
+    verifica aqui.
+    """
+    normalized_username = (username or "").strip()
+    if not normalized_username:
+        return None
+    sibling_ids = [sid for sid in _sibling_database_ids(conn, database_id) if sid != database_id]
+    if not sibling_ids:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT k.id, k.customer_database_id, c.name AS owner_customer_name
+            FROM customer_database_credentials k
+            INNER JOIN customer_databases cd ON cd.id = k.customer_database_id
+            INNER JOIN customers c ON c.id = cd.customer_id
+            WHERE k.customer_database_id = ANY(%s)
+              AND LOWER(k.username) = LOWER(%s)
+              AND (%s::bigint IS NULL OR k.id <> %s)
+            ORDER BY k.id
+            LIMIT 1;
+            """,
+            (sibling_ids, normalized_username, exclude_credential_id, exclude_credential_id),
+        )
+        return cur.fetchone()
+
+
+def _credential_group_ids(conn: psycopg.Connection, credential_id: int) -> list[int]:
+    """Todas las filas que representan la misma credencial de la database fisica.
+
+    Una credencial es (database de Geotab, usuario). Si el mismo usuario quedo
+    guardado bajo varios clientes de esa database, esas filas son la misma
+    credencial y cualquier escritura tiene que alcanzarlas a todas: si no,
+    cambiar la clave desde un cliente dejaria a la rotacion usando la vieja
+    desde otro.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT customer_database_id, username
+            FROM customer_database_credentials
+            WHERE id = %s;
+            """,
+            (credential_id,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise ValueError("La credencial no existe.")
+
+    sibling_ids = _sibling_database_ids(conn, int(row["customer_database_id"]))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id
+            FROM customer_database_credentials
+            WHERE customer_database_id = ANY(%s)
+              AND LOWER(username) = LOWER(%s)
+            ORDER BY id;
+            """,
+            (sibling_ids, row["username"]),
+        )
+        return [int(item["id"]) for item in cur.fetchall()]
+
+
 def _sync_primary_credential(
     conn: psycopg.Connection, database_id: int, username: str, password: str
 ) -> None:
@@ -3663,6 +3740,30 @@ def _sync_primary_credential(
     normalized_username = (username or "").strip()
     normalized_password = (password or "").strip()
     if not normalized_username or not normalized_password:
+        return
+    duplicate = _find_sibling_credential(conn, database_id, normalized_username)
+    if duplicate is not None:
+        # Ese usuario ya esta en el pool a traves de una fila hermana. Insertarlo
+        # otra vez solo sesgaria la rotacion hacia esa cuenta. Se actualiza la
+        # copia existente en vez de saltarla, para que rotar la contrasena desde
+        # cualquier cliente siga surtiendo efecto sobre el pool.
+        _logger.info(
+            "Credencial '%s' ya existe en el pool de la database (fila %s, cliente %s); "
+            "se actualiza esa copia en vez de duplicarla para la fila %s.",
+            normalized_username,
+            duplicate["customer_database_id"],
+            duplicate["owner_customer_name"],
+            database_id,
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE customer_database_credentials
+                SET password = %s, is_active = TRUE, updated_at = NOW()
+                WHERE id = %s;
+                """,
+                (encrypt_secret(normalized_password), duplicate["id"]),
+            )
         return
     with conn.cursor() as cur:
         cur.execute(
@@ -3680,20 +3781,68 @@ def _sync_primary_credential(
 
 
 def list_database_credentials(database_id: int) -> list[CustomerDatabaseCredentialRecord]:
+    """Lista las credenciales de la database fisica, una por usuario.
+
+    La credencial pertenece a la database de Geotab, no al cliente: todos los
+    clientes que comparten ``database_name`` usan las mismas cuentas. Antes esta
+    consulta filtraba por ``customer_database_id`` y el panel mostraba solo las
+    cargadas contra el cliente abierto, aunque la rotacion usara todo el pool.
+
+    Las filas repetidas del mismo usuario en clientes distintos son un artefacto
+    de que la tabla cuelga de ``customer_database_id``. Se colapsan en una sola
+    entrada: el uso y el estado se agregan sobre todas las copias y las
+    escrituras se propagan al grupo completo.
+    """
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM customer_databases WHERE id = %s;", (database_id,))
             if cur.fetchone() is None:
                 raise ValueError("La database no existe.")
+
+        sibling_ids = _sibling_database_ids(conn, database_id)
+        with conn.cursor() as cur:
             cur.execute(
-                f"""
-                SELECT {_CREDENTIAL_COLUMNS}
-                FROM customer_database_credentials
-                WHERE customer_database_id = %s
-                ORDER BY is_active DESC, username ASC;
+                """
+                WITH pool AS (
+                    SELECT *, LOWER(username) AS username_key
+                    FROM customer_database_credentials
+                    WHERE customer_database_id = ANY(%s)
+                ),
+                agg AS (
+                    SELECT
+                        username_key,
+                        BOOL_OR(is_active) AS is_active,
+                        MAX(last_used_at) AS last_used_at,
+                        MAX(last_auth_error_at) AS last_auth_error_at,
+                        MIN(created_at) AS created_at,
+                        MAX(updated_at) AS updated_at
+                    FROM pool
+                    GROUP BY username_key
+                ),
+                rep AS (
+                    SELECT DISTINCT ON (username_key)
+                        username_key, id, customer_database_id, username, label
+                    FROM pool
+                    -- La copia de la fila abierta va primero, para que editar
+                    -- desde ese cliente escriba sobre su propio registro.
+                    ORDER BY username_key, (customer_database_id = %s) DESC, id
+                )
+                SELECT
+                    rep.id,
+                    rep.customer_database_id,
+                    rep.username,
+                    rep.label,
+                    agg.is_active,
+                    agg.last_used_at,
+                    agg.last_auth_error_at,
+                    agg.created_at,
+                    agg.updated_at
+                FROM rep
+                INNER JOIN agg ON agg.username_key = rep.username_key
+                ORDER BY agg.is_active DESC, rep.username ASC;
                 """,
-                (database_id,),
+                (sibling_ids, database_id),
             )
             rows = cur.fetchall()
     return [CustomerDatabaseCredentialRecord(**row) for row in rows]
@@ -3713,6 +3862,12 @@ def create_database_credential(
             cur.execute("SELECT id FROM customer_databases WHERE id = %s;", (database_id,))
             if cur.fetchone() is None:
                 raise ValueError("La database no existe.")
+        duplicate = _find_sibling_credential(conn, database_id, normalized_username)
+        if duplicate is not None:
+            raise ValueError(
+                f"El usuario '{normalized_username}' ya es una credencial de esta "
+                "database. Para cambiarle la contrasena, editala en la lista."
+            )
         try:
             with conn.cursor() as cur:
                 cur.execute(
@@ -3783,16 +3938,46 @@ def update_database_credential(
         if payload.is_active is False:
             _ensure_not_last_active_credential(conn, credential_id)
 
+        if payload.username is not None:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT customer_database_id FROM customer_database_credentials WHERE id = %s;",
+                    (credential_id,),
+                )
+                owner_row = cur.fetchone()
+            if owner_row is None:
+                raise ValueError("La credencial no existe.")
+            duplicate = _find_sibling_credential(
+                conn,
+                int(owner_row["customer_database_id"]),
+                payload.username.strip(),
+                exclude_credential_id=credential_id,
+            )
+            if duplicate is not None:
+                raise ValueError(
+                    f"El usuario '{payload.username.strip()}' ya es una credencial "
+                    "de esta database."
+                )
+
+        # La credencial puede estar guardada en varias filas hermanas: el cambio
+        # tiene que alcanzarlas a todas para que la rotacion no siga usando el
+        # valor viejo desde otra de las copias.
+        group_ids = _credential_group_ids(conn, credential_id)
+
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
                     UPDATE customer_database_credentials
                     SET {", ".join(set_clauses)}, updated_at = NOW()
-                    WHERE id = %s
-                    RETURNING {_CREDENTIAL_COLUMNS};
+                    WHERE id = ANY(%s);
                     """,
-                    (*params, credential_id),
+                    (*params, group_ids),
+                )
+                cur.execute(
+                    f"SELECT {_CREDENTIAL_COLUMNS} FROM customer_database_credentials "
+                    "WHERE id = %s;",
+                    (credential_id,),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -3820,19 +4005,22 @@ def _ensure_not_last_active_credential(conn: psycopg.Connection, credential_id: 
             raise ValueError("La credencial no existe.")
         if not credential_row["is_active"]:
             return
-        # El pool abarca la db fisica completa: si otra fila hermana todavia
-        # tiene credenciales activas, esta se puede eliminar sin dejar la
-        # database sin acceso.
+        # El pool abarca la db fisica completa: si queda otra credencial activa
+        # en cualquiera de las filas hermanas, esta se puede eliminar sin dejar
+        # la database sin acceso. Se descuenta el grupo entero y no solo esta
+        # fila, porque las copias del mismo usuario se borran juntas y no
+        # cuentan como un acceso que sobreviva.
         sibling_ids = _sibling_database_ids(conn, int(credential_row["customer_database_id"]))
+        group_ids = _credential_group_ids(conn, credential_id)
         cur.execute(
             """
             SELECT COUNT(*) AS active_count
             FROM customer_database_credentials
             WHERE customer_database_id = ANY(%s)
               AND is_active
-              AND id <> %s;
+              AND NOT (id = ANY(%s));
             """,
-            (sibling_ids, credential_id),
+            (sibling_ids, group_ids),
         )
         remaining = cur.fetchone()
     if int(remaining["active_count"]) == 0:
@@ -3845,14 +4033,17 @@ def delete_database_credential(credential_id: int) -> None:
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         _ensure_not_last_active_credential(conn, credential_id)
+        # Borrar solo la fila abierta dejaria la credencial viva en las copias
+        # hermanas y la rotacion la seguiria usando.
+        group_ids = _credential_group_ids(conn, credential_id)
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM customer_database_credentials WHERE id = %s RETURNING id;",
-                (credential_id,),
+                "DELETE FROM customer_database_credentials WHERE id = ANY(%s) RETURNING id;",
+                (group_ids,),
             )
-            row = cur.fetchone()
+            rows = cur.fetchall()
         conn.commit()
-    if row is None:
+    if not rows:
         raise ValueError("La credencial no existe.")
 
 

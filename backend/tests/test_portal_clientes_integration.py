@@ -789,11 +789,19 @@ def test_credential_rotation_spans_sibling_databases(geotab_db, sibling_geotab_d
 
 
 def test_can_remove_credential_if_sibling_has_active_one(geotab_db, sibling_geotab_db):
+    # El listado devuelve las credenciales de la database fisica, sin importar
+    # bajo que cliente quedaron guardadas: la propia y la de la fila hermana.
     credentials = motor_catalog.list_database_credentials(geotab_db["database_id"])
-    assert len(credentials) == 1
-    # Es la unica de SU fila, pero la hermana tiene otra activa → se permite.
-    motor_catalog.delete_database_credential(credentials[0].id)
-    assert motor_catalog.list_database_credentials(geotab_db["database_id"]) == []
+    assert {credential.username for credential in credentials} == {
+        "primario@navi.co",
+        "vigia@navi.co",
+    }
+
+    propia = next(c for c in credentials if c.username == "primario@navi.co")
+    motor_catalog.delete_database_credential(propia.id)
+
+    remaining = motor_catalog.list_database_credentials(geotab_db["database_id"])
+    assert [credential.username for credential in remaining] == ["vigia@navi.co"]
 
 
 # ── Endpoint /integration ─────────────────────────────────────────────
