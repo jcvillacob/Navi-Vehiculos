@@ -26,3 +26,6 @@ dist/
 
 # Docker volumes/local data
 postgres_data/
+
+# Investigaciones internas: no se versionan (info de tenants y clientes)
+docs/investigacion-*.md
