@@ -43,6 +43,23 @@ def _is_vin(value: str) -> bool:
     return bool(_VIN_PATTERN.fullmatch(value.strip().upper()))
 
 
+def _vins_match(local_vin: str | None, cummins_vin: str | None) -> bool:
+    if not local_vin or not cummins_vin:
+        return True
+    norm_local = local_vin.strip().upper()
+    norm_cummins = cummins_vin.strip().upper()
+    if not norm_local or not norm_cummins:
+        return True
+    if norm_local == norm_cummins:
+        return True
+    # If one is a suffix of the other (e.g. chassis serial 270396 vs full VIN 3BKDL00X8AF270396)
+    if len(norm_local) >= 5 and norm_cummins.endswith(norm_local):
+        return True
+    if len(norm_cummins) >= 5 and norm_local.endswith(norm_cummins):
+        return True
+    return False
+
+
 def _normalize_fenix_details(row: dict | None) -> dict[str, str | None]:
     if not row:
         return {}
@@ -220,7 +237,7 @@ def _lookup_cummins_only(plate: str) -> VehicleLookupResponse:
         quickserve_cfg = load_quickserve_config()
         cummins_details = get_engine_dataplate(engine_number, quickserve_cfg)
         cummins_vin = str(cummins_details.get("VIN") or "").strip().upper() or None
-        if vin and cummins_vin and cummins_vin != vin:
+        if vin and cummins_vin and not _vins_match(vin, cummins_vin):
             warnings.append(
                 "QuickServe devolvio un VIN distinto al almacenado."
             )
@@ -247,6 +264,8 @@ def _lookup_cummins_only(plate: str) -> VehicleLookupResponse:
                 status="partial",
                 message="VIN mismatch entre datos locales y Cummins.",
             )
+        if cummins_vin and _is_vin(cummins_vin) and (not vin or not _is_vin(vin)):
+            vin = cummins_vin
         technical_config = extract_technical_engine_configuration(cummins_details)
         cpl = extract_cpl(cummins_details)
         marketing_model_name = extract_marketing_model_name(cummins_details)
@@ -506,7 +525,7 @@ def lookup_vehicle(
                 "message": "Encontrado en Cummins/QuickServe" if cummins_ok else "Motor no encontrado en Cummins/QuickServe",
             })
         cummins_vin = str(cummins_details.get("VIN") or "").strip().upper() or None
-        if vin and cummins_vin and cummins_vin != vin:
+        if vin and cummins_vin and not _vins_match(vin, cummins_vin):
             warnings.append(
                 "QuickServe devolvio un VIN distinto al de Fenix/Geotab. No se registraron datos de Cummins para evitar una asignacion incorrecta."
             )
@@ -556,6 +575,8 @@ def lookup_vehicle(
                 status="partial",
                 message="Consulta completada con advertencias: el dataplate de Cummins no coincide con el VIN del vehiculo.",
             )
+        if cummins_vin and _is_vin(cummins_vin) and (not vin or not _is_vin(vin)):
+            vin = cummins_vin
         technical_config = extract_technical_engine_configuration(cummins_details)
         cpl = extract_cpl(cummins_details)
         marketing_model_name = extract_marketing_model_name(cummins_details)
