@@ -16,8 +16,10 @@ from cryptography.fernet import Fernet
 from app.core import crypto
 from app.core.crypto import (
     _ENV_KEY_NAME,
+    _TRANSPORT_ENV_KEY_NAME,
     _reset_for_tests,
     decrypt_secret,
+    encrypt_for_transport,
     encrypt_secret,
     is_encrypted,
 )
@@ -109,23 +111,31 @@ def test_decrypt_legacy_plain_with_key(monkeypatch, fernet_key):
     assert not is_encrypted(legacy)
 
 
-def test_decrypt_token_with_wrong_key_returns_raw(
+def test_decrypt_token_with_wrong_key_returns_none(
     monkeypatch, fernet_key, other_fernet_key
 ):
+    """Clave equivocada da None, NO el token crudo.
+
+    Devolverlo lo hacia pasar por la contrasena en claro: el snapshot de
+    integracion lo habria publicado como `password` y el consumidor lo habria
+    cifrado por segunda vez, dejando al ETL sin poder autenticar contra geotab
+    sin que nada lo delatara.
+    """
     monkeypatch.setenv(_ENV_KEY_NAME, fernet_key)
     token = encrypt_secret("sensitive")
 
     monkeypatch.setenv(_ENV_KEY_NAME, other_fernet_key)
     _reset_for_tests()
 
-    with _capture_crypto_logs(logging.WARNING) as records:
+    with _capture_crypto_logs(logging.ERROR) as records:
         result = decrypt_secret(token)
 
-    assert result == token
+    assert result is None
+    assert result != token
     assert any(
         "Token Fernet invalido" in record.getMessage()
         for record in records
-        if record.levelno == logging.WARNING
+        if record.levelno == logging.ERROR
     )
 
 
@@ -157,3 +167,73 @@ def test_is_encrypted_helper():
 def test_encrypt_normalizes_none_and_empty():
     assert encrypt_secret(None) is None
     assert encrypt_secret("") == ""
+
+
+# ---------------------------------------------------------------------------
+# Clave de transporte: la que cifra la contrasena que sale en el snapshot
+# ---------------------------------------------------------------------------
+def test_transporte_cifra_con_su_propia_clave_no_con_la_de_reposo(
+    monkeypatch, fernet_key, other_fernet_key
+):
+    """El token publicado lo abre el consumidor, no esta aplicacion.
+
+    Es lo que mantiene los dos reposos independientes: rotar la clave del
+    consumidor no obliga a re-cifrar esta base.
+    """
+    monkeypatch.setenv(_ENV_KEY_NAME, fernet_key)
+    monkeypatch.setenv(_TRANSPORT_ENV_KEY_NAME, other_fernet_key)
+    _reset_for_tests()
+
+    token = encrypt_for_transport("sensitive")
+
+    assert token is not None
+    assert Fernet(other_fernet_key.encode()).decrypt(token.encode()) == b"sensitive"
+    with pytest.raises(Exception):
+        Fernet(fernet_key.encode()).decrypt(token.encode())
+
+
+def test_transporte_sin_clave_devuelve_none_nunca_el_claro(monkeypatch, fernet_key):
+    """Fail-closed: sin clave de transporte no se publica nada.
+
+    No hay passthrough como en el reposo, porque aqui su efecto seria publicar
+    la contrasena en claro hacia afuera.
+    """
+    monkeypatch.setenv(_ENV_KEY_NAME, fernet_key)
+    monkeypatch.delenv(_TRANSPORT_ENV_KEY_NAME, raising=False)
+    _reset_for_tests()
+
+    with _capture_crypto_logs(logging.ERROR) as records:
+        result = encrypt_for_transport("sensitive")
+
+    assert result is None
+    assert any(
+        _TRANSPORT_ENV_KEY_NAME in record.getMessage()
+        for record in records
+        if record.levelno == logging.ERROR
+    )
+
+
+def test_transporte_no_es_determinista_pero_siempre_abre(monkeypatch, fernet_key, other_fernet_key):
+    """Dos llamadas dan tokens distintos y ambos descifran al mismo secreto.
+
+    Fernet lleva IV y timestamp propios, asi que comparar tokens entre syncs no
+    sirve para detectar si la contrasena cambio.
+    """
+    monkeypatch.setenv(_ENV_KEY_NAME, fernet_key)
+    monkeypatch.setenv(_TRANSPORT_ENV_KEY_NAME, other_fernet_key)
+    _reset_for_tests()
+
+    a, b = encrypt_for_transport("sensitive"), encrypt_for_transport("sensitive")
+    f = Fernet(other_fernet_key.encode())
+
+    assert a != b
+    assert f.decrypt(a.encode()) == f.decrypt(b.encode()) == b"sensitive"
+
+
+def test_transporte_ignora_vacios(monkeypatch, fernet_key, other_fernet_key):
+    monkeypatch.setenv(_ENV_KEY_NAME, fernet_key)
+    monkeypatch.setenv(_TRANSPORT_ENV_KEY_NAME, other_fernet_key)
+    _reset_for_tests()
+
+    assert encrypt_for_transport(None) is None
+    assert encrypt_for_transport("") is None

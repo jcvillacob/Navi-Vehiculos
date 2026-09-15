@@ -15,7 +15,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from app.core.crypto import decrypt_secret
+from app.core.crypto import decrypt_secret, encrypt_for_transport, is_encrypted
 from app.core.db import db_conn
 from app.services.availability_store import (
     _SOURCE_CLOUDFLEET,
@@ -34,6 +34,31 @@ from app.services.taller_ordenes import (
 _logger = logging.getLogger(__name__)
 
 _PASSWORD_MASK = "********"
+
+
+def _encrypted_password(stored: str | None) -> str | None:
+    """Devuelve el secreto cifrado con la clave de TRANSPORTE, o None.
+
+    El valor en reposo esta cifrado con la clave propia de esta aplicacion y el
+    consumidor no la tiene, asi que se descifra aqui y se vuelve a cifrar con
+    `SNAPSHOT_TRANSPORT_FERNET_KEY`. Ese paso extra es lo que mantiene el
+    reposo independiente: rotar la clave del consumidor es cambiar una
+    variable, sin re-cifrar esta tabla.
+
+    Una fila legacy en texto plano se cifra directamente para el transporte: el
+    contrato promete un token, y publicar el claro bajo ese nombre haria que el
+    consumidor lo guardara sin cifrar.
+
+    Fail-closed en los dos fallos posibles —el valor en reposo no descifra, o
+    falta la clave de transporte—: devuelve None, el snapshot sale sin
+    `password_enc` y el consumidor conserva lo que ya tenia.
+    """
+    if not stored:
+        return None
+    plaintext = decrypt_secret(str(stored)) if is_encrypted(stored) else str(stored)
+    if not plaintext:
+        return None
+    return encrypt_for_transport(plaintext)
 
 
 def _parse_since(since: str | None) -> datetime | None:
@@ -204,8 +229,18 @@ def _export_customers(
             {
                 "id": int(row["id"]),
                 "username": row["username"],
-                "password": (
-                    decrypt_secret(row["password"]) if include_credentials else _PASSWORD_MASK
+                # `password` NUNCA lleva el secreto en claro. Va en
+                # `password_enc`, cifrado con la clave de TRANSPORTE, que es la
+                # de reposo del consumidor: por eso puede almacenarlo tal cual
+                # sin descifrarlo. Dos motivos: el snapshot atraviesa un CDN
+                # que termina TLS y veria la contrasena, y un consumidor que no
+                # entienda `password_enc` lee la mascara y deja intacto lo que
+                # ya tiene en vez de guardar algo equivocado.
+                "password": _PASSWORD_MASK,
+                **(
+                    {"password_enc": _encrypted_password(row["password"])}
+                    if include_credentials
+                    else {}
                 ),
                 "label": row.get("label"),
                 "is_active": bool(row["is_active"]),

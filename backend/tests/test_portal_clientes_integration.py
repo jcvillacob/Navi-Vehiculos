@@ -11,7 +11,10 @@ import os
 
 import psycopg
 import pytest
+from cryptography.fernet import Fernet
 from psycopg.rows import dict_row
+
+from app.core import crypto
 
 from app.schemas.vehicle import (
     CustomerDatabaseCredentialCreateRequest,
@@ -839,14 +842,57 @@ async def test_snapshot_shape_and_credential_masking(client, vehicle, monkeypatc
     # vocacional siempre presente y booleano (default false).
     assert vehicle_row["vocacional"] is False
 
-    response = await client.get(
-        "/api/v1/integration/snapshot",
-        headers=headers,
-        params={"include_credentials": "true"},
-    )
-    payload = response.json()
-    customer = next(c for c in payload["customers"] if c["name"] == "Cliente Portal")
-    assert customer["databases"][0]["credentials"][0]["password"] == "secret1"
+    # Con include_credentials el secreto NO viaja en claro: `password` sigue
+    # enmascarado y el valor va en `password_enc`, cifrado con la clave de
+    # TRANSPORTE, que es la de reposo del consumidor. El snapshot atraviesa un
+    # CDN que termina TLS y ahi el claro seria legible por el intermediario.
+    transport_key = Fernet.generate_key().decode()
+    monkeypatch.setenv("SNAPSHOT_TRANSPORT_FERNET_KEY", transport_key)
+    crypto._reset_for_tests()
+    try:
+        response = await client.get(
+            "/api/v1/integration/snapshot",
+            headers=headers,
+            params={"include_credentials": "true"},
+        )
+        payload = response.json()
+        customer = next(c for c in payload["customers"] if c["name"] == "Cliente Portal")
+        credential = customer["databases"][0]["credentials"][0]
+
+        assert credential["password"] == "********"
+        assert Fernet(transport_key.encode()).decrypt(credential["password_enc"].encode()) == (
+            b"secret1"
+        )
+    finally:
+        crypto._reset_for_tests()
+
+
+async def test_snapshot_sin_clave_de_transporte_no_publica_el_secreto(
+    client, vehicle, monkeypatch
+):
+    """Fail-closed: sin clave de transporte el snapshot sale sin `password_enc`.
+
+    Nunca cae a publicar el claro. El consumidor lee la mascara, entra en su
+    rama de "sin password real" y conserva lo que ya tenia.
+    """
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    monkeypatch.delenv("SNAPSHOT_TRANSPORT_FERNET_KEY", raising=False)
+    crypto._reset_for_tests()
+    try:
+        response = await client.get(
+            "/api/v1/integration/snapshot",
+            headers={"X-API-Key": "clave-portal"},
+            params={"include_credentials": "true"},
+        )
+        payload = response.json()
+        customer = next(c for c in payload["customers"] if c["name"] == "Cliente Portal")
+        credential = customer["databases"][0]["credentials"][0]
+
+        assert credential["password"] == "********"
+        assert credential.get("password_enc") is None
+        assert "secret1" not in response.text
+    finally:
+        crypto._reset_for_tests()
 
 
 async def test_snapshot_incremental_since(client, vehicle, monkeypatch):

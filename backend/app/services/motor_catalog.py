@@ -3925,10 +3925,21 @@ def get_geotab_config_for_database(
 
     database_name = str(db_row["database_name"]).strip()
     if credential_row is not None:
+        # `decrypt_secret` devuelve None cuando el token no descifra (clave
+        # equivocada o dato corrompido). Sin esta guarda el `str()` producia la
+        # cadena "None" y se intentaba autenticar con ella contra geotab, que
+        # responde credenciales invalidas: el sintoma apuntaba a la credencial
+        # y no a la clave de cifrado.
+        credential_password = decrypt_secret(credential_row["password"])
+        if credential_password is None:
+            raise ValueError(
+                "No fue posible descifrar la contrasena de la credencial "
+                f"{credential_row['id']}: revisar INTEGRATION_FERNET_KEY."
+            )
         return (
             GeotabConfig(
                 username=str(credential_row["username"]).strip(),
-                password=str(decrypt_secret(credential_row["password"])).strip(),
+                password=str(credential_password).strip(),
                 database=database_name,
             ),
             int(credential_row["id"]),
