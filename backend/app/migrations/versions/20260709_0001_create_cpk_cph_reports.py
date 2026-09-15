@@ -49,10 +49,19 @@ def upgrade() -> None:
             approved_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
             approved_at TIMESTAMPTZ NULL,
             reopened_from_version INTEGER NULL,
+            sent_to_commercial BOOLEAN NOT NULL DEFAULT FALSE,
+            sent_at TIMESTAMPTZ NULL,
+            sent_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (customer_id, period_month)
         );
+        ALTER TABLE cpk_cph_reports
+            ADD COLUMN IF NOT EXISTS sent_to_commercial BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE cpk_cph_reports
+            ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ NULL;
+        ALTER TABLE cpk_cph_reports
+            ADD COLUMN IF NOT EXISTS sent_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL;
         CREATE TABLE IF NOT EXISTS cpk_cph_report_versions (
             id BIGSERIAL PRIMARY KEY,
             report_id BIGINT NOT NULL REFERENCES cpk_cph_reports(id) ON DELETE CASCADE,

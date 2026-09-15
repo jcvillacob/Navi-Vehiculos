@@ -84,6 +84,8 @@ class CpkCphReportSummary(BaseModel):
     period_month: str
     status: str
     row_count: int = 0
+    sent_to_commercial: bool = False
+    sent_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -100,6 +102,10 @@ class CpkCphReportSaveRequest(BaseModel):
     month: str = Field(..., pattern=r"^\d{4}-\d{2}$")
     customer_id: int = Field(..., gt=0)
     rows: list[CpkCphPreviewRow] = Field(default_factory=list)
+
+
+class CpkCphReportSentPatchRequest(BaseModel):
+    sent: bool
 
 
 class CpkCphRowPatchRequest(BaseModel):

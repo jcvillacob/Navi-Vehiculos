@@ -63,6 +63,9 @@ def _ensure_cpk_tables(conn: psycopg.Connection) -> None:
                 approved_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
                 approved_at TIMESTAMPTZ NULL,
                 reopened_from_version INTEGER NULL,
+                sent_to_commercial BOOLEAN NOT NULL DEFAULT FALSE,
+                sent_at TIMESTAMPTZ NULL,
+                sent_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 UNIQUE (customer_id, period_month)
@@ -126,6 +129,9 @@ def _ensure_cpk_tables(conn: psycopg.Connection) -> None:
         cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS hours_ecm_approved DOUBLE PRECISION NULL;")
         cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS hour_difference DOUBLE PRECISION NULL;")
         cur.execute("ALTER TABLE cpk_cph_report_rows ADD COLUMN IF NOT EXISTS hour_difference_pct DOUBLE PRECISION NULL;")
+        cur.execute("ALTER TABLE cpk_cph_reports ADD COLUMN IF NOT EXISTS sent_to_commercial BOOLEAN NOT NULL DEFAULT FALSE;")
+        cur.execute("ALTER TABLE cpk_cph_reports ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ NULL;")
+        cur.execute("ALTER TABLE cpk_cph_reports ADD COLUMN IF NOT EXISTS sent_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL;")
         cur.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_cpk_cph_report_rows_report
@@ -144,6 +150,17 @@ def _ensure_cpk_tables(conn: psycopg.Connection) -> None:
 
 def _normalize_plate(value: str | None) -> str:
     return "".join(ch for ch in str(value or "").strip().upper() if ch.isalnum())
+
+
+def _duplicate_plates(rows: list[CpkCphPreviewRow]) -> list[str]:
+    seen: set[str] = set()
+    duplicated: set[str] = set()
+    for row in rows:
+        plate = _normalize_plate(row.plate)
+        if plate in seen:
+            duplicated.add(plate)
+        seen.add(plate)
+    return sorted(duplicated)
 
 
 def _customer_name(conn: psycopg.Connection, customer_id: int) -> str:
@@ -593,6 +610,8 @@ def _summary_from_row(row: dict[str, Any]) -> CpkCphReportSummary:
         period_month=str(row["period_month"]),
         status=str(row["status"]),
         row_count=int(row.get("row_count") or 0),
+        sent_to_commercial=bool(row.get("sent_to_commercial", False)),
+        sent_at=row.get("sent_at"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -809,6 +828,13 @@ def preview_report(payload: CpkCphPreviewRequest) -> CpkCphPreviewResponse:
 
 
 def save_report(payload: CpkCphReportSaveRequest, *, user_id: int | None) -> CpkCphReportDetail:
+    duplicate_plates = _duplicate_plates(payload.rows)
+    if duplicate_plates:
+        raise CpkCphConflict(
+            "No se puede guardar CPK/CPH con placas duplicadas: "
+            + ", ".join(duplicate_plates)
+            + ". Revise la asignacion de base de datos de esas placas."
+        )
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_cpk_tables(conn)
         _customer_name(conn, payload.customer_id)
@@ -892,6 +918,30 @@ def delete_report(report_id: int) -> None:
             if cur.fetchone() is None:
                 raise CpkCphNotFound("Reporte CPK/CPH no encontrado.")
         conn.commit()
+
+
+def mark_report_sent(report_id: int, *, sent: bool, user_id: int | None) -> CpkCphReportDetail:
+    """Marca o desmarca un reporte como enviado al comercial."""
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_cpk_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE cpk_cph_reports
+                SET sent_to_commercial = %(sent)s,
+                    sent_at = CASE WHEN %(sent)s THEN NOW() ELSE NULL END,
+                    sent_by = CASE WHEN %(sent)s THEN %(user_id)s ELSE NULL END,
+                    updated_by = %(user_id)s,
+                    updated_at = NOW()
+                WHERE id = %(report_id)s
+                RETURNING id;
+                """,
+                {"sent": sent, "user_id": user_id, "report_id": report_id},
+            )
+            if cur.fetchone() is None:
+                raise CpkCphNotFound("Reporte CPK/CPH no encontrado.")
+        conn.commit()
+        return get_report(report_id, conn=conn)
 
 
 def update_row(report_id: int, row_id: int, payload: CpkCphRowPatchRequest, *, user_id: int | None) -> CpkCphReportDetail:

@@ -329,6 +329,15 @@ export async function fetchCpkCphReport(reportId) {
   return parseJsonOrThrow(response, "Error cargando CPK/CPH");
 }
 
+export async function markCpkCphReportSent(reportId, sent) {
+  const response = await fetchWithAuth(buildUrl(`/api/v1/cpk-cph/reports/${reportId}/sent`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sent }),
+  });
+  return parseJsonOrThrow(response, "Error actualizando el estado de envío del CPK/CPH");
+}
+
 export async function patchCpkCphReportRow(reportId, rowId, payload) {
   const response = await fetchWithAuth(buildUrl(`/api/v1/cpk-cph/reports/${reportId}/rows/${rowId}`), {
     method: "PATCH",

@@ -9,6 +9,7 @@ from app.schemas.cpk_cph import (
     CpkCphReportDetail,
     CpkCphReportListResponse,
     CpkCphReportSaveRequest,
+    CpkCphReportSentPatchRequest,
     CpkCphRowPatchRequest,
 )
 from app.services.cpk_cph import (
@@ -19,6 +20,7 @@ from app.services.cpk_cph import (
     list_reports,
     preview_report,
     save_report,
+    mark_report_sent,
     update_row,
 )
 
@@ -72,6 +74,18 @@ def get_cpk_cph_report(
 ) -> CpkCphReportDetail:
     try:
         return get_report(report_id)
+    except Exception as exc:
+        raise _handle_service_error(exc) from exc
+
+
+@router.patch("/reports/{report_id}/sent", response_model=CpkCphReportDetail)
+def patch_cpk_cph_report_sent(
+    report_id: int,
+    payload: CpkCphReportSentPatchRequest,
+    user: dict = Depends(require_permission("cpk_cph.manage", "rendimientos.refresh")),
+) -> CpkCphReportDetail:
+    try:
+        return mark_report_sent(report_id, sent=payload.sent, user_id=user.get("id"))
     except Exception as exc:
         raise _handle_service_error(exc) from exc
 

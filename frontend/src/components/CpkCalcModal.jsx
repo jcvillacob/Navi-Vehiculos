@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { formatMonthLabel } from "../utils/rendimientosExport";
+import { parseCutoffRows } from "../utils/cpkCutoffs";
 
 export default function CpkCalcModal({
   open,
@@ -14,19 +15,30 @@ export default function CpkCalcModal({
   const [useCutoffs, setUseCutoffs] = useState(false);
   const [cutoffClients, setCutoffClients] = useState(new Set());
   const [cutoffText, setCutoffText] = useState("");
+  const [error, setError] = useState("");
 
+  // Al reabrir solo se repuebla la seleccion de clientes: el pegado de tanqueos
+  // se conserva hasta que el usuario lo limpie. Antes se borraba en cada
+  // apertura, asi que borrar un reporte y recalcularlo guardaba el mes completo
+  // sin que nada lo advirtiera.
   useEffect(() => {
     if (!open) return;
     setSelected(new Set(clients.map((client) => client.customer_id)));
-    setUseCutoffs(false);
+    setError("");
+  }, [open, clients]);
+
+  const clearCutoffs = () => {
+    setError("");
     setCutoffClients(new Set());
     setCutoffText("");
-  }, [open, clients]);
+  };
 
   const sortedClients = useMemo(
     () => [...clients].sort((a, b) => String(a.name).localeCompare(String(b.name), "es")),
     [clients]
   );
+
+  const parsedCutoffs = useMemo(() => parseCutoffRows(cutoffText), [cutoffText]);
 
   if (!open) return null;
 
@@ -45,6 +57,7 @@ export default function CpkCalcModal({
   };
 
   const toggleCutoffClient = (id) => {
+    setError("");
     setCutoffClients((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -56,6 +69,17 @@ export default function CpkCalcModal({
   const handleSubmit = (event) => {
     event.preventDefault();
     if (selected.size === 0) return;
+    if (useCutoffs) {
+      if (cutoffClients.size === 0) {
+        setError("Marcaste que hay datos de tanqueo pero no seleccionaste ningun cliente en \"Clientes con corte por tanqueo\". Sin eso el calculo usaria el mes completo.");
+        return;
+      }
+      if (parsedCutoffs.length === 0) {
+        setError("No se pudo leer ninguna fila de la tabla de tanqueos. Cada fila necesita placa, tanqueo anterior y tanqueo actual (separados por tabulacion o coma).");
+        return;
+      }
+    }
+    setError("");
     onCalculate({
       selectedCustomerIds: [...selected],
       cutoffText: useCutoffs ? cutoffText : "",
@@ -117,6 +141,7 @@ export default function CpkCalcModal({
                 type="checkbox"
                 checked={useCutoffs}
                 onChange={(event) => {
+                  setError("");
                   setUseCutoffs(event.target.checked);
                   if (!event.target.checked) setCutoffClients(new Set());
                 }}
@@ -149,17 +174,41 @@ export default function CpkCalcModal({
                     id="cpk-calc-cutoff"
                     className="cpk-cutoff-textarea"
                     value={cutoffText}
-                    onChange={(event) => setCutoffText(event.target.value)}
+                    onChange={(event) => {
+                      setError("");
+                      setCutoffText(event.target.value);
+                    }}
                     placeholder={"placa\ttanqueo_anterior\ttanqueo_actual\tkm_cliente\nLQK264\t30/05/2026 10:43:00 a m\t30/06/2026 9:02:00 a m\t4120"}
                     rows={5}
                   />
                   <small className="form-hint">
                     Las placas se resuelven al cliente correspondiente. Solo se aplican a los clientes marcados arriba.
                   </small>
+                  <div className="cpk-cutoff-actions">
+                    <small className={`cpk-cutoff-parse-hint${cutoffText.trim() && !parsedCutoffs.length ? " is-empty" : ""}`}>
+                      {cutoffText.trim()
+                        ? `${parsedCutoffs.length} fila(s) leida(s): ${parsedCutoffs.map((row) => row.plate).join(", ") || "ninguna placa valida"}`
+                        : "Sin filas pegadas todavia."}
+                    </small>
+                    <button
+                      type="button"
+                      className="button-secondary button-sm"
+                      onClick={clearCutoffs}
+                      disabled={!cutoffText && cutoffClients.size === 0}
+                    >
+                      Limpiar tabla
+                    </button>
+                  </div>
                 </div>
               </>
             ) : null}
           </div>
+
+          {error ? (
+            <p className="notice-banner notice-error cpk-cutoff-error" role="alert">
+              {error}
+            </p>
+          ) : null}
 
           <div className="actions-row modal-actions">
             <button type="submit" className="button" disabled={calculating || selected.size === 0}>

@@ -1,18 +1,43 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 import app.services.cpk_cph as cpk_cph
 from app.services.cpk_cph import (
     CpkCphConflict,
+    _duplicate_plates,
     _enrich_geotab_granular,
     _needs_granular_lookup,
     _reject_geotab_regression,
     _row_from_preview,
 )
+from app.schemas.cpk_cph import CpkCphPreviewRow, CpkCphReportSaveRequest
 from app.services.performance_providers import _geotab_regression_warnings
 from app.services.performance_providers import _analyze_geotab_regressions
 from app.services.rendimientos import GeotabGranularRegressions
+
+
+def test_report_summary_exposes_commercial_delivery_status():
+    sent_at = datetime(2026, 9, 4, 12, 30, tzinfo=timezone.utc)
+    summary = cpk_cph._summary_from_row(
+        {
+            "id": 1,
+            "customer_id": 2,
+            "customer_name": "Cliente A",
+            "period_month": "2026-08",
+            "status": "saved",
+            "row_count": 10,
+            "sent_to_commercial": True,
+            "sent_at": sent_at,
+            "created_at": sent_at,
+            "updated_at": sent_at,
+        }
+    )
+
+    assert summary.sent_to_commercial is True
+    assert summary.sent_at == sent_at
 
 
 def _row(**overrides):
@@ -36,6 +61,34 @@ def _row(**overrides):
     }
     row.update(overrides)
     return row
+
+
+def test_duplicate_plates_are_detected_after_normalization():
+    first = CpkCphPreviewRow(**_row(plate="PVS-787"))
+    duplicate = CpkCphPreviewRow(**_row(plate="pvs 787"))
+    other = CpkCphPreviewRow(**_row(plate="PVS788"))
+
+    assert _duplicate_plates([first, duplicate, other]) == ["PVS787"]
+
+
+def test_save_report_rejects_duplicate_plates_before_touching_database(monkeypatch):
+    first = CpkCphPreviewRow(**_row(plate="PVS-787"))
+    duplicate = CpkCphPreviewRow(**_row(plate="pvs 787"))
+    monkeypatch.setattr(
+        cpk_cph.psycopg,
+        "connect",
+        lambda *args, **kwargs: pytest.fail("no debe abrir la base de datos"),
+    )
+
+    with pytest.raises(CpkCphConflict, match="PVS787"):
+        cpk_cph.save_report(
+            CpkCphReportSaveRequest(
+                month="2026-08",
+                customer_id=19,
+                rows=[first, duplicate],
+            ),
+            user_id=None,
+        )
 
 
 def test_geotab_high_difference_with_odometer_regression_is_blocked():

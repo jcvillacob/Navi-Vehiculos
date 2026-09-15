@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import Can from "../components/Can";
 import CpkCalcModal from "../components/CpkCalcModal";
@@ -10,72 +10,50 @@ import {
   fetchCpkCphReport,
   listCpkCphReports,
   listCustomers,
+  markCpkCphReportSent,
   patchCpkCphReportRow,
   previewCpkCphReport,
   saveCpkCphReport
 } from "../api/vehicleApi";
 import { formatMonthLabel, getPreviousMonth, sanitizeFileName } from "../utils/rendimientosExport";
+import { normalizePlate, parseCutoffRows, parseNumber } from "../utils/cpkCutoffs";
 
 const SYSTEM_CUSTOMER = "__navitrans_system__";
+const ACTIVE_REPORT_STORAGE_KEY = "navi.cpk-cph.active-report-id";
 
-function normalizeHeader(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ");
-}
-
-function normalizePlate(value) {
-  return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
-function parseNumber(value) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-  const normalized = raw.includes(",")
-    ? raw.replace(/\./g, "").replace(",", ".")
-    : raw.replace(/,/g, "");
-  const n = Number(normalized);
-  return Number.isFinite(n) ? n : null;
-}
-
-function splitLine(line) {
-  if (line.includes("\t")) return line.split("\t");
-  return line.split(",").map((cell) => cell.trim());
-}
-
-function parseClipboard(text) {
-  const lines = String(text || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (!lines.length) return [];
-
-  const matrix = lines.map(splitLine);
-  const headers = matrix[0].map(normalizeHeader);
-  const indexOf = (aliases) => headers.findIndex((header) => aliases.includes(header));
-  let plateIdx = indexOf(["placa", "dispositivo", "vehiculo", "vehiculo placa"]);
-  let startIdx = indexOf(["tanqueo anterior", "fecha anterior", "inicio", "fecha inicio"]);
-  let endIdx = indexOf(["tanqueo actual", "fecha actual", "fin", "fecha fin"]);
-  let kmIdx = indexOf(["km cliente", "kms cliente", "kilometraje cliente", "kilometraje reportado", "km reportado"]);
-  const hasHeader = plateIdx >= 0 && startIdx >= 0 && endIdx >= 0;
-  const dataRows = hasHeader ? matrix.slice(1) : matrix;
-  if (!hasHeader) {
-    plateIdx = 0;
-    startIdx = 1;
-    endIdx = 2;
-    kmIdx = 3;
+function readStoredActiveReport() {
+  try {
+    const stored = window.localStorage.getItem(ACTIVE_REPORT_STORAGE_KEY);
+    if (!stored) return null;
+    try {
+      const parsed = JSON.parse(stored);
+      if (parsed && parsed.id != null) return parsed;
+    } catch {
+      // Compatibilidad con la versión que guardaba solo el id.
+    }
+    return { id: stored, month: null };
+  } catch {
+    return null;
   }
+}
 
-  return dataRows.map((cells) => ({
-    plate: normalizePlate(cells[plateIdx]),
-    cutoff_start_at: String(cells[startIdx] || "").trim(),
-    cutoff_end_at: String(cells[endIdx] || "").trim(),
-    km_client: parseNumber(cells[kmIdx])
-  }));
+function storeActiveReport(report) {
+  try {
+    window.localStorage.setItem(
+      ACTIVE_REPORT_STORAGE_KEY,
+      JSON.stringify({ id: String(report.id), month: report.period_month || null })
+    );
+  } catch {
+    // El reporte sigue seleccionado en memoria si el navegador bloquea storage.
+  }
+}
+
+function clearStoredActiveReportId() {
+  try {
+    window.localStorage.removeItem(ACTIVE_REPORT_STORAGE_KEY);
+  } catch {
+    // El reporte sigue funcionando en memoria si el navegador bloquea storage.
+  }
 }
 
 function formatNumber(value, digits = 0) {
@@ -99,6 +77,49 @@ function statusLabel(status) {
   if (status === "not_geotab") return "No Geotab";
   if (status === "error") return "Error";
   return status || "Pendiente";
+}
+
+function ActionIcon({ name }) {
+  const common = {
+    className: "cpk-cph-action-icon",
+    viewBox: "0 0 24 24",
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    "aria-hidden": "true",
+  };
+  if (name === "excel") {
+    return (
+      <svg {...common}>
+        <path d="M4 3h10l5 5v13H4z" />
+        <path d="M14 3v5h5M8 12l4 5m0-5-4 5" />
+      </svg>
+    );
+  }
+  if (name === "delete") {
+    return (
+      <svg {...common}>
+        <path d="M4 7h16M10 11v6m4-6v6M9 7V4h6v3m-9 0 1 13h8l1-13" />
+      </svg>
+    );
+  }
+  if (name === "send") {
+    return (
+      <svg {...common}>
+        <path d="m22 2-7 20-4-9-9-4Z" />
+        <path d="M22 2 11 13" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <path d="M5 4h11l3 3v13H5zM8 4v6h8V4M8 20v-6h8v6" />
+    </svg>
+  );
 }
 
 function computeRowDiff(row) {
@@ -329,19 +350,24 @@ function EditableCell({ value, disabled, type = "text", onChange }) {
 
 export default function CpkCphPage() {
   const { toasts, pushToast } = useToasts();
-  const [month, setMonth] = useState(getPreviousMonth());
+  const [month, setMonth] = useState(
+    () => readStoredActiveReport()?.month || getPreviousMonth()
+  );
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
   const [reports, setReports] = useState([]);
+  const [sentFilter, setSentFilter] = useState("all");
   const [activeReport, setActiveReport] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [updatingSent, setUpdatingSent] = useState(false);
   const [calculating, setCalculating] = useState(false);
   const [confirmCalc, setConfirmCalc] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [calcModalOpen, setCalcModalOpen] = useState(false);
   const [calcClients, setCalcClients] = useState([]);
   const [monthRows, setMonthRows] = useState([]);
+  const [reportsLoaded, setReportsLoaded] = useState(false);
+  const restoreAttemptedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -368,6 +394,7 @@ export default function CpkCphPage() {
     if (!month) return [];
     const rows = await listCpkCphReports({ month, customer_id: null });
     setReports(rows);
+    setReportsLoaded(true);
     return rows;
   }, [month]);
 
@@ -377,11 +404,23 @@ export default function CpkCphPage() {
 
   const visibleRows = activeReport?.rows || [];
 
+  const visibleReports = useMemo(() => {
+    if (sentFilter === "sent") return reports.filter((report) => report.sent_to_commercial);
+    if (sentFilter === "pending") return reports.filter((report) => !report.sent_to_commercial);
+    return reports;
+  }, [reports, sentFilter]);
+
+  const cutoffRowCount = useMemo(
+    () => visibleRows.filter((row) => row.cutoff_start_at && row.cutoff_end_at).length,
+    [visibleRows]
+  );
+
   const openReport = useCallback(async (reportId) => {
     setLoading(true);
     try {
       const detail = await fetchCpkCphReport(reportId);
       setActiveReport(detail);
+      storeActiveReport(detail);
       setCustomerId(String(detail.customer_id));
       setMonth(detail.period_month);
     } catch (err) {
@@ -390,6 +429,24 @@ export default function CpkCphPage() {
       setLoading(false);
     }
   }, [pushToast]);
+
+  useEffect(() => {
+    if (!reportsLoaded || restoreAttemptedRef.current) return;
+    restoreAttemptedRef.current = true;
+
+    const storedReport = readStoredActiveReport();
+    if (!storedReport?.id) return;
+
+    const report = reports.find(
+      (candidate) => String(candidate.id) === String(storedReport.id)
+    );
+    if (!report) {
+      clearStoredActiveReportId();
+      return;
+    }
+
+    openReport(report.id);
+  }, [openReport, reports, reportsLoaded]);
 
   const openCalcModal = useCallback(async (currentReports) => {
     setLoading(true);
@@ -436,6 +493,7 @@ export default function CpkCphPage() {
         await openReport(existing.id);
       } else {
         setActiveReport(null);
+        clearStoredActiveReportId();
         setConfirmCalc(true);
       }
     } catch (err) {
@@ -452,10 +510,18 @@ export default function CpkCphPage() {
 
   const handleCalculate = async ({ selectedCustomerIds, cutoffText, cutoffCustomerIds }) => {
     if (!selectedCustomerIds.length) return;
-    setCalculating(true);
     const cutoffSet = new Set(cutoffCustomerIds);
-    const parsedCutoffs = cutoffText ? parseClipboard(cutoffText).filter((row) => row.plate) : [];
+    const parsedCutoffs = cutoffText ? parseCutoffRows(cutoffText) : [];
+    // Guarda dura: si se pidieron cortes pero no hay con que hacerlos, se aborta
+    // en vez de guardar el mes completo sin avisar.
+    if (cutoffSet.size && !parsedCutoffs.length) {
+      pushToast("error", "No se pudo leer ninguna fila de tanqueo (se necesita placa + ambas fechas). No se calculo nada.");
+      return;
+    }
+    setCalculating(true);
     let calculatedForSelected = null;
+    let cutoffRowsApplied = 0;
+    let totalRows = 0;
     try {
       for (const id of selectedCustomerIds) {
         const baseRows = monthRows
@@ -467,14 +533,23 @@ export default function CpkCphPage() {
           rows = mergeRowsByPlate(baseRows, response.rows || []);
         }
         if (!rows.length) continue;
+        totalRows += rows.length;
+        cutoffRowsApplied += rows.filter((row) => row.cutoff_start_at && row.cutoff_end_at).length;
         const detail = await saveCpkCphReport({ month, customer_id: Number(id), rows: rowsForApi(rows) });
         if (String(id) === String(customerId)) calculatedForSelected = detail;
       }
       const refreshed = await loadReports();
       setCalcModalOpen(false);
-      pushToast("success", `CPK/CPH calculado para ${selectedCustomerIds.length} cliente(s).`);
+      const cutoffSummary = cutoffSet.size
+        ? ` ${cutoffRowsApplied} de ${totalRows} fila(s) con corte por tanqueo.`
+        : ` ${totalRows} fila(s) calculadas con el mes completo.`;
+      pushToast(
+        cutoffSet.size && cutoffRowsApplied === 0 ? "error" : "success",
+        `CPK/CPH calculado para ${selectedCustomerIds.length} cliente(s).${cutoffSummary}`
+      );
       if (calculatedForSelected) {
         setActiveReport(calculatedForSelected);
+        storeActiveReport(calculatedForSelected);
       } else {
         const first = refreshed.find((report) => selectedCustomerIds.includes(report.customer_id));
         if (first) await openReport(first.id);
@@ -491,43 +566,6 @@ export default function CpkCphPage() {
       ...current,
       rows: current.rows.map((row, rowIndex) => rowIndex === index ? computeRowDiff({ ...row, ...patch }) : row)
     }));
-  };
-
-  const handleSaveAll = async () => {
-    if (!activeReport || !visibleRows.length) {
-      pushToast("error", "No hay filas para guardar.");
-      return;
-    }
-    const missingNotes = visibleRows
-      .map(computeRowDiff)
-      .filter((row) => (Number(row.km_adjustment || 0) !== 0 || Number(row.hour_adjustment || 0) !== 0) && !String(row.correction_note || "").trim());
-    if (missingNotes.length) {
-      pushToast("error", `Cada ajuste de km u horas debe tener una nota. Placas sin nota: ${missingNotes.map((row) => row.plate).join(", ")}.`);
-      return;
-    }
-    const blockedRows = visibleRows
-      .map(computeRowDiff)
-      .map((row) => ({ plate: row.plate, reasons: getGeotabValidation(row).reasons }))
-      .filter((entry) => entry.reasons.length);
-    if (blockedRows.length) {
-      pushToast("error", `Retroceso Geotab en ${blockedRows.map((entry) => `${entry.plate} (${entry.reasons.join("; ")})`).join(" | ")}. Corrige las lecturas o marca "Guardar de todas formas" con nota.`);
-      return;
-    }
-    setSaving(true);
-    try {
-      const detail = await saveCpkCphReport({
-        month: activeReport.period_month,
-        customer_id: activeReport.customer_id,
-        rows: rowsForApi(visibleRows)
-      });
-      setActiveReport(detail);
-      await loadReports();
-      pushToast("success", "CPK/CPH guardado.");
-    } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : "No fue posible guardar");
-    } finally {
-      setSaving(false);
-    }
   };
 
   const handleSaveRow = async (row) => {
@@ -554,6 +592,7 @@ export default function CpkCphPage() {
       }
       const detail = await patchCpkCphReportRow(activeReport.id, row.id, payload);
       setActiveReport(detail);
+      storeActiveReport(detail);
       await loadReports();
       pushToast("success", "Fila actualizada.");
     } catch (err) {
@@ -567,10 +606,28 @@ export default function CpkCphPage() {
     try {
       await deleteCpkCphReport(activeReport.id);
       setActiveReport(null);
+      clearStoredActiveReportId();
       await loadReports();
       pushToast("success", "Reporte CPK/CPH borrado.");
     } catch (err) {
       pushToast("error", err instanceof Error ? err.message : "No fue posible borrar el reporte");
+    }
+  };
+
+  const handleToggleSent = async () => {
+    if (!activeReport) return;
+    const nextSent = !activeReport.sent_to_commercial;
+    setUpdatingSent(true);
+    try {
+      const detail = await markCpkCphReportSent(activeReport.id, nextSent);
+      setActiveReport(detail);
+      storeActiveReport(detail);
+      await loadReports();
+      pushToast("success", nextSent ? "Reporte marcado como enviado al comercial." : "Reporte marcado como pendiente de envío.");
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "No fue posible actualizar el estado de envío");
+    } finally {
+      setUpdatingSent(false);
     }
   };
 
@@ -669,12 +726,13 @@ export default function CpkCphPage() {
           { Campo: "Mes", Valor: month },
           { Campo: "Cliente", Valor: customerName },
           { Campo: "Estado", Valor: statusLabel(activeReport?.status || "saved") },
+          { Campo: "Envío al comercial", Valor: activeReport?.sent_to_commercial ? "Enviado" : "Pendiente de envío" },
           { Campo: "Filas", Valor: visibleRows.length },
           { Campo: "Generado", Valor: new Date().toLocaleString("es-CO") }
         ];
         const sheet = {};
         sheet["A1"] = { v: "Reporte CPK / CPH", t: "s", s: titleStyle };
-        sheet["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 6, c: 1 } });
+        sheet["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: summary.length + 2, c: 1 } });
         sheet["!cols"] = [{ wch: 22 }, { wch: 38 }];
         sheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }];
         sheet["A3"] = { v: "Campo", t: "s", s: sectionHeaderStyle };
@@ -791,17 +849,39 @@ export default function CpkCphPage() {
           <h2>CPK/CPH</h2>
         </div>
         <div className="actions-row">
-          <button type="button" className="button-secondary" onClick={handleExport} disabled={!visibleRows.length}>
-            Exportar Excel
+          <button
+            type="button"
+            className="button-secondary cpk-cph-icon-button cpk-cph-excel-button"
+            onClick={handleExport}
+            disabled={!visibleRows.length}
+            aria-label="Exportar Excel"
+            title="Exportar Excel"
+          >
+            <ActionIcon name="excel" />
           </button>
           <Can permission={["cpk_cph.manage", "rendimientos.refresh"]}>
             {activeReport ? (
               <>
-                <button type="button" className="button-secondary" onClick={() => setConfirmDelete(true)}>
-                  Borrar este reporte
+                <button
+                  type="button"
+                  className="button-secondary cpk-cph-icon-button cpk-cph-delete-button"
+                  onClick={() => setConfirmDelete(true)}
+                  aria-label="Borrar este reporte"
+                  title="Borrar este reporte"
+                >
+                  <ActionIcon name="delete" />
                 </button>
-                <button type="button" onClick={handleSaveAll} disabled={saving || !visibleRows.length}>
-                  {saving ? "Guardando..." : "Guardar"}
+                <button
+                  type="button"
+                  className={activeReport.sent_to_commercial
+                    ? "button-secondary cpk-cph-icon-button cpk-cph-sent-button is-sent"
+                    : "cpk-cph-icon-button cpk-cph-sent-button"}
+                  onClick={handleToggleSent}
+                  disabled={updatingSent}
+                  title={activeReport.sent_to_commercial ? "Desmarcar como enviado" : "Marcar como enviado al comercial"}
+                  aria-label={activeReport.sent_to_commercial ? "Desmarcar como enviado" : "Marcar como enviado al comercial"}
+                >
+                  <ActionIcon name="send" />
                 </button>
               </>
             ) : null}
@@ -829,19 +909,32 @@ export default function CpkCphPage() {
             {loading ? "Buscando..." : "Buscar reportes"}
           </button>
 
+          <div className="form-field">
+            <label htmlFor="cpk-sent-filter">Filtro de envío</label>
+            <select id="cpk-sent-filter" value={sentFilter} onChange={(event) => setSentFilter(event.target.value)}>
+              <option value="all">Todos ({reports.length})</option>
+              <option value="pending">Pendientes de envío ({reports.filter((report) => !report.sent_to_commercial).length})</option>
+              <option value="sent">Enviados ({reports.filter((report) => report.sent_to_commercial).length})</option>
+            </select>
+          </div>
+
           <div className="cpk-cph-report-list">
-            {reports.length === 0 ? (
+            {visibleReports.length === 0 ? (
               <p className="support-copy">Sin reportes para el filtro actual.</p>
-            ) : reports.map((report) => (
+            ) : visibleReports.map((report) => (
               <button
                 key={report.id}
                 type="button"
                 className={`cpk-cph-report-item${activeReport?.id === report.id ? " is-active" : ""}`}
                 onClick={() => openReport(report.id)}
+                title={report.sent_to_commercial ? "Enviado al comercial" : "Pendiente de envío"}
               >
                 <strong>{report.customer_name}</strong>
                 <span>{report.period_month} · {statusLabel(report.status)}</span>
                 <small>{report.row_count} fila(s)</small>
+                {report.sent_to_commercial ? (
+                  <span className="cpk-cph-sent-dot" aria-label="Enviado al comercial" />
+                ) : null}
               </button>
             ))}
           </div>
@@ -852,11 +945,16 @@ export default function CpkCphPage() {
             <div className="section-heading">
               <div>
                 <span className="eyebrow">
-                  {activeReport ? `${statusLabel(activeReport.status)} · ${formatMonthLabel(activeReport.period_month)}` : "Sin reporte abierto"}
+                  {activeReport
+                    ? `${statusLabel(activeReport.status)} · ${formatMonthLabel(activeReport.period_month)}`
+                    : "Sin reporte abierto"}
                 </span>
                 <h3>{activeReport?.customer_name || selectedCustomer?.name || "Cliente"}</h3>
               </div>
-              <span className="cpk-cph-count">{visibleRows.length} fila(s)</span>
+              <span className="cpk-cph-count">
+                {visibleRows.length} fila(s)
+                {visibleRows.length ? ` · ${cutoffRowCount} con corte de tanqueo · ${visibleRows.length - cutoffRowCount} mes completo` : ""}
+              </span>
             </div>
 
             {!activeReport ? (
@@ -907,6 +1005,16 @@ export default function CpkCphPage() {
                           <td>
                             <span className={`cpk-cph-origin ${row.vocacional ? "cpk-cph-origin--cutoff" : ""}`}>
                               {row.vocacional ? "Vocacional" : "Comercial"}
+                            </span>
+                            <span
+                              className={`cpk-cph-origin cpk-cph-origin--window${hasCutoff ? " cpk-cph-origin--window-cut" : ""}`}
+                              title={
+                                hasCutoff
+                                  ? `Ventana de tanqueo ${row.cutoff_start_at} → ${row.cutoff_end_at}`
+                                  : "Sin corte por tanqueo: se uso el mes calendario completo"
+                              }
+                            >
+                              {hasCutoff ? "Tanqueo" : "Mes completo"}
                             </span>
                           </td>
                           <td>{formatNumber(row.odo_start, 0)}</td>
@@ -995,8 +1103,14 @@ export default function CpkCphPage() {
                           <td>
                             {row.id ? (
                               <Can permission={["cpk_cph.manage", "rendimientos.refresh"]}>
-                                <button type="button" className="button-secondary button-sm" onClick={() => handleSaveRow(row)}>
-                                  Guardar
+                                <button
+                                  type="button"
+                                  className="button-secondary cpk-cph-icon-button cpk-cph-row-save-button"
+                                  onClick={() => handleSaveRow(row)}
+                                  aria-label={`Guardar cambios de ${row.plate}`}
+                                  title={`Guardar cambios de ${row.plate}`}
+                                >
+                                  <ActionIcon name="save" />
                                 </button>
                               </Can>
                             ) : null}

@@ -6274,6 +6274,72 @@ select.control-sm {
   font-size: 0.85rem;
 }
 
+.cpk-cph-sent-dot {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 9px;
+  height: 9px;
+  max-width: none !important;
+  border-radius: 50%;
+  background: #218c2a;
+  box-shadow: 0 0 0 3px rgba(33, 140, 42, 0.14);
+}
+
+.cpk-cph-icon-button {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 9px;
+}
+
+.cpk-cph-icon-button .cpk-cph-action-icon {
+  display: block;
+}
+
+.cpk-cph-excel-button {
+  color: #217346;
+}
+
+.cpk-cph-excel-button:hover:not(:disabled) {
+  color: #185c38;
+}
+
+.cpk-cph-delete-button {
+  color: var(--red, #ee2e2f);
+}
+
+.cpk-cph-delete-button:hover:not(:disabled) {
+  color: var(--red-hover, #c82526);
+}
+
+.cpk-cph-sent-button {
+  border-color: #218c2a;
+  background: var(--surface);
+  color: #218c2a;
+}
+
+.cpk-cph-sent-button:hover:not(:disabled) {
+  border-color: #176d1e;
+  background: rgba(33, 140, 42, 0.08);
+}
+
+.cpk-cph-sent-button.is-sent {
+  border-color: #218c2a;
+  background: #218c2a;
+  color: #fff;
+}
+
+.cpk-cph-sent-button.is-sent:hover:not(:disabled) {
+  border-color: #176d1e;
+  background: #176d1e;
+}
+
+.cpk-cph-row-save-button {
+  width: 34px;
+  height: 34px;
+}
+
 .cpk-cph-main {
   display: grid;
   gap: 16px;
