@@ -24,15 +24,40 @@ import {
   fetchAvailabilityRanking,
   manualAssignVehicle,
 } from "../api/vehicleApi";
+import { useTheme } from "../context/ThemeContext";
 import { useAvailabilityDashboard } from "../features/availability/hooks/useAvailabilityDashboard";
 import { exportDisponibilidadExcel } from "../utils/disponibilidadExport";
 
-// Colores alineados con los badges .availability-* de styles.css
-const STATUS_COLOR = {
+// Colores alineados con los badges .availability-* de styles.css.
+// En oscuro se aclaran: los tonos claros no alcanzan contraste sobre el canvas.
+const STATUS_COLOR_LIGHT = {
   good: "#2f8c2f",
   warning: "#d18c00",
   critical: "#c52b2b",
   no_data: "#98aab4",
+};
+
+const STATUS_COLOR_DARK = {
+  good: "#7fd07f",
+  warning: "#ffca5c",
+  critical: "#ff8080",
+  no_data: "#8a9aa3",
+};
+
+// Tinta de ejes, grid y relleno de puntos para los charts de Recharts:
+// Recharts las pasa como atributos SVG, donde var(--token) no resuelve.
+const CHART_INK_LIGHT = {
+  axis: "#354550",
+  grid: "rgba(53, 69, 80, 0.08)",
+  cursor: "rgba(53, 69, 80, 0.05)",
+  surface: "#fff",
+};
+
+const CHART_INK_DARK = {
+  axis: "#c3cac8",
+  grid: "rgba(195, 202, 200, 0.12)",
+  cursor: "rgba(195, 202, 200, 0.08)",
+  surface: "#1c2429",
 };
 
 const STATUS_BADGE_CLASS = {
@@ -137,6 +162,9 @@ function TrendMonthTick({ x, y, payload, selectedLabel }) {
 
 export default function DisponibilidadPage() {
   const location = useLocation();
+  const { isDark } = useTheme();
+  const STATUS_COLOR = isDark ? STATUS_COLOR_DARK : STATUS_COLOR_LIGHT;
+  const chartInk = isDark ? CHART_INK_DARK : CHART_INK_LIGHT;
   const restoredFilters = location.state?.availabilityFilters || {};
   const {
     month,
@@ -630,7 +658,7 @@ export default function DisponibilidadPage() {
                       key={entry.key}
                       fill={entry.fill}
                       fillOpacity={availabilityStatusFilter && availabilityStatusFilter !== entry.key ? 0.25 : 1}
-                      stroke={availabilityStatusFilter === entry.key ? "#354550" : "none"}
+                      stroke={availabilityStatusFilter === entry.key ? chartInk.axis : "none"}
                       strokeWidth={availabilityStatusFilter === entry.key ? 2 : 0}
                     />
                   ))}
@@ -674,7 +702,7 @@ export default function DisponibilidadPage() {
               onClick={handleTrendClick}
               style={{ cursor: "pointer" }}
             >
-              <CartesianGrid stroke="rgba(53,69,80,0.08)" />
+              <CartesianGrid stroke={chartInk.grid} />
               <XAxis
                 dataKey="label"
                 fontSize={11}
@@ -693,7 +721,7 @@ export default function DisponibilidadPage() {
                 strokeWidth={10}
                 strokeOpacity={0.08}
               />
-              <ReferenceLine y={96} stroke="#354550" strokeDasharray="4 4" label={{ value: "Meta 96%", position: "insideTopRight", fontSize: 10, fill: "#354550" }} />
+              <ReferenceLine y={96} stroke={chartInk.axis} strokeDasharray="4 4" label={{ value: "Meta 96%", position: "insideTopRight", fontSize: 10, fill: chartInk.axis }} />
               <Line
                 type="monotone"
                 dataKey="pct"
@@ -704,7 +732,7 @@ export default function DisponibilidadPage() {
                     cx={props.cx}
                     cy={props.cy}
                     r={props.payload.month === month ? 6 : 3.5}
-                    fill={props.payload.month === month ? "#ee2e2f" : "#fff"}
+                    fill={props.payload.month === month ? "#ee2e2f" : chartInk.surface}
                     stroke="#ee2e2f"
                     strokeWidth={2}
                   />
@@ -727,7 +755,7 @@ export default function DisponibilidadPage() {
           ) : (
             <ResponsiveContainer width="100%" height={Math.max(240, fleetChartData.length * 34)}>
               <BarChart data={fleetChartData} layout="vertical" margin={{ left: 8, right: 16 }}>
-                <CartesianGrid horizontal={false} stroke="rgba(53,69,80,0.08)" />
+                <CartesianGrid horizontal={false} stroke={chartInk.grid} />
                 <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} fontSize={11} />
                 <YAxis type="category" dataKey="name" width={110} fontSize={11} tickFormatter={(v) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)} />
                 <Tooltip
@@ -736,9 +764,9 @@ export default function DisponibilidadPage() {
                     const mttrText = mttr === null || mttr === undefined ? "" : ` · MTTR ${fmtMttr(mttr)}`;
                     return [`${Number(value).toFixed(1)}% · ${p.payload.vehicles} veh.${mttrText}`, ""];
                   }}
-                  cursor={{ fill: "rgba(53,69,80,0.05)" }}
+                  cursor={{ fill: chartInk.cursor }}
                 />
-                <ReferenceLine x={97} stroke="#354550" strokeDasharray="4 4" label={{ value: "Meta 97%", position: "top", fontSize: 10, fill: "#354550" }} />
+                <ReferenceLine x={97} stroke={chartInk.axis} strokeDasharray="4 4" label={{ value: "Meta 97%", position: "top", fontSize: 10, fill: chartInk.axis }} />
                 <Bar dataKey="pct" radius={[0, 6, 6, 0]} onClick={handleFleetClick} cursor="pointer">
                   {fleetChartData.map((entry) => (
                     <Cell key={entry.customer_id ?? entry.name} fill={STATUS_COLOR[entry.status] || STATUS_COLOR.no_data} fillOpacity={selectedCustomerId && selectedCustomerId !== entry.customer_id ? 0.35 : 1} />

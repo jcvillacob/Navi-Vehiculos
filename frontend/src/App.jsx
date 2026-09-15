@@ -5,6 +5,7 @@ import Can from "./components/Can";
 import { changeOwnPassword } from "./api/vehicleApi";
 import { useAuth } from "./context/AuthContext";
 import { BulkRefreshProvider } from "./context/BulkRefreshContext";
+import { useTheme } from "./context/ThemeContext";
 import PasswordInput from "./components/PasswordInput";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { validatePasswordStrength } from "./utils/passwordValidation";
@@ -25,6 +26,17 @@ import MotorsPage from "./pages/MotorsPage";
 import VehiclesPage from "./pages/VehiclesPage";
 import VehicleFichaPage from "./pages/VehicleFichaPage";
 import StyleLabPage from "./pages/StyleLabPage";
+
+const SIDEBAR_OPEN_STORAGE_KEY = "navi.sidebar.open";
+
+function readStoredSidebarOpen() {
+  try {
+    const stored = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
+    return stored == null ? true : stored === "true";
+  } catch {
+    return true;
+  }
+}
 
 function ChangePasswordModal({ user, onClose }) {
   const [currentPassword, setCurrentPassword] = useState("");
@@ -103,10 +115,19 @@ export default function App() {
 
 function AppShell() {
   const { user, logout } = useAuth();
+  const { isDark, toggleTheme } = useTheme();
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(readStoredSidebarOpen);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, String(sidebarOpen));
+    } catch {
+      // Si el navegador bloquea storage, el sidebar sigue funcionando en memoria.
+    }
+  }, [sidebarOpen]);
 
   useEffect(() => {
     function closeOnClickOutside(event) {
@@ -259,6 +280,27 @@ function AppShell() {
               </button>
               {userMenuOpen ? (
                 <div className="sidebar-user-menu" role="menu">
+                  <button
+                    type="button"
+                    className="sidebar-user-menu-item"
+                    role="menuitemcheckbox"
+                    aria-checked={isDark}
+                    onClick={toggleTheme}
+                  >
+                    <span className="sidebar-user-menu-icon" aria-hidden="true">
+                      {isDark ? (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="4" />
+                          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                        </svg>
+                      ) : (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+                        </svg>
+                      )}
+                    </span>
+                    {isDark ? "Modo claro" : "Modo oscuro"}
+                  </button>
                   <button
                     type="button"
                     className="sidebar-user-menu-item"
