@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -457,25 +457,52 @@ _DATAPLATE_KNOWN_HEADER_LABELS = {
     "calibracion de bomba de combustible": "Calibración de bomba de combustible",
     "marketing engine configuration #": "Marketing Engine Configuration #",
     "technical engine configuration #": "Technical Engine Configuration #",
+    "cpl": "N.º CPL",
+    "cpl no.": "N.º CPL",
+    "cpl number": "N.º CPL",
+    "no. cpl": "N.º CPL",
     "cpl #": "N.º CPL",
     "n.º cpl": "N.º CPL",
     "n.o cpl": "N.º CPL",
 }
 
 
-def _looks_like_dataplate_header_row(values: list[str]) -> bool:
-    meaningful_values = [value.strip().lower() for value in values if value.strip()]
-    if len(meaningful_values) < 2:
+def _is_dataplate_header_row(row, values: list[str]) -> bool:
+    meaningful = [value.strip() for value in values if value.strip()]
+    if not meaningful:
         return False
-    return any(
-        any(hint in value for hint in _DATAPLATE_HEADER_HINTS)
-        for value in meaningful_values
-    )
+
+    th_cells = row.find_all("th")
+    td_cells = row.find_all("td")
+    if th_cells and not td_cells:
+        if any("tbl_header" in th.get("class", []) for th in th_cells):
+            return False
+        return True
+
+    if len(meaningful) >= 2:
+        canonical_headers = [_canonical_dataplate_header(v) for v in meaningful]
+        canonical_count = sum(h is not None for h in canonical_headers)
+        if canonical_count == len(meaningful):
+            return True
+        return all(
+            any(hint in value.lower() for hint in _DATAPLATE_HEADER_HINTS)
+            for value in meaningful
+        )
+
+    if len(meaningful) == 1 and _canonical_dataplate_header(meaningful[0]) is not None:
+        return True
+
+    return False
 
 
 def _normalize_dataplate_label(value: str) -> str:
     normalized = re.sub(r"\s+", " ", value.strip().lower())
-    normalized = normalized.replace("n.o", "no.").replace("n.º", "no.")
+    normalized = (
+        normalized.replace("n.o", "no.")
+        .replace("n.º", "no.")
+        .replace("nº", "no.")
+        .replace("n°", "no.")
+    )
     return normalized
 
 
@@ -497,8 +524,8 @@ def _row_values(row) -> list[str]:
 
 def _first_meaningful_row_values(rows, start_index: int) -> list[str]:
     for row in rows[start_index:]:
-        values = [value for value in _row_values(row) if value.strip()]
-        if values:
+        values = _row_values(row)
+        if any(value.strip() for value in values):
             return values
     return []
 
@@ -521,6 +548,8 @@ def _parse_dataplate(html: str) -> dict[str, str]:
     data: dict[str, str] = {}
 
     title_cell = soup.find("td", string=lambda t: t and "VIN:" in t)
+    if not title_cell:
+        title_cell = soup.find("th", string=lambda t: t and "VIN:" in t)
     if title_cell:
         data["VIN"] = title_cell.get_text(strip=True).split("VIN:")[-1].strip()
 
@@ -529,14 +558,11 @@ def _parse_dataplate(html: str) -> dict[str, str]:
     while i < len(rows):
         row = rows[i]
         cell_values = _row_values(row)
-        canonical_headers = [
-            _canonical_dataplate_header(value) for value in cell_values if value.strip()
-        ]
-        canonical_headers = [header for header in canonical_headers if header]
-        if (
-            len(canonical_headers) >= 2
-            or (canonical_headers and _looks_like_dataplate_header_row(cell_values))
-        ):
+        if _is_dataplate_header_row(row, cell_values):
+            canonical_headers = [
+                _canonical_dataplate_header(value) or value.strip() if value.strip() else None
+                for value in cell_values
+            ]
             next_values = _first_meaningful_row_values(rows, i + 1)
             for key, val in zip(canonical_headers, next_values):
                 if key and key.strip() and "VIN:" not in key:
@@ -556,11 +582,18 @@ def _parse_dataplate(html: str) -> dict[str, str]:
         cells = row.find_all(["th", "td"])
         if len(cells) >= 2:
             for j in range(0, len(cells) - 1, 2):
-                key = cells[j].get_text(strip=True)
-                val = cells[j + 1].get_text(strip=True)
-                if key and key.strip() and "VIN:" not in key:
-                    data[key] = val
+                key_text = cells[j].get_text(strip=True)
+                val_text = cells[j + 1].get_text(strip=True)
+                canonical_key = _canonical_dataplate_header(key_text) or key_text
+                if canonical_key and canonical_key.strip() and "VIN:" not in canonical_key:
+                    data[canonical_key] = val_text
         i += 1
+
+    if not data.get("N.º CPL"):
+        cpl_link = soup.find("a", href=lambda h: h and "cpl_num" in str(h))
+        if cpl_link and cpl_link.get_text(strip=True):
+            data["N.º CPL"] = cpl_link.get_text(strip=True)
+
     return data
 
 
