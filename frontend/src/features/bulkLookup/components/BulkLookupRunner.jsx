@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { useCustomersCatalog } from "../../customers/hooks/useCustomersCatalog";
 
@@ -39,10 +39,13 @@ export default function BulkLookupRunner({
   estimatedRemainingMs,
   customerDatabaseId,
   setCustomerDatabaseId,
+  customerId,
+  setCustomerId,
   assignmentSummary,
+  assignmentErrors = [],
 }) {
   const { customers, loading: customersLoading } = useCustomersCatalog();
-  const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const selectedCustomerId = customerId ? String(customerId) : "";
 
   const databases = useMemo(() => {
     const customer = customers.find((c) => String(c.id) === String(selectedCustomerId));
@@ -94,7 +97,7 @@ export default function BulkLookupRunner({
 
   const handleCustomerChange = (event) => {
     const id = event.target.value;
-    setSelectedCustomerId(id);
+    setCustomerId(id ? Number(id) : null);
     setCustomerDatabaseId(null);
   };
 
@@ -104,13 +107,15 @@ export default function BulkLookupRunner({
   };
 
   const isAssignmentRunning = status === "running" || status === "paused";
+  const skippedAssignments = assignmentSummary.skipped || 0;
   const assignmentLabel = (() => {
-    if (!customerDatabaseId) return null;
-    if (assignmentSummary.attempted === 0) {
+    if (!customerDatabaseId && !customerId) return null;
+    if (assignmentSummary.attempted === 0 && skippedAssignments === 0) {
       return "Asignacion pendiente: aplicara a medida que se resuelvan las placas";
     }
     return `Asignadas ${assignmentSummary.success} de ${assignmentSummary.attempted}`
-      + (assignmentSummary.failed > 0 ? ` · fallaron ${assignmentSummary.failed}` : "");
+      + (assignmentSummary.failed > 0 ? ` · fallaron ${assignmentSummary.failed}` : "")
+      + (skippedAssignments > 0 ? ` · ${skippedAssignments} sin registrar` : "");
   })();
 
   return (
@@ -154,7 +159,7 @@ export default function BulkLookupRunner({
               {!selectedCustomerId
                 ? "Selecciona cliente primero"
                 : databases.length === 0
-                  ? "Cliente sin databases"
+                  ? "Cliente sin databases (se asigna solo el cliente)"
                   : "Selecciona database"}
             </option>
             {databases.map((db) => (
@@ -167,6 +172,29 @@ export default function BulkLookupRunner({
       </div>
       {assignmentLabel ? (
         <p className="support-copy bulk-assignment-status">{assignmentLabel}</p>
+      ) : null}
+
+      {assignmentErrors.length > 0 ? (
+        <div className="notice-banner notice-error">
+          <span aria-hidden="true">✕</span>
+          <div>
+            <p>
+              {assignmentErrors.length}{" "}
+              {assignmentErrors.length === 1 ? "asignacion fallo" : "asignaciones fallaron"}. Esos
+              vehiculos quedaron sin cliente ni database:
+            </p>
+            <ul className="bulk-assignment-errors">
+              {assignmentErrors.slice(0, 8).map((item) => (
+                <li key={`${item.plate}-${item.message}`}>
+                  <strong>{item.plate}</strong>: {item.message}
+                </li>
+              ))}
+              {assignmentErrors.length > 8 ? (
+                <li>+{assignmentErrors.length - 8} mas (ver consola)</li>
+              ) : null}
+            </ul>
+          </div>
+        </div>
       ) : null}
 
       <div className="bulk-runner-toolbar">

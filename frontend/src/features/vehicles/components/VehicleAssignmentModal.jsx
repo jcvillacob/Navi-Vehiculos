@@ -233,6 +233,8 @@ export default function VehicleAssignmentModal({
       providerVehicleId.trim() !== (vehicle?.provider_vehicle_id || "");
     const basePayload = {
       customer_database_id: selectedDatabaseId ? Number(selectedDatabaseId) : null,
+      // El cliente viaja aparte para poder asignar clientes sin databases.
+      customer_id: selectedCustomerId ? Number(selectedCustomerId) : null,
     };
     if (shouldSendProviderId && showProviderVehicleIdField) {
       basePayload.provider_vehicle_id = providerVehicleId.trim() || null;

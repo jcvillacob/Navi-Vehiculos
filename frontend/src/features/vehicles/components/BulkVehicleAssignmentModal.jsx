@@ -112,6 +112,8 @@ export default function BulkVehicleAssignmentModal({
     event.preventDefault();
     const payload = {
       customer_database_id: selectedDatabaseId ? Number(selectedDatabaseId) : null,
+      // El cliente viaja aparte para poder asignar clientes sin databases.
+      customer_id: selectedCustomerId ? Number(selectedCustomerId) : null,
     };
     if (selectedGroupValue !== "") {
       payload.customer_group_id =

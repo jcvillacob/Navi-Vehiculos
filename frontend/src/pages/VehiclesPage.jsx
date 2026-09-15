@@ -643,6 +643,7 @@ export default function VehiclesPage() {
 
       await assignVehicleDatabase(selectedVehicle.plate, {
         customer_database_id: payload.customer_database_id,
+        customer_id: payload.customer_id ?? null,
         ...(Object.prototype.hasOwnProperty.call(payload, "provider_vehicle_id")
           ? { provider_vehicle_id: payload.provider_vehicle_id }
           : {}),

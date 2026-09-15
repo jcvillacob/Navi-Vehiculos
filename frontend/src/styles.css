@@ -7287,8 +7287,24 @@ select.control-sm {
   min-width: 1800px;
 }
 
+/* table-layout:fixed no recorta el contenido: un VIN de 17 caracteres se
+   desbordaba encima de la columna siguiente (Dispositivo sobre Placa). */
+.bulk-results-table th,
+.bulk-results-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .bulk-results-table tbody tr td:first-child {
   border-left: 3px solid transparent;
+}
+
+.bulk-assignment-errors {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
 }
 
 .plate-pending-badge {

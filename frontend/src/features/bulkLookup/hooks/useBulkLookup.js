@@ -63,11 +63,16 @@ export function useBulkLookup() {
   const [responseDurations, setResponseDurations] = useState([]);
   const [restoreCandidate, setRestoreCandidate] = useState(loadStoredBatch);
   const [customerDatabaseId, setCustomerDatabaseIdState] = useState(null);
+  const [customerId, setCustomerIdState] = useState(null);
   const [assignmentSummary, setAssignmentSummary] = useState({
     attempted: 0,
     success: 0,
     failed: 0,
+    skipped: 0,
   });
+  // Las asignaciones corren fuera del stream: sin esto sus fallos morian en
+  // console.warn y el lote se veia limpio.
+  const [assignmentErrors, setAssignmentErrors] = useState([]);
 
   const pauseRef = useRef(false);
   const cancelRef = useRef(false);
@@ -77,6 +82,7 @@ export function useBulkLookup() {
   const delayMsRef = useRef(DEFAULT_DELAY_MS);
   const resultsRef = useRef([]);
   const customerDatabaseIdRef = useRef(null);
+  const customerIdRef = useRef(null);
 
   useEffect(() => {
     statusRef.current = status;
@@ -101,6 +107,10 @@ export function useBulkLookup() {
   useEffect(() => {
     customerDatabaseIdRef.current = customerDatabaseId;
   }, [customerDatabaseId]);
+
+  useEffect(() => {
+    customerIdRef.current = customerId;
+  }, [customerId]);
 
   useEffect(() => {
     if (!startedAt || (status !== "running" && status !== "paused")) {
@@ -128,7 +138,8 @@ export function useBulkLookup() {
     setStartedAt(null);
     setElapsedMs(0);
     setResponseDurations([]);
-    setAssignmentSummary({ attempted: 0, success: 0, failed: 0 });
+    setAssignmentSummary({ attempted: 0, success: 0, failed: 0, skipped: 0 });
+    setAssignmentErrors([]);
   }, []);
 
   const appendResult = useCallback((entry, durationMs) => {
@@ -218,20 +229,41 @@ export function useBulkLookup() {
 
               // Asignar cliente/database si el usuario lo eligio y la consulta
               // devolvio una placa valida. No bloquea el stream.
+              // Un cliente sin databases igual debe quedar asignado: basta con
+              // que el usuario haya elegido cliente para llamar al endpoint.
               const dbId = customerDatabaseIdRef.current;
-              if (dbId && response?.plate && response.status !== "not_found" && response.status !== "error") {
+              const custId = customerIdRef.current;
+              const wantsAssignment = Boolean(dbId || custId);
+              const canAssign =
+                Boolean(response?.plate) &&
+                response.status !== "not_found" &&
+                response.status !== "error";
+
+              if (wantsAssignment && !canAssign) {
+                // El vehiculo no se pudo registrar: no hay nada a lo que
+                // asignarle el cliente. Se cuenta para que el resumen no
+                // reporte un lote limpio.
+                setAssignmentSummary((prev) => ({ ...prev, skipped: prev.skipped + 1 }));
+              }
+
+              if (wantsAssignment && canAssign) {
                 setAssignmentSummary((prev) => ({ ...prev, attempted: prev.attempted + 1 }));
-                assignVehicleDatabase(response.plate, { customer_database_id: dbId })
+                assignVehicleDatabase(response.plate, {
+                  customer_database_id: dbId,
+                  customer_id: custId ?? null,
+                })
                   .then(() => {
                     setAssignmentSummary((prev) => ({ ...prev, success: prev.success + 1 }));
                   })
                   .catch((assignErr) => {
+                    const message = assignErr?.message || String(assignErr);
                     setAssignmentSummary((prev) => ({ ...prev, failed: prev.failed + 1 }));
+                    setAssignmentErrors((prev) => [
+                      ...prev,
+                      { plate: response.plate, message },
+                    ]);
                     // eslint-disable-next-line no-console
-                    console.warn(
-                      `No se pudo asignar database a ${response.plate}:`,
-                      assignErr?.message || assignErr
-                    );
+                    console.warn(`No se pudo asignar database a ${response.plate}:`, message);
                   });
               }
 
@@ -339,7 +371,8 @@ export function useBulkLookup() {
     setStartedAt(null);
     setElapsedMs(0);
     setResponseDurations([]);
-    setAssignmentSummary({ attempted: 0, success: 0, failed: 0 });
+    setAssignmentSummary({ attempted: 0, success: 0, failed: 0, skipped: 0 });
+    setAssignmentErrors([]);
     clearStoredBatch();
     setRestoreCandidate(null);
   }, []);
@@ -350,6 +383,10 @@ export function useBulkLookup() {
 
   const setCustomerDatabaseId = useCallback((value) => {
     setCustomerDatabaseIdState(value || null);
+  }, []);
+
+  const setCustomerId = useCallback((value) => {
+    setCustomerIdState(value || null);
   }, []);
 
   const total = items.length;
@@ -378,7 +415,8 @@ export function useBulkLookup() {
     setCurrentIdentifier(null);
     setStartedAt(restoredStartedAt);
     setElapsedMs(Date.now() - restoredStartedAt);
-    setAssignmentSummary({ attempted: 0, success: 0, failed: 0 });
+    setAssignmentSummary({ attempted: 0, success: 0, failed: 0, skipped: 0 });
+    setAssignmentErrors([]);
   }, [restoreCandidate]);
 
   return {
@@ -403,6 +441,9 @@ export function useBulkLookup() {
     restoreLastBatch,
     customerDatabaseId,
     setCustomerDatabaseId,
+    customerId,
+    setCustomerId,
     assignmentSummary,
+    assignmentErrors,
   };
 }

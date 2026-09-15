@@ -5491,19 +5491,66 @@ def assign_vehicle_database(
             raise ValueError("El vehiculo no existe en la base de asociaciones.")
 
         if not payload.customer_database_id:
+            # Un cliente recien creado todavia no tiene credenciales cargadas, asi
+            # que el cliente viaja aparte: sin esto el vehiculo quedaba sin cliente
+            # y la asignacion fallaba en silencio.
+            customer_touched = "customer_id" in payload.model_fields_set
+            requested_customer_id = payload.customer_id if customer_touched else None
+            client_name: str | None = None
+
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE vehicle_motor_assignments
-                    SET access_url = %s,
-                        updated_at = NOW()
-                    WHERE plate = %s;
-                    """,
-                    (normalized_access_url, normalized_plate),
-                )
+                if requested_customer_id is not None:
+                    cur.execute(
+                        "SELECT name FROM customers WHERE id = %s;",
+                        (requested_customer_id,),
+                    )
+                    customer_row = cur.fetchone()
+                    if customer_row is None:
+                        raise ValueError("El cliente seleccionado no existe.")
+                    client_name = customer_row["name"]
+
+                if not customer_touched:
+                    cur.execute(
+                        """
+                        UPDATE vehicle_motor_assignments
+                        SET access_url = %s,
+                            updated_at = NOW()
+                        WHERE plate = %s;
+                        """,
+                        (normalized_access_url, normalized_plate),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE vehicle_motor_assignments
+                        SET access_url = %s,
+                            customer_id = %s,
+                            customer_database_id = NULL,
+                            geotab_customer_status = 'not_applicable',
+                            geotab_customer_database_id = NULL,
+                            -- Un grupo interno pertenece a un cliente: si el vehiculo
+                            -- cambia de cliente, la asignacion vieja se limpia.
+                            customer_group_id = CASE
+                                WHEN customer_group_id IS NOT NULL AND EXISTS (
+                                    SELECT 1 FROM customer_vehicle_groups g
+                                    WHERE g.id = vehicle_motor_assignments.customer_group_id
+                                      AND g.customer_id = %s
+                                ) THEN customer_group_id
+                                ELSE NULL
+                            END,
+                            updated_at = NOW()
+                        WHERE plate = %s;
+                        """,
+                        (
+                            normalized_access_url,
+                            requested_customer_id,
+                            requested_customer_id,
+                            normalized_plate,
+                        ),
+                    )
             # Sin database: ignoramos provider_vehicle_id (el binding requiere customer_database_id).
             conn.commit()
-            return AssignedDatabaseSummary()
+            return AssignedDatabaseSummary(client_name=client_name)
 
         with conn.cursor() as cur:
             cur.execute(

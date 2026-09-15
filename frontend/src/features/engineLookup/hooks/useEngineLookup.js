@@ -187,9 +187,12 @@ export function useEngineLookup() {
 
       let assignedDatabase = lookupResult.assigned_database || null;
 
-      if (payload.customer_database_id) {
+      // Un cliente sin databases igual debe quedar asignado, asi que basta con
+      // que el modal haya elegido cliente para llamar al endpoint.
+      if (payload.customer_database_id || payload.customer_id) {
         assignedDatabase = await assignVehicleDatabase(lookupResult.plate, {
-          customer_database_id: payload.customer_database_id
+          customer_database_id: payload.customer_database_id,
+          customer_id: payload.customer_id ?? null
         });
       }
 
