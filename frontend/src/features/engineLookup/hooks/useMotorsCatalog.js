@@ -5,6 +5,7 @@ import {
   deleteMotor as deleteMotorApi,
   deleteMotorAttachment,
   listMotors,
+  setMotorRpmBands,
   updateMotor,
   updateMotorAttachment,
   uploadMotorAttachment
@@ -90,6 +91,25 @@ export function useMotorsCatalog() {
     }
   };
 
+  const saveRpmBands = async (motorId, bands) => {
+    setLoading(true);
+    setError("");
+    try {
+      const saved = await setMotorRpmBands(motorId, bands);
+      setMotors((prev) =>
+        prev.map((m) => (m.id === motorId ? { ...m, rpm_bands: saved } : m))
+      );
+      return saved;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "No fue posible guardar los rangos de RPM";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     loading,
     motors,
@@ -98,6 +118,7 @@ export function useMotorsCatalog() {
     registerMotor,
     editMotor,
     removeMotor,
+    saveRpmBands,
     uploadAttachment: async (motorId, payload) => {
       setLoading(true);
       setError("");

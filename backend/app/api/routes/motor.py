@@ -4,7 +4,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, UploadF
 from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import require_permission
-from app.schemas.vehicle import MotorAttachmentRecord, MotorCatalogRecord, MotorCatalogUpsertRequest, MotorUpdateRequest
+from app.schemas.vehicle import (
+    MotorAttachmentRecord,
+    MotorCatalogRecord,
+    MotorCatalogUpsertRequest,
+    MotorRpmBandRecord,
+    MotorRpmBandsUpdateRequest,
+    MotorUpdateRequest,
+)
 from app.services.motor_catalog import (
     create_motor,
     create_motor_attachment,
@@ -12,7 +19,9 @@ from app.services.motor_catalog import (
     delete_motor_attachment,
     get_motor_attachment_file,
     list_motor_attachments,
+    list_motor_rpm_bands,
     list_motors,
+    set_motor_rpm_bands,
     migrate_local_files_to_minio,
     update_motor,
     update_motor_attachment,
@@ -59,6 +68,31 @@ def delete_motor_record(
         return {"deleted": True, "vehicles_unlinked": vehicle_count}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{motor_id}/rpm-bands", response_model=list[MotorRpmBandRecord])
+def get_motor_rpm_bands(
+    motor_id: int = Path(..., ge=1, description="ID del motor"),
+    _user: dict = Depends(require_permission("motors.list")),
+) -> list[MotorRpmBandRecord]:
+    try:
+        return list_motor_rpm_bands(motor_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{motor_id}/rpm-bands", response_model=list[MotorRpmBandRecord])
+def put_motor_rpm_bands(
+    payload: MotorRpmBandsUpdateRequest,
+    motor_id: int = Path(..., ge=1, description="ID del motor"),
+    _user: dict = Depends(require_permission("motors.edit")),
+) -> list[MotorRpmBandRecord]:
+    """Reemplaza los rangos de RPM del motor. Lista vacia = borrar la configuracion."""
+    try:
+        return set_motor_rpm_bands(motor_id, payload.bands)
+    except ValueError as exc:
+        status_code = 404 if "no existe" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.get("/{motor_id}/attachments", response_model=list[MotorAttachmentRecord])

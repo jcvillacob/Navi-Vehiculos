@@ -69,3 +69,29 @@ def suggest_is_descenso(name: str | None, band: str | None) -> bool:
     if band is None or band == "ralenti":
         return False
     return "descenso" in normalize_rule_name(name)
+
+
+# Bandas que participan del calculo por RANGOS DE RPM (customers.range_mode = 'rpm').
+# Van en orden ASCENDENTE de revoluciones: definen una particion contigua del eje
+# de RPM, asi que el orden es semantico y las validaciones dependen de el.
+#
+# 'ralenti' NO esta aca a proposito: en el modo por RPM el ralenti no es un tramo
+# del eje de revoluciones sino el tiempo con el motor encendido y el vehiculo
+# detenido (velocidad 0), asi que se deriva de la telemetria, no de un rango.
+RPM_RANGE_BANDS: tuple[str, ...] = (
+    "rango_bajo",
+    "rango_economico",
+    "rango_balanceado",
+    "rango_potencia",
+    "rango_potencia_ineficiente",
+    "exceso_rpm",
+)
+
+RPM_RANGE_BAND_LABELS: dict[str, str] = {
+    "rango_bajo": "Rango bajo",
+    "rango_economico": "Rango economico",
+    "rango_balanceado": "Rango balanceado",
+    "rango_potencia": "Rango potencia",
+    "rango_potencia_ineficiente": "Potencia ineficiente",
+    "exceso_rpm": "Exceso de RPM",
+}

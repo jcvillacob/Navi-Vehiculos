@@ -9,6 +9,7 @@ import {
   deleteGeotabRuleGroup,
   listCustomers,
   setCustomerActive,
+  setCustomerRangeMode,
   updateCustomer,
   updateCustomerDatabase,
   updateGeotabRuleApplication
@@ -81,6 +82,20 @@ export function useCustomersCatalog() {
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "No fue posible cambiar el estado del cliente";
+      setError(message);
+      throw err;
+    }
+  };
+
+  const changeCustomerRangeMode = async (customerId, rangeMode) => {
+    setError("");
+    try {
+      const updated = await setCustomerRangeMode(customerId, rangeMode);
+      setCustomers((prev) => prev.map((c) => (c.id === customerId ? updated : c)));
+      return updated;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "No fue posible cambiar el modo de rangos";
       setError(message);
       throw err;
     }
@@ -325,6 +340,7 @@ export function useCustomersCatalog() {
     registerCustomer,
     editCustomer,
     toggleCustomerActive,
+    changeCustomerRangeMode,
     registerCustomerDatabase,
     editCustomerDatabase,
     addGeotabRule,
