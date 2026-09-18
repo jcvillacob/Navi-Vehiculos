@@ -3,11 +3,13 @@
 > Documento hermano: [contrato-integracion-portal-clientes.md](contrato-integracion-portal-clientes.md)
 > (contrato que consume Portal Clientes; este plan lo extiende en §7).
 >
-> Estado: **ejecutado** el 2026-09-18. Fases 1 a 4 en este repo; fase 5 en
-> `Navi-Portal-Clientes`, rama `feat/reglas-postratamiento` (puntos 1 a 4 de §8, sin
-> mergear). Queda encender `INTEGRATION_EXPORT_POSTRATAMIENTO` tras ese despliegue y
-> resolver el punto 5 de §8, el ETL. Las decisiones de §10 se resolvieron según la
-> propuesta de este documento; §10.1 (el enum) sigue sujeta a validación del negocio.
+> Estado: **en servicio** desde el 2026-09-18. Fases 1 a 4 en este repo; fase 5 en
+> `Navi-Portal-Clientes`, mergeada en `Navifault` (puntos 1 a 4 de §8) con su
+> migración aplicada. `INTEGRATION_EXPORT_POSTRATAMIENTO=true` quedó encendida en el
+> `.env` de este repo y el backend recreado, así que el snapshot ya publica la
+> categoría; todavía no hay ninguna regla registrada con ella. Queda resolver el
+> punto 5 de §8, el ETL. Las decisiones de §10 se resolvieron según la propuesta de
+> este documento; §10.1 (el enum) sigue sujeta a validación del negocio.
 
 ## 1. Contexto y objetivo
 
