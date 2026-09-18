@@ -3,9 +3,10 @@
 > Documento hermano: [contrato-integracion-portal-clientes.md](contrato-integracion-portal-clientes.md)
 > (contrato que consume Portal Clientes; este plan lo extiende en §7).
 >
-> Estado: **ejecutado** el 2026-09-18 (fases 1 a 4). Queda pendiente la fase 5, que vive
-> en el repo `Navi-Portal-Clientes`, y encender `INTEGRATION_EXPORT_POSTRATAMIENTO`
-> cuando ese despliegue esté hecho. Las decisiones de §10 se resolvieron según la
+> Estado: **ejecutado** el 2026-09-18. Fases 1 a 4 en este repo; fase 5 en
+> `Navi-Portal-Clientes`, rama `feat/reglas-postratamiento` (puntos 1 a 4 de §8, sin
+> mergear). Queda encender `INTEGRATION_EXPORT_POSTRATAMIENTO` tras ese despliegue y
+> resolver el punto 5 de §8, el ETL. Las decisiones de §10 se resolvieron según la
 > propuesta de este documento; §10.1 (el enum) sigue sujeta a validación del negocio.
 
 ## 1. Contexto y objetivo
@@ -279,6 +280,18 @@ clasificación, y la ve listada en una sección propia, editable igual que los h
 5. ETL/reportes: dataset o sección que extraiga `ExceptionEvent` de esas reglas y las
    presente (ya existen datasets `alertas` y `consumo_def` como referencia).
 6. Encender `INTEGRATION_EXPORT_POSTRATAMIENTO` en Navi Vehículos una vez desplegado.
+
+**Ejecución (2026-09-18).** Puntos 1 a 4 hechos en la rama `feat/reglas-postratamiento`
+de `Navi-Portal-Clientes` (migración `c8d9e0f00067`, sync tolerante a categorías
+desconocidas, tipos y tarjeta de base de datos), más su copia del contrato. El punto 5
+**no** se tocó por dos razones: el ETL vive en `InformesRendimiento/`, que es **otro
+repositorio** (`hagudelomnavi/InformesRendimiento`, ignorado en el `.gitignore` del
+portal), y antes hay que decidir si los eventos de postratamiento aterrizan en
+`fact_habito_event` o en un hecho propio, y cómo se reparten con los datasets `alertas`
+y `consumo_def` que ya existen. Mezclarlos con hábitos seguros metería fallas de
+emisiones dentro de indicadores de conducción del conductor. Mientras tanto el ETL los
+ignora sin riesgo: sus consultas filtran por igualdad (`= 'operacion'`,
+`= 'habito_seguro'`), nunca por negación.
 
 ## 9. Tests (backend, PostgreSQL real)
 
