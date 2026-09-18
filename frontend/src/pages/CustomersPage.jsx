@@ -54,6 +54,37 @@ const SAFE_HABIT_DESCRIPTIONS = [
   "Aceleraciones bruscas"
 ];
 
+// Clasificacion de las reglas del sistema de postratamiento (ver backend
+// app/services/motor_catalog.py: AFTERTREATMENT_DESCRIPTIONS). El `value` viaja sin
+// acentos porque es el valor persistido; el `label` es solo para leerlo.
+const AFTERTREATMENT_DESCRIPTIONS = [
+  { value: "Nivel bajo de DEF", label: "Nivel bajo de DEF" },
+  { value: "Calidad de DEF", label: "Calidad de DEF" },
+  { value: "Regeneracion DPF requerida", label: "Regeneración DPF requerida" },
+  { value: "Regeneracion DPF inhibida", label: "Regeneración DPF inhibida" },
+  { value: "Nivel alto de hollin DPF", label: "Nivel alto de hollín DPF" },
+  { value: "Temperatura alta de escape", label: "Temperatura alta de escape" },
+  { value: "Falla SCR o sensor NOx", label: "Falla SCR o sensor NOx" },
+  { value: "Derate por postratamiento", label: "Derate por postratamiento" }
+];
+
+const AFTERTREATMENT_LABELS = AFTERTREATMENT_DESCRIPTIONS.reduce((acc, option) => {
+  acc[option.value] = option.label;
+  return acc;
+}, {});
+
+// Categorias sin motor: la regla aplica a toda la database.
+const GLOBAL_RULE_CATEGORIES = ["habito_seguro", "postratamiento"];
+
+function descriptionOptionsFor(category) {
+  return category === "postratamiento"
+    ? AFTERTREATMENT_DESCRIPTIONS
+    : SAFE_HABIT_DESCRIPTIONS.map((description) => ({
+        value: description,
+        label: description
+      }));
+}
+
 // Bandas de RPM explicitas (ver backend app/services/rule_bands.py). Solo aplican a
 // aplicaciones de categoria 'operacion'.
 const RULE_BANDS = [
@@ -94,9 +125,13 @@ function getRuleApplications(rule) {
 }
 
 function formatRuleApplicationLabel(application) {
-  if (application.description) return application.description;
+  if (application.description) {
+    return AFTERTREATMENT_LABELS[application.description] || application.description;
+  }
   if (application.event_type === "exceso_rpm") return "Excesos de RPM";
-  return application.category === "habito_seguro" ? "Hábito seguro" : "Operación";
+  if (application.category === "habito_seguro") return "Hábito seguro";
+  if (application.category === "postratamiento") return "Postratamiento";
+  return "Operación";
 }
 
 function sameMotorIdentity(application, group) {
@@ -1286,14 +1321,27 @@ function RuleBandControl({ rule, canEdit, loading, onSetRuleBand, onSaved, onCan
   );
 }
 
-function SafeHabitControl({ application, motors, loading, onUpdate, onSaved, onCancel }) {
+/* ── Clasificacion de una aplicacion global (habito seguro o postratamiento) ── */
+function GlobalRuleDescriptionControl({
+  application,
+  category = "habito_seguro",
+  motors,
+  loading,
+  onUpdate,
+  onSaved,
+  onCancel
+}) {
+  const isAftertreatment = category === "postratamiento";
+  const options = descriptionOptionsFor(category);
   const [description, setDescription] = useState(application.description || "");
   const [motorId, setMotorId] = useState(
     application.event_type === "exceso_rpm" && application.motor_id
       ? String(application.motor_id)
       : ""
   );
-  const isRpm = description === "Excesos de RPM";
+  // Excesos de RPM es el unico habito que cuelga de un motor; postratamiento
+  // nunca lleva motor.
+  const isRpm = !isAftertreatment && description === "Excesos de RPM";
   const unchanged =
     description === (application.description || "") &&
     (!isRpm || motorId === String(application.motor_id || ""));
@@ -1319,11 +1367,19 @@ function SafeHabitControl({ application, motors, loading, onUpdate, onSaved, onC
           if (value !== "Excesos de RPM") setMotorId("");
         }}
         disabled={loading}
-        aria-label="Clasificación del hábito seguro"
+        aria-label={
+          isAftertreatment
+            ? "Clasificación de postratamiento"
+            : "Clasificación del hábito seguro"
+        }
       >
-        <option value="">Selecciona un hábito seguro</option>
-        {SAFE_HABIT_DESCRIPTIONS.map((option) => (
-          <option key={option} value={option}>{option}</option>
+        <option value="">
+          {isAftertreatment
+            ? "Selecciona una clasificación"
+            : "Selecciona un hábito seguro"}
+        </option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
         ))}
       </select>
       {isRpm ? (
@@ -1356,6 +1412,158 @@ function SafeHabitControl({ application, motors, loading, onUpdate, onSaved, onC
   );
 }
 
+/* ── Reglas globales de la database (habito seguro / postratamiento) ──
+   Las dos categorias sin motor se listan y editan igual; solo cambian el
+   titulo, el enum de clasificacion y el mensaje de vacio. */
+function GlobalRulesSection({
+  title,
+  emptyMessage,
+  category,
+  items,
+  keyPrefix,
+  motors,
+  loading,
+  canEdit,
+  openRuleKey,
+  setOpenRuleKey,
+  editingRuleKey,
+  setEditingRuleKey,
+  selectedRuleId,
+  setSelectedRuleId,
+  inspection,
+  inspectionLoading,
+  inspectionError,
+  confirmDeleteRuleId,
+  setConfirmDeleteRuleId,
+  onSetRuleBand,
+  onDeleteRule
+}) {
+  return (
+    <div className="rules-motor-section">
+      <div className="rules-motor-section-header">
+        <div>
+          <span className="rules-label">{title}</span>
+          <span className="rules-count-subtle">
+            {items.length} {items.length === 1 ? "regla" : "reglas"}
+          </span>
+        </div>
+      </div>
+      {items.length > 0 ? (
+        <div className="motor-group-card-rules">
+          {items.map(({ rule, application }) => {
+            const ruleKey = `${keyPrefix}-${rule.id}-${application.id}`;
+            const isOpen = openRuleKey === ruleKey;
+            const isEditing = editingRuleKey === ruleKey;
+
+            return (
+              <details
+                className={`motor-group-rule ${selectedRuleId === rule.id ? "is-active" : ""}`}
+                key={ruleKey}
+                open={isOpen}
+              >
+                <summary
+                  className="motor-group-rule-summary"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    if (!isOpen) {
+                      setOpenRuleKey(ruleKey);
+                      setSelectedRuleId(rule.id);
+                      setEditingRuleKey(null);
+                    } else {
+                      setOpenRuleKey(null);
+                      setEditingRuleKey(null);
+                    }
+                  }}
+                >
+                  <span className="motor-group-rule-chevron" />
+                  <span className="motor-group-rule-summary-main">
+                    <span className="motor-group-rule-chip-name">{rule.name}</span>
+                    <code className="motor-group-rule-chip-id">{rule.rule_id}</code>
+                  </span>
+                  <span className="motor-group-rule-summary-meta">
+                    <span className="rule-app-tag">{formatRuleApplicationLabel(application)}</span>
+                  </span>
+                </summary>
+                <div className="motor-group-rule-content">
+                  <RuleSummaryCard
+                    inspection={
+                      selectedRuleId === rule.id && inspection?.rule_id === rule.rule_id
+                        ? inspection
+                        : null
+                    }
+                    loading={selectedRuleId === rule.id && inspectionLoading}
+                    error={selectedRuleId === rule.id ? inspectionError : ""}
+                    emptyMessage="Cargando descripción de la regla..."
+                  />
+                  {canEdit ? (
+                    <div className="motor-group-rule-actions">
+                      {isEditing ? (
+                        <GlobalRuleDescriptionControl
+                          application={application}
+                          category={category}
+                          motors={motors}
+                          loading={loading}
+                          onUpdate={onSetRuleBand}
+                          onSaved={() => setEditingRuleKey(null)}
+                          onCancel={() => setEditingRuleKey(null)}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="button-secondary button-sm"
+                          onClick={() => setEditingRuleKey(ruleKey)}
+                          disabled={loading}
+                        >
+                          Editar
+                        </button>
+                      )}
+                      {confirmDeleteRuleId === rule.id ? (
+                        <>
+                          <button
+                            type="button"
+                            className="button-secondary button-sm rule-confirm-delete"
+                            onClick={() => {
+                              setConfirmDeleteRuleId(null);
+                              onDeleteRule(rule);
+                            }}
+                            disabled={loading}
+                          >
+                            Confirmar eliminación
+                          </button>
+                          <button
+                            type="button"
+                            className="button-secondary button-sm"
+                            onClick={() => setConfirmDeleteRuleId(null)}
+                          >
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="button-secondary button-sm rule-delete-action"
+                          onClick={() => setConfirmDeleteRuleId(rule.id)}
+                          disabled={loading}
+                        >
+                          Eliminar
+                        </button>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="rules-empty-state">
+          <p>{emptyMessage}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Database Detail Modal (info + rules for Geotab) ───────────────── */
 function DatabaseDetailModal({
   database,
@@ -1374,7 +1582,8 @@ function DatabaseDetailModal({
   const [ruleId, setRuleId] = useState("");
   const [ruleCategory, setRuleCategory] = useState("operacion");
   const [ruleMotorId, setRuleMotorId] = useState("");
-  const [ruleSafeHabitDescription, setRuleSafeHabitDescription] = useState("");
+  // Clasificacion de la categoria global elegida (habito seguro o postratamiento).
+  const [ruleDescription, setRuleDescription] = useState("");
   const [ruleBand, setRuleBand] = useState("");
   const [ruleIsDescenso, setRuleIsDescenso] = useState(false);
   const [resolveStatus, setResolveStatus] = useState("idle");
@@ -1410,6 +1619,14 @@ function DatabaseDetailModal({
     () => rules.flatMap((rule) =>
       getRuleApplications(rule)
         .filter((application) => application.category === "habito_seguro" && !application.motor_id)
+        .map((application) => ({ rule, application }))
+    ),
+    [rules]
+  );
+  const aftertreatmentRules = useMemo(
+    () => rules.flatMap((rule) =>
+      getRuleApplications(rule)
+        .filter((application) => application.category === "postratamiento")
         .map((application) => ({ rule, application }))
     ),
     [rules]
@@ -1634,11 +1851,14 @@ function DatabaseDetailModal({
   useEffect(() => {
     if (ruleCategory === "operacion") {
       setRuleMotorId("");
-      setRuleSafeHabitDescription("");
+      setRuleDescription("");
     } else {
       // La banda solo aplica a 'operacion'.
       setRuleBand("");
       setRuleIsDescenso(false);
+      // Cada categoria global tiene su propio enum de clasificacion.
+      setRuleDescription("");
+      if (ruleCategory === "postratamiento") setRuleMotorId("");
     }
   }, [ruleCategory]);
 
@@ -1658,27 +1878,28 @@ function DatabaseDetailModal({
     if (!normalizedRuleId || resolveStatus !== "resolved" || rulePreview?.rule_id !== normalizedRuleId) {
       return;
     }
-    if (ruleCategory === "habito_seguro" && !ruleSafeHabitDescription) {
+    if (GLOBAL_RULE_CATEGORIES.includes(ruleCategory) && !ruleDescription) {
       return;
     }
     if (ruleCategory === "operacion" && !ruleMotorId) {
       return;
     }
-    if (ruleSafeHabitDescription === "Excesos de RPM" && !ruleMotorId) {
+    if (ruleDescription === "Excesos de RPM" && !ruleMotorId) {
       return;
     }
     const created = await onAddRule({
       rule_id: normalizedRuleId,
       category: ruleCategory,
-      motor_id: ruleMotorId ? Number(ruleMotorId) : null,
-      description: ruleCategory === "habito_seguro" ? ruleSafeHabitDescription : null,
+      motor_id:
+        ruleCategory === "postratamiento" || !ruleMotorId ? null : Number(ruleMotorId),
+      description: GLOBAL_RULE_CATEGORIES.includes(ruleCategory) ? ruleDescription : null,
       band: ruleCategory === "operacion" ? ruleBand || null : null,
       is_descenso: ruleCategory === "operacion" ? ruleIsDescenso : false
     });
     setRuleId("");
     setRuleCategory("operacion");
     setRuleMotorId("");
-    setRuleSafeHabitDescription("");
+    setRuleDescription("");
     setRuleBand("");
     setRuleIsDescenso(false);
     setResolveStatus("idle");
@@ -1795,30 +2016,39 @@ function DatabaseDetailModal({
                     >
                       <option value="operacion">Operación</option>
                       <option value="habito_seguro">Hábito seguro</option>
+                      <option value="postratamiento">Postratamiento</option>
                     </select>
-                    {ruleCategory === "habito_seguro" ? (
+                    {GLOBAL_RULE_CATEGORIES.includes(ruleCategory) ? (
                       <>
                         <select
-                          value={ruleSafeHabitDescription}
+                          value={ruleDescription}
                           onChange={(event) => {
                             const value = event.target.value;
-                            setRuleSafeHabitDescription(value);
+                            setRuleDescription(value);
                             if (value !== "Excesos de RPM") {
                               setRuleMotorId("");
                             }
                           }}
                           disabled={loading}
                           required
-                          aria-label="Clasificación del hábito seguro"
+                          aria-label={
+                            ruleCategory === "postratamiento"
+                              ? "Clasificación de postratamiento"
+                              : "Clasificación del hábito seguro"
+                          }
                         >
-                          <option value="">Selecciona un hábito seguro</option>
-                          {SAFE_HABIT_DESCRIPTIONS.map((description) => (
-                            <option key={description} value={description}>
-                              {description}
+                          <option value="">
+                            {ruleCategory === "postratamiento"
+                              ? "Selecciona una clasificación"
+                              : "Selecciona un hábito seguro"}
+                          </option>
+                          {descriptionOptionsFor(ruleCategory).map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
                             </option>
                           ))}
                         </select>
-                        {ruleSafeHabitDescription === "Excesos de RPM" ? (
+                        {ruleDescription === "Excesos de RPM" ? (
                           <select
                             value={ruleMotorId}
                             onChange={(event) => setRuleMotorId(event.target.value)}
@@ -1894,8 +2124,8 @@ function DatabaseDetailModal({
                     disabled={
                       loading ||
                       (ruleCategory === "operacion" && !ruleMotorId) ||
-                      (ruleCategory === "habito_seguro" && !ruleSafeHabitDescription) ||
-                      (ruleSafeHabitDescription === "Excesos de RPM" && !ruleMotorId) ||
+                      (GLOBAL_RULE_CATEGORIES.includes(ruleCategory) && !ruleDescription) ||
+                      (ruleDescription === "Excesos de RPM" && !ruleMotorId) ||
                       resolveStatus !== "resolved" ||
                       !rulePreview?.exists ||
                       rulePreview?.rule_id !== ruleId.trim()
@@ -2107,8 +2337,9 @@ function DatabaseDetailModal({
                                   {Boolean(rule.application_id) ? (
                                     isEditing ? (
                                       rule.application_category === "habito_seguro" ? (
-                                        <SafeHabitControl
+                                        <GlobalRuleDescriptionControl
                                           application={rule}
+                                          category="habito_seguro"
                                           motors={motors}
                                           loading={loading}
                                           onUpdate={onSetRuleBand}
@@ -2253,126 +2484,54 @@ function DatabaseDetailModal({
               ) : null}
             </div>
 
-            {/* ── Safe-habit rules ── */}
-            <div className="rules-motor-section">
-              <div className="rules-motor-section-header">
-                <div>
-                  <span className="rules-label">Reglas de hábito seguro</span>
-                  <span className="rules-count-subtle">{safeHabitRules.length} {safeHabitRules.length === 1 ? "regla" : "reglas"}</span>
-                </div>
-              </div>
-              {safeHabitRules.length > 0 ? (
-                <div className="motor-group-card-rules">
-                  {safeHabitRules.map(({ rule, application }) => {
-                    const ruleKey = `safe-habit-${rule.id}-${application.id}`;
-                    const isOpen = openRuleKey === ruleKey;
-                    const isEditing = editingRuleKey === ruleKey;
+            {/* ── Reglas globales de la database ── */}
+            <GlobalRulesSection
+              title="Reglas de hábito seguro"
+              emptyMessage={'Sin reglas de hábito seguro. Agrégalas con la categoría "Hábito seguro".'}
+              category="habito_seguro"
+              items={safeHabitRules}
+              keyPrefix="safe-habit"
+                motors={motors}
+                loading={loading}
+                canEdit={canEdit}
+                openRuleKey={openRuleKey}
+                setOpenRuleKey={setOpenRuleKey}
+                editingRuleKey={editingRuleKey}
+                setEditingRuleKey={setEditingRuleKey}
+                selectedRuleId={selectedRuleId}
+                setSelectedRuleId={setSelectedRuleId}
+                inspection={inspection}
+                inspectionLoading={inspectionLoading}
+                inspectionError={inspectionError}
+                confirmDeleteRuleId={confirmDeleteRuleId}
+                setConfirmDeleteRuleId={setConfirmDeleteRuleId}
+                onSetRuleBand={onSetRuleBand}
+                onDeleteRule={onDeleteRule}
+            />
 
-                    return (
-                      <details
-                        className={`motor-group-rule ${selectedRuleId === rule.id ? "is-active" : ""}`}
-                        key={ruleKey}
-                        open={isOpen}
-                      >
-                        <summary
-                          className="motor-group-rule-summary"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            if (!isOpen) {
-                              setOpenRuleKey(ruleKey);
-                              setSelectedRuleId(rule.id);
-                              setEditingRuleKey(null);
-                            } else {
-                              setOpenRuleKey(null);
-                              setEditingRuleKey(null);
-                            }
-                          }}
-                        >
-                          <span className="motor-group-rule-chevron" />
-                          <span className="motor-group-rule-summary-main">
-                            <span className="motor-group-rule-chip-name">{rule.name}</span>
-                            <code className="motor-group-rule-chip-id">{rule.rule_id}</code>
-                          </span>
-                          <span className="motor-group-rule-summary-meta">
-                            <span className="rule-app-tag">{formatRuleApplicationLabel(application)}</span>
-                          </span>
-                        </summary>
-                        <div className="motor-group-rule-content">
-                          <RuleSummaryCard
-                            inspection={
-                              selectedRuleId === rule.id && inspection?.rule_id === rule.rule_id
-                                ? inspection
-                                : null
-                            }
-                            loading={selectedRuleId === rule.id && inspectionLoading}
-                            error={selectedRuleId === rule.id ? inspectionError : ""}
-                            emptyMessage="Cargando descripción de la regla..."
-                          />
-                          {canEdit ? (
-                            <div className="motor-group-rule-actions">
-                              {isEditing ? (
-                                <SafeHabitControl
-                                  application={application}
-                                  motors={motors}
-                                  loading={loading}
-                                  onUpdate={onSetRuleBand}
-                                  onSaved={() => setEditingRuleKey(null)}
-                                  onCancel={() => setEditingRuleKey(null)}
-                                />
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="button-secondary button-sm"
-                                  onClick={() => setEditingRuleKey(ruleKey)}
-                                  disabled={loading}
-                                >
-                                  Editar
-                                </button>
-                              )}
-                              {confirmDeleteRuleId === rule.id ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    className="button-secondary button-sm rule-confirm-delete"
-                                    onClick={() => {
-                                      setConfirmDeleteRuleId(null);
-                                      onDeleteRule(rule);
-                                    }}
-                                    disabled={loading}
-                                  >
-                                    Confirmar eliminación
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="button-secondary button-sm"
-                                    onClick={() => setConfirmDeleteRuleId(null)}
-                                  >
-                                    Cancelar
-                                  </button>
-                                </>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="button-secondary button-sm rule-delete-action"
-                                  onClick={() => setConfirmDeleteRuleId(rule.id)}
-                                  disabled={loading}
-                                >
-                                  Eliminar
-                                </button>
-                              )}
-                            </div>
-                          ) : null}
-                        </div>
-                      </details>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="rules-empty-state">
-                  <p>Sin reglas de hábito seguro. Agrégalas con la categoría "Hábito seguro".</p>
-                </div>
-              )}
-            </div>
+            <GlobalRulesSection
+              title="Reglas de sistema de postratamiento"
+              emptyMessage={'Sin reglas de postratamiento. Agrégalas con la categoría "Postratamiento".'}
+              category="postratamiento"
+              items={aftertreatmentRules}
+              keyPrefix="aftertreatment"
+                motors={motors}
+                loading={loading}
+                canEdit={canEdit}
+                openRuleKey={openRuleKey}
+                setOpenRuleKey={setOpenRuleKey}
+                editingRuleKey={editingRuleKey}
+                setEditingRuleKey={setEditingRuleKey}
+                selectedRuleId={selectedRuleId}
+                setSelectedRuleId={setSelectedRuleId}
+                inspection={inspection}
+                inspectionLoading={inspectionLoading}
+                inspectionError={inspectionError}
+                confirmDeleteRuleId={confirmDeleteRuleId}
+                setConfirmDeleteRuleId={setConfirmDeleteRuleId}
+                onSetRuleBand={onSetRuleBand}
+                onDeleteRule={onDeleteRule}
+            />
 
             {/* ── Credentials pool ── */}
             <CredentialsPanel databaseId={database.id} canEdit={canEdit} />
