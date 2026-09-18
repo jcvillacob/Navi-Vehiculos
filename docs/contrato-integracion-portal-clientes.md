@@ -97,6 +97,18 @@ GET {NAVI_BASE_URL}/api/v1/integration/snapshot
               "band": null,
               "is_descenso": false,
               "created_at": "2026-05-20T09:05:00Z"
+            },
+            {
+              "id": 103,
+              "rule_id": "aDef1LowLvl",
+              "name": "Nivel bajo de DEF",
+              "category": "postratamiento",
+              "motor_type": null,
+              "event_type": null,
+              "description": "Nivel bajo de DEF",
+              "band": null,
+              "is_descenso": false,
+              "created_at": "2026-09-17T09:00:00Z"
             }
           ]
         }
@@ -139,11 +151,11 @@ Notas sobre los campos clave:
 | `vehicles[].geotab_device_id` | **Código interno de Geotab** del vehículo **en la db del cliente** (`geotab_customer_database_id`). Es el id que Portal Clientes usa para llamar a la API de Geotab (`deviceSearch: {id: ...}`). |
 | `vehicles[].geotab_customer_status` | `found` / `not_found` / `unknown` / `not_applicable`. Solo confiar en `geotab_device_id` cuando es `found`. |
 | `databases[].provider_config.plate_prefix` | Algunos clientes nombran devices con prefijo (ej. device `TRABC123` para placa `ABC123`). Relevante si Portal Clientes busca por placa en vez de por id. |
-| `rules[].category` | `operacion` (reglas de motor) o `habito_seguro`. `rule_id` es el id nativo de Geotab para consultar `ExceptionEvent` (`ruleSearch: {id: ...}`). |
-| `rules[].motor_type` | **Familia de motor** a la que aplica la regla (`engine_name` del motor; ej. `ISD`, `X15`). Es obligatorio y no nulo para toda aplicación `operacion`; los hábitos seguros globales pueden traer `null`. Ver §2.3. |
+| `rules[].category` | `operacion` (reglas de motor), `habito_seguro` o `postratamiento` (ambas globales a la database). `rule_id` es el id nativo de Geotab para consultar `ExceptionEvent` (`ruleSearch: {id: ...}`). Ver §2.7 para la categoría nueva. |
+| `rules[].motor_type` | **Familia de motor** a la que aplica la regla (`engine_name` del motor; ej. `ISD`, `X15`). Es obligatorio y no nulo para toda aplicación `operacion`; las categorías globales (`habito_seguro`, `postratamiento`) traen `null`. Ver §2.3. |
 | `rules[].event_type` | Tipo semántico del evento (ej. `exceso_rpm`) o `null`. Semántica sin cambios. |
-| `rules[].description` | Clasificación explícita de una regla `habito_seguro`, independiente del nombre de la regla: `Excesos de velocidad`, `Giros bruscos`, `Excesos de RPM`, `Frenadas bruscas`, `Baches o Resaltos fuertes` o `Aceleraciones bruscas`. En reglas `operacion` es `null`. |
-| `rules[].band` | **Banda de RPM explícita** de la aplicación, administrada en Navi-Vehículos (NO inferida del nombre). Enum cerrado: `rango_bajo`, `rango_economico`, `rango_balanceado`, `rango_potencia`, `rango_potencia_ineficiente`, `exceso_rpm`, `ralenti`. Solo aplica a `category = operacion`; en `habito_seguro` siempre `null`. Puede ser `null` si aún no se asignó. **Aditivo/nullable**: el consumidor debe tolerar su ausencia. Ver §2.4. |
+| `rules[].description` | Clasificación explícita de una regla de categoría global, independiente del nombre de la regla. Cada categoría tiene **su propio enum cerrado**: en `habito_seguro`, `Excesos de velocidad`, `Giros bruscos`, `Excesos de RPM`, `Frenadas bruscas`, `Baches o Resaltos fuertes` o `Aceleraciones bruscas`; en `postratamiento`, los ocho valores de §2.7. En reglas `operacion` es `null`. |
+| `rules[].band` | **Banda de RPM explícita** de la aplicación, administrada en Navi-Vehículos (NO inferida del nombre). Enum cerrado: `rango_bajo`, `rango_economico`, `rango_balanceado`, `rango_potencia`, `rango_potencia_ineficiente`, `exceso_rpm`, `ralenti`. Solo aplica a `category = operacion`; en las categorías globales siempre `null`. Puede ser `null` si aún no se asignó. **Aditivo/nullable**: el consumidor debe tolerar su ausencia. Ver §2.4. |
 | `rules[].is_descenso` | **Booleano** que marca la aplicación como banda de descenso. `false` por defecto. Nunca `true` con `band` nulo ni con `band = ralenti`. |
 | `vehicles[].motor_type` | **Familia de motor** del vehículo (`engine_name` del motor cuyo `technical_number` coincide). `null` si el `technical_number` no está en el catálogo. Mismo vocabulario que `rules[].motor_type`, así que cruzan directo. Ver §2.3. |
 | `vehicles[].marketing_model_name` | **Marketing Model Name** devuelto por QuickServe/Cummins para el motor del vehículo. Puede venir `null` si aún no se consultó o QuickServe no lo entregó. |
@@ -184,7 +196,8 @@ vehículo nuevo, con su `updated_at` refrescado.
 
 Una database física puede tener vehículos de **distinto motor**. Las reglas de
 `operacion` (RPM, ralentí, etc.) dependen del motor: la de un `ISD` no aplica a un
-`X15`. Las de `habito_seguro` (frenada/aceleración/velocidad) aplican a toda la db.
+`X15`. Las de `habito_seguro` (frenada/aceleración/velocidad) y las de `postratamiento`
+(DEF/DPF/SCR) aplican a toda la db.
 
 Por eso el snapshot anota `motor_type` (la **familia de motor**, `engine_name`) tanto
 en cada regla como en cada vehículo. Navi Vehículos es la fuente de verdad: una regla
@@ -201,7 +214,7 @@ JOIN geotab_databases d   ON d.id = v.database_id
 JOIN geotab_databases sib ON sib.database_key = d.database_key   -- §3.1
 JOIN geotab_rules r       ON r.database_id = sib.id
 WHERE (
-    r.category = 'habito_seguro'                                  -- toda la db
+    r.category IN ('habito_seguro', 'postratamiento')             -- toda la db
     OR (r.category = 'operacion' AND r.motor_type = v.motor_type) -- solo su motor
 );
 ```
@@ -228,7 +241,8 @@ aplicación `operacion` trae `band` (uno de los 7 valores del enum, o `null` si 
 se asignó) e `is_descenso` (booleano). El ETL debe **preferir `band`** sobre cualquier
 heurística de nombre y tratar `band = null` como "sin clasificar" (no adivinar).
 
-`band` solo aplica a `category = operacion`; en `habito_seguro` siempre es `null`.
+`band` solo aplica a `category = operacion`; en `habito_seguro` y `postratamiento`
+siempre es `null`.
 `is_descenso` nunca es `true` con `band` nulo ni con `band = ralenti`.
 
 **Compatibilidad:** ambos campos son aditivos y nullable. Portal Clientes puede
@@ -323,6 +337,44 @@ llega: mandarlo en `null` borra el dato.
 
 ---
 
+### 2.7 Reglas de sistema de postratamiento (`category = postratamiento`)
+
+Tercera categoría de regla, además de `operacion` y `habito_seguro`. Agrupa los eventos
+del **sistema de postratamiento** del motor: DEF/urea, DPF, SCR y los derates asociados.
+No son hábitos del conductor ni bandas de RPM, así que se reportan aparte.
+
+Alcance y forma, idénticos a los de `habito_seguro`:
+
+- **Globales a la database**: `motor_type` siempre `null`. Se resuelven por
+  `database_key`, no por motor (§2.3).
+- `band` siempre `null` e `is_descenso` siempre `false`.
+- `description` trae la clasificación explícita, administrada en Navi-Vehículos e
+  independiente del nombre de la regla en Geotab. Enum cerrado:
+
+| `description` |
+|---|
+| `Nivel bajo de DEF` |
+| `Calidad de DEF` |
+| `Regeneracion DPF requerida` |
+| `Regeneracion DPF inhibida` |
+| `Nivel alto de hollin DPF` |
+| `Temperatura alta de escape` |
+| `Falla SCR o sensor NOx` |
+| `Derate por postratamiento` |
+
+Los valores van **sin acentos**, tal como se persisten; la tilde es cosa de la etiqueta
+visible. El consumidor debe compararlos literalmente.
+
+**Despliegue.** Navi Vehículos solo emite esta categoría con la bandera
+`INTEGRATION_EXPORT_POSTRATAMIENTO` encendida, apagada por defecto. El motivo es que hoy
+el sync valida `category` contra un CHECK y **falla cerrado**: una categoría desconocida
+no deja pasar el resto de las reglas. El orden es: Portal Clientes amplía sus CHECK y su
+normalizador de `description`, despliega, y recién entonces se enciende la bandera.
+
+**Recomendación para el consumidor:** tratar una categoría desconocida como una fila que
+se **ignora con warning**, no como un error que aborta el sync. Así la próxima categoría
+no vuelve a necesitar coordinación de despliegue.
+
 ## 3. Tablas sugeridas en Portal Clientes
 
 Réplica con ids de origen (`source_id`) para upserts idempotentes, y `synced_at`
@@ -391,7 +443,7 @@ CREATE TABLE geotab_rules (
     database_id BIGINT NOT NULL REFERENCES geotab_databases(id) ON DELETE CASCADE,
     rule_id TEXT NOT NULL,                   -- id nativo Geotab
     name TEXT NOT NULL,
-    category TEXT NOT NULL CHECK (category IN ('operacion', 'habito_seguro')),
+    category TEXT NOT NULL CHECK (category IN ('operacion', 'habito_seguro', 'postratamiento')),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (database_id, rule_id, category)
