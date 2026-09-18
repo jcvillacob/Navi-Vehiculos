@@ -7,6 +7,7 @@ updated_at) que la otra app replica localmente.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -34,6 +35,19 @@ from app.services.taller_ordenes import (
 _logger = logging.getLogger(__name__)
 
 _PASSWORD_MASK = "********"
+
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _exports_postratamiento() -> bool:
+    """Si el snapshot puede incluir la categoria 'postratamiento'.
+
+    Apagada por defecto. El consumidor valida la categoria contra un CHECK y su
+    sync falla cerrado, asi que emitir una categoria que todavia no conoce le
+    dejaria toda la replica de reglas sin actualizar. Se enciende cuando Portal
+    Clientes ya despliego su migracion.
+    """
+    return os.getenv("INTEGRATION_EXPORT_POSTRATAMIENTO", "").strip().lower() in _TRUE_VALUES
 
 
 def _encrypted_password(stored: str | None) -> str | None:
@@ -210,8 +224,11 @@ def _export_customers(
                 ON gra.geotab_rule_id = gr.id
             LEFT JOIN motor_catalog mc
                 ON mc.id = gra.motor_id
-            WHERE gra.category <> 'operacion'
-               OR gra.motor_id IS NOT NULL
+            WHERE (
+                gra.category <> 'operacion'
+                OR gra.motor_id IS NOT NULL
+              )
+              AND (%s OR gra.category <> 'postratamiento')
             ORDER BY
                 gr.database_id ASC,
                 gr.rule_id ASC,
@@ -219,7 +236,8 @@ def _export_customers(
                 COALESCE(mc.engine_name, '') ASC,
                 COALESCE(gra.event_type, '') ASC,
                 gr.id ASC;
-            """
+            """,
+            (_exports_postratamiento(),),
         )
         rule_rows = cur.fetchall()
 

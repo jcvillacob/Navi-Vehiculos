@@ -1203,6 +1203,53 @@ async def test_snapshot_exposes_motor_type(client, vehicle, monkeypatch):
     assert safe_rpm["description"] == "Excesos de RPM"
 
 
+async def test_snapshot_gates_aftertreatment_rules(client, vehicle, monkeypatch):
+    """La categoria nueva solo viaja con la bandera encendida.
+
+    El consumidor valida `category` contra un CHECK y su sync falla cerrado, asi
+    que emitirla antes de que despliegue le dejaria la replica sin actualizar.
+    """
+    monkeypatch.setenv("INTEGRATION_API_KEYS", "clave-portal")
+    headers = {"X-API-Key": "clave-portal"}
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
+    )
+    motor_catalog.create_geotab_rule(
+        vehicle["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aDefSnap",
+            category="postratamiento",
+            description="Nivel bajo de DEF",
+        ),
+    )
+
+    monkeypatch.delenv("INTEGRATION_EXPORT_POSTRATAMIENTO", raising=False)
+    response = await client.get("/api/v1/integration/snapshot", headers=headers)
+    assert response.status_code == 200
+    customer = next(
+        c for c in response.json()["customers"] if c["name"] == "Cliente Portal"
+    )
+    assert all(
+        rule["rule_id"] != "aDefSnap" for rule in customer["databases"][0]["rules"]
+    )
+
+    monkeypatch.setenv("INTEGRATION_EXPORT_POSTRATAMIENTO", "1")
+    response = await client.get("/api/v1/integration/snapshot", headers=headers)
+    assert response.status_code == 200
+    customer = next(
+        c for c in response.json()["customers"] if c["name"] == "Cliente Portal"
+    )
+    exported = next(
+        rule for rule in customer["databases"][0]["rules"] if rule["rule_id"] == "aDefSnap"
+    )
+    assert exported["category"] == "postratamiento"
+    assert exported["description"] == "Nivel bajo de DEF"
+    # Categoria global: aplica a toda la database y no lleva banda de RPM.
+    assert exported["motor_type"] is None
+    assert exported["band"] is None
+    assert exported["is_descenso"] is False
+
+
 # ── Bandas de RPM explicitas ──────────────────────────────────────────
 
 
