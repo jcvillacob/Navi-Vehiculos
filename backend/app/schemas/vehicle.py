@@ -691,14 +691,17 @@ class GeotabRuleCreateRequest(BaseModel):
     rule_id: str = Field(..., min_length=1, description="ID alfanumerico de la regla en Geotab")
     category: str = Field(
         default="operacion",
-        description="Categoria de la regla: 'operacion' (motor) o 'habito_seguro'",
+        description=(
+            "Categoria de la regla: 'operacion' (motor), 'habito_seguro' o "
+            "'postratamiento' (ambas globales a la database)"
+        ),
     )
     motor_id: int | None = Field(
         default=None,
         gt=0,
         description=(
             "Motor al que aplica la regla. Es obligatorio para category 'operacion'; "
-            "solo los habitos seguros globales usan null"
+            "las categorias globales (habito seguro y postratamiento) usan null"
         ),
     )
     event_type: str | None = Field(
@@ -707,7 +710,10 @@ class GeotabRuleCreateRequest(BaseModel):
     )
     description: str | None = Field(
         default=None,
-        description="Clasificacion explicita del habito seguro; enum cerrado",
+        description=(
+            "Clasificacion explicita de la categoria global; enum cerrado propio "
+            "de 'habito_seguro' o de 'postratamiento'"
+        ),
     )
     band: str | None = Field(
         default=None,
@@ -722,7 +728,10 @@ class GeotabRuleCreateRequest(BaseModel):
 class GeotabRuleApplicationUpdateRequest(BaseModel):
     description: str | None = Field(
         default=None,
-        description="Nueva clasificacion para una aplicacion de habito seguro",
+        description=(
+            "Nueva clasificacion para una aplicacion de habito seguro o de "
+            "postratamiento; se valida contra el enum de su categoria"
+        ),
     )
     motor_id: int | None = Field(
         default=None,
@@ -743,7 +752,9 @@ class GeotabRuleApplicationRecord(BaseModel):
     id: int = Field(..., description="ID de la aplicacion de la regla")
     category: str = Field(
         default="operacion",
-        description="Categoria de aplicacion: 'operacion' o 'habito_seguro'",
+        description=(
+            "Categoria de aplicacion: 'operacion', 'habito_seguro' o 'postratamiento'"
+        ),
     )
     motor_id: int | None = Field(default=None, description="ID del motor si la regla aplica a uno")
     motor_name: str | None = Field(default=None, description="Nombre del motor si aplica")
@@ -751,7 +762,10 @@ class GeotabRuleApplicationRecord(BaseModel):
     event_type: str | None = Field(default=None, description="Tipo semantico del evento")
     description: str | None = Field(
         default=None,
-        description="Clasificacion explicita de la aplicacion de habito seguro",
+        description=(
+            "Clasificacion explicita de la aplicacion global (habito seguro o "
+            "postratamiento)"
+        ),
     )
     band: str | None = Field(default=None, description="Banda de RPM explicita asignada")
     is_descenso: bool = Field(default=False, description="Marca de descenso de la banda")
@@ -773,7 +787,10 @@ class GeotabRuleRecord(BaseModel):
     rule_id: str = Field(..., description="ID alfanumerico de la regla en Geotab")
     category: str = Field(
         default="operacion",
-        description="Categoria de la regla: 'operacion' (motor) o 'habito_seguro'",
+        description=(
+            "Categoria de la regla: 'operacion' (motor), 'habito_seguro' o "
+            "'postratamiento'"
+        ),
     )
     applications: list[GeotabRuleApplicationRecord] = Field(
         default_factory=list,

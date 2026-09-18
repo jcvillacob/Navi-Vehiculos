@@ -159,7 +159,7 @@ def _normalize_connection_type(value: str | None) -> str:
     return normalize_provider_key(value)
 
 
-RULE_CATEGORIES = ("operacion", "habito_seguro")
+RULE_CATEGORIES = ("operacion", "habito_seguro", "postratamiento")
 SAFE_HABIT_DESCRIPTIONS = (
     "Excesos de velocidad",
     "Giros bruscos",
@@ -168,12 +168,36 @@ SAFE_HABIT_DESCRIPTIONS = (
     "Baches o Resaltos fuertes",
     "Aceleraciones bruscas",
 )
+# Clasificacion de las reglas del sistema de postratamiento (DEF/urea, DPF, SCR,
+# derates). Igual que los habitos seguros: alcance global a la database, sin motor
+# ni banda de RPM. Los valores van SIN acentos porque el normalizador compara con
+# casefold, que no quita tildes; la etiqueta visible la pone el frontend.
+AFTERTREATMENT_DESCRIPTIONS = (
+    "Nivel bajo de DEF",
+    "Calidad de DEF",
+    "Regeneracion DPF requerida",
+    "Regeneracion DPF inhibida",
+    "Nivel alto de hollin DPF",
+    "Temperatura alta de escape",
+    "Falla SCR o sensor NOx",
+    "Derate por postratamiento",
+)
+# Categorias sin motor propio: la regla aplica a toda la database.
+GLOBAL_RULE_CATEGORIES = ("habito_seguro", "postratamiento")
+# Clasificacion valida por categoria global.
+DESCRIPTIONS_BY_CATEGORY: dict[str, tuple[str, ...]] = {
+    "habito_seguro": SAFE_HABIT_DESCRIPTIONS,
+    "postratamiento": AFTERTREATMENT_DESCRIPTIONS,
+}
 
 
 def _normalize_rule_category(value: str | None) -> str:
     normalized = (value or "operacion").strip().lower()
     if normalized not in RULE_CATEGORIES:
-        raise ValueError("La categoria de la regla debe ser 'operacion' o 'habito_seguro'.")
+        raise ValueError(
+            "La categoria de la regla debe ser 'operacion', 'habito_seguro' "
+            "o 'postratamiento'."
+        )
     return normalized
 
 
@@ -182,16 +206,44 @@ def _normalize_rule_event_type(value: str | None) -> str | None:
     return cleaned or None
 
 
-def _normalize_safe_habit_description(value: str | None) -> str | None:
+def _normalize_description(
+    value: str | None, *, allowed: tuple[str, ...], error: str
+) -> str | None:
+    """Canonicaliza una clasificacion contra su enum cerrado.
+
+    Devuelve None cuando no se envio nada: la obligatoriedad la decide quien
+    llama, porque las aplicaciones historicas pueden no tener clasificacion.
+    """
     cleaned = " ".join(str(value or "").split())
     if not cleaned:
         return None
-    canonical = {
-        description.casefold(): description for description in SAFE_HABIT_DESCRIPTIONS
-    }.get(cleaned.casefold())
+    canonical = {option.casefold(): option for option in allowed}.get(cleaned.casefold())
     if canonical is None:
-        raise ValueError("La clasificacion del habito seguro no es valida.")
+        raise ValueError(error)
     return canonical
+
+
+def _normalize_safe_habit_description(value: str | None) -> str | None:
+    return _normalize_description(
+        value,
+        allowed=SAFE_HABIT_DESCRIPTIONS,
+        error="La clasificacion del habito seguro no es valida.",
+    )
+
+
+def _normalize_aftertreatment_description(value: str | None) -> str | None:
+    return _normalize_description(
+        value,
+        allowed=AFTERTREATMENT_DESCRIPTIONS,
+        error="La clasificacion de postratamiento no es valida.",
+    )
+
+
+def _normalize_category_description(category: str, value: str | None) -> str | None:
+    """Clasificacion de una categoria global, validada contra su propio enum."""
+    if category == "postratamiento":
+        return _normalize_aftertreatment_description(value)
+    return _normalize_safe_habit_description(value)
 
 
 def _normalize_rule_band(value: str | None) -> str | None:
@@ -1027,6 +1079,10 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'operacion';
             """
         )
+        # El CHECK se recrea cuando su definicion todavia no admite la categoria
+        # 'postratamiento'. Comparar la definicion y no solo el nombre es lo que
+        # hace idempotente el bootstrap: ADD CONSTRAINT IF NOT EXISTS por nombre
+        # jamas actualiza un CHECK que ya existe con otro texto.
         cur.execute(
             """
             DO $$
@@ -1034,10 +1090,15 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint
                     WHERE conname = 'ck_geotab_rules_category'
+                      AND pg_get_constraintdef(oid) LIKE '%postratamiento%'
                 ) THEN
                     ALTER TABLE geotab_rules
+                    DROP CONSTRAINT IF EXISTS ck_geotab_rules_category;
+                    ALTER TABLE geotab_rules
                     ADD CONSTRAINT ck_geotab_rules_category
-                    CHECK (category IN ('operacion', 'habito_seguro'));
+                    CHECK (category IN (
+                        'operacion', 'habito_seguro', 'postratamiento'
+                    ));
                 END IF;
             END $$;
             """
@@ -1062,16 +1123,22 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint
                     WHERE conname = 'ck_geotab_rule_applications_category'
+                      AND pg_get_constraintdef(oid) LIKE '%postratamiento%'
                 ) THEN
                     ALTER TABLE geotab_rule_applications
+                    DROP CONSTRAINT IF EXISTS ck_geotab_rule_applications_category;
+                    ALTER TABLE geotab_rule_applications
                     ADD CONSTRAINT ck_geotab_rule_applications_category
-                    CHECK (category IN ('operacion', 'habito_seguro'));
+                    CHECK (category IN (
+                        'operacion', 'habito_seguro', 'postratamiento'
+                    ));
                 END IF;
             END $$;
             """
         )
         # Bandas de RPM explicitas (ver app/services/rule_bands.py). Aditivo y nullable:
-        # 'band' solo aplica a category 'operacion'; para 'habito_seguro' queda NULL.
+        # 'band' solo aplica a category 'operacion'; para 'habito_seguro' y
+        # 'postratamiento' queda NULL.
         cur.execute(
             """
             ALTER TABLE geotab_rule_applications
@@ -1115,29 +1182,54 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                 ADD COLUMN IF NOT EXISTS description TEXT NULL;
             """
         )
+        # 'description' es la clasificacion explicita de las categorias globales.
+        # Un solo CHECK la liga a su categoria: los dos CHECKs historicos
+        # (habito_only + enum plano) se reemplazan porque el enum depende ahora
+        # de la categoria. NULL sigue permitido por las aplicaciones legacy.
         cur.execute(
             """
             DO $$
             BEGIN
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint
-                    WHERE conname = 'ck_geotab_rule_app_description_habito_only'
+                    WHERE conname = 'ck_geotab_rule_app_description_by_category'
                 ) THEN
                     ALTER TABLE geotab_rule_applications
-                    ADD CONSTRAINT ck_geotab_rule_app_description_habito_only
-                    CHECK (description IS NULL OR category = 'habito_seguro');
+                        DROP CONSTRAINT IF EXISTS ck_geotab_rule_app_description_habito_only,
+                        DROP CONSTRAINT IF EXISTS ck_geotab_rule_app_description;
+                    ALTER TABLE geotab_rule_applications
+                    ADD CONSTRAINT ck_geotab_rule_app_description_by_category
+                    CHECK (
+                        description IS NULL
+                        OR (
+                            category = 'habito_seguro'
+                            AND description IN (
+                                'Excesos de velocidad', 'Giros bruscos',
+                                'Excesos de RPM', 'Frenadas bruscas',
+                                'Baches o Resaltos fuertes', 'Aceleraciones bruscas'
+                            )
+                        )
+                        OR (
+                            category = 'postratamiento'
+                            AND description IN (
+                                'Nivel bajo de DEF', 'Calidad de DEF',
+                                'Regeneracion DPF requerida', 'Regeneracion DPF inhibida',
+                                'Nivel alto de hollin DPF', 'Temperatura alta de escape',
+                                'Falla SCR o sensor NOx', 'Derate por postratamiento'
+                            )
+                        )
+                    );
                 END IF;
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint
-                    WHERE conname = 'ck_geotab_rule_app_description'
+                    WHERE conname = 'ck_geotab_rule_app_postratamiento_scope'
                 ) THEN
                     ALTER TABLE geotab_rule_applications
-                    ADD CONSTRAINT ck_geotab_rule_app_description
-                    CHECK (description IS NULL OR description IN (
-                        'Excesos de velocidad', 'Giros bruscos', 'Excesos de RPM',
-                        'Frenadas bruscas', 'Baches o Resaltos fuertes',
-                        'Aceleraciones bruscas'
-                    ));
+                    ADD CONSTRAINT ck_geotab_rule_app_postratamiento_scope
+                    CHECK (
+                        category <> 'postratamiento'
+                        OR (motor_id IS NULL AND band IS NULL AND is_descenso = FALSE)
+                    );
                 END IF;
             END $$;
             """
@@ -4428,8 +4520,18 @@ def create_geotab_rule(
     normalized_rule_id = payload.rule_id.strip()
     normalized_category = _normalize_rule_category(payload.category)
     normalized_event_type = _normalize_rule_event_type(payload.event_type)
-    normalized_description = _normalize_safe_habit_description(payload.description)
     requested_motor_id = int(payload.motor_id) if payload.motor_id is not None else None
+    if normalized_category in GLOBAL_RULE_CATEGORIES:
+        normalized_description = _normalize_category_description(
+            normalized_category, payload.description
+        )
+    else:
+        if payload.description is not None and str(payload.description).strip():
+            raise ValueError(
+                "La clasificacion de habito seguro o postratamiento no aplica "
+                "a reglas de operacion."
+            )
+        normalized_description = None
     if normalized_category == "operacion" and requested_motor_id is None:
         raise ValueError("Las reglas de operacion deben asociarse a un motor.")
     if normalized_category == "habito_seguro":
@@ -4439,16 +4541,20 @@ def create_geotab_rule(
             raise ValueError(
                 "Excesos de RPM debe registrarse como banda de operacion y asignarse a un motor."
             )
-        normalized_event_type = (
-            "exceso_rpm"
-            if normalized_description == "Excesos de RPM"
-            else None
-        )
-    elif normalized_description is not None:
-        raise ValueError("La clasificacion de habito seguro no aplica a reglas de operacion.")
+        normalized_event_type = None
+    if normalized_category == "postratamiento":
+        if normalized_description is None:
+            raise ValueError("Debe seleccionar la clasificacion de postratamiento.")
+        if requested_motor_id is not None:
+            raise ValueError(
+                "Las reglas de postratamiento se aplican a toda la database; no llevan motor."
+            )
+        if payload.band is not None or payload.is_descenso:
+            raise ValueError("La banda de RPM solo aplica a reglas de operacion.")
+        normalized_event_type = None
     if normalized_event_type == "exceso_rpm" and requested_motor_id is None:
         raise ValueError("Las reglas de exceso de RPM deben asociarse a un motor.")
-    # La banda solo aplica a 'operacion'; para 'habito_seguro' queda NULL.
+    # La banda solo aplica a 'operacion'; en las categorias globales queda NULL.
     if normalized_category == "operacion":
         normalized_band, normalized_is_descenso = _resolve_band_fields(
             payload.band, payload.is_descenso
@@ -4575,13 +4681,14 @@ def create_geotab_rule(
                         UPDATE geotab_rule_applications
                         SET description = %s
                         WHERE geotab_rule_id = %s
-                          AND category = 'habito_seguro'
+                          AND category = %s
                           AND COALESCE(motor_id, 0) = COALESCE(%s, 0)
                           AND COALESCE(event_type, '') = COALESCE(%s, '');
                         """,
                         (
                             normalized_description,
                             rule_record_id,
+                            normalized_category,
                             canonical_motor_id,
                             normalized_event_type,
                         ),
@@ -4600,7 +4707,11 @@ def create_geotab_rule(
 def update_geotab_rule_application(
     application_id: int, payload: GeotabRuleApplicationUpdateRequest
 ) -> GeotabRuleRecord:
-    """Asigna banda de operacion o corrige la clasificacion de habito seguro."""
+    """Asigna la banda de operacion o corrige la clasificacion de una categoria global.
+
+    Las categorias globales (habito seguro y postratamiento) comparten la columna
+    `description`, pero cada una valida contra su propio enum cerrado.
+    """
     with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
         _ensure_motor_tables(conn)
         try:
@@ -4623,10 +4734,12 @@ def update_geotab_rule_application(
                     raise ValueError("La aplicacion de la regla no existe.")
                 database_id = int(row["database_id"])
 
-                if str(row["category"]) == "operacion":
+                application_category = str(row["category"])
+                if application_category == "operacion":
                     if payload.description is not None or payload.motor_id is not None:
                         raise ValueError(
-                            "La clasificacion de habito seguro no aplica a reglas de operacion."
+                            "La clasificacion de habito seguro o postratamiento no "
+                            "aplica a reglas de operacion."
                         )
                     normalized_band, normalized_is_descenso = _resolve_band_fields(
                         payload.band, payload.is_descenso
@@ -4685,23 +4798,33 @@ def update_geotab_rule_application(
                         raise ValueError(
                             "La banda de RPM solo aplica a aplicaciones de operacion."
                         )
-                    normalized_description = _normalize_safe_habit_description(
-                        payload.description
+                    normalized_description = _normalize_category_description(
+                        application_category, payload.description
                     )
-                    if normalized_description is None:
-                        raise ValueError(
-                            "Debe seleccionar la clasificacion del habito seguro."
-                        )
-                    is_rpm = normalized_description == "Excesos de RPM"
-                    if is_rpm:
-                        raise ValueError(
-                            "Excesos de RPM debe administrarse como banda de operacion."
-                        )
-                    if payload.motor_id is not None:
-                        raise ValueError(
-                            "Los habitos seguros se aplican globalmente; "
-                            "Excesos de RPM se administra como banda del motor."
-                        )
+                    if application_category == "postratamiento":
+                        if normalized_description is None:
+                            raise ValueError(
+                                "Debe seleccionar la clasificacion de postratamiento."
+                            )
+                        if payload.motor_id is not None:
+                            raise ValueError(
+                                "Las reglas de postratamiento se aplican a toda la "
+                                "database; no llevan motor."
+                            )
+                    else:
+                        if normalized_description is None:
+                            raise ValueError(
+                                "Debe seleccionar la clasificacion del habito seguro."
+                            )
+                        if normalized_description == "Excesos de RPM":
+                            raise ValueError(
+                                "Excesos de RPM debe administrarse como banda de operacion."
+                            )
+                        if payload.motor_id is not None:
+                            raise ValueError(
+                                "Los habitos seguros se aplican globalmente; "
+                                "Excesos de RPM se administra como banda del motor."
+                            )
                     cur.execute(
                         """
                         UPDATE geotab_rule_applications
@@ -4818,7 +4941,7 @@ def create_geotab_rule_group(
             if non_operation_rules:
                 raise ValueError(
                     "Los grupos de motor solo aceptan reglas de operacion. "
-                    f"Reglas de habito seguro: {', '.join(non_operation_rules)}."
+                    f"Reglas que no son de operacion: {', '.join(non_operation_rules)}."
                 )
 
             cur.execute(

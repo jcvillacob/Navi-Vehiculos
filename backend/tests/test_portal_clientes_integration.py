@@ -1,7 +1,7 @@
 """Tests de los cambios para la integracion con Portal Clientes:
 
 - geotab_device_id capturado en la validacion del vehiculo
-- categoria de reglas (operacion / habito_seguro)
+- categoria de reglas (operacion / habito_seguro / postratamiento)
 - pool de credenciales con rotacion LRU
 - endpoint /integration con X-API-Key
 """
@@ -632,6 +632,208 @@ def test_legacy_safe_rpm_application_is_repaired_as_descending_operation(geotab_
         ("operacion", None, "exceso_rpm", True),
         ("habito_seguro", "exceso_rpm", None, False),
     }
+
+
+# ── Reglas de sistema de postratamiento ───────────────────────────────
+
+
+def test_create_aftertreatment_rule(geotab_db, monkeypatch):
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
+    )
+    record = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aDef1",
+            category="postratamiento",
+            description="Nivel bajo de DEF",
+        ),
+    )
+    assert record.category == "postratamiento"
+    application = record.applications[0]
+    assert application.category == "postratamiento"
+    assert application.description == "Nivel bajo de DEF"
+    # Categoria global: sin motor y sin banda de RPM.
+    assert application.motor_id is None
+    assert application.band is None
+    assert application.is_descenso is False
+    assert application.event_type is None
+
+
+def test_aftertreatment_rule_requires_description(geotab_db, monkeypatch):
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
+    )
+    with pytest.raises(ValueError, match="seleccionar"):
+        motor_catalog.create_geotab_rule(
+            geotab_db["database_id"],
+            GeotabRuleCreateRequest(rule_id="aDefNoDesc", category="postratamiento"),
+        )
+
+
+def test_aftertreatment_rule_rejects_motor_band_and_foreign_description(
+    geotab_db, rule_motor_id, monkeypatch
+):
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
+    )
+    with pytest.raises(ValueError, match="motor"):
+        motor_catalog.create_geotab_rule(
+            geotab_db["database_id"],
+            GeotabRuleCreateRequest(
+                rule_id="aDefMotor",
+                category="postratamiento",
+                description="Calidad de DEF",
+                motor_id=rule_motor_id,
+            ),
+        )
+    with pytest.raises(ValueError, match="banda"):
+        motor_catalog.create_geotab_rule(
+            geotab_db["database_id"],
+            GeotabRuleCreateRequest(
+                rule_id="aDefBand",
+                category="postratamiento",
+                description="Calidad de DEF",
+                band="ralenti",
+            ),
+        )
+    # Cada categoria global valida contra su PROPIO enum.
+    with pytest.raises(ValueError, match="clasificacion"):
+        motor_catalog.create_geotab_rule(
+            geotab_db["database_id"],
+            GeotabRuleCreateRequest(
+                rule_id="aDefSafe",
+                category="postratamiento",
+                description="Frenadas bruscas",
+            ),
+        )
+    with pytest.raises(ValueError, match="clasificacion"):
+        motor_catalog.create_geotab_rule(
+            geotab_db["database_id"],
+            GeotabRuleCreateRequest(
+                rule_id="aSafeDef",
+                category="habito_seguro",
+                description="Nivel bajo de DEF",
+            ),
+        )
+
+
+@pytest.mark.parametrize("description", motor_catalog.AFTERTREATMENT_DESCRIPTIONS)
+def test_aftertreatment_description_enum(description):
+    assert motor_catalog._normalize_aftertreatment_description(description) == description
+
+
+def test_aftertreatment_description_rejects_unknown():
+    assert motor_catalog._normalize_aftertreatment_description(None) is None
+    with pytest.raises(ValueError, match="postratamiento"):
+        motor_catalog._normalize_aftertreatment_description("Falla de motor")
+
+
+def test_update_aftertreatment_application_description(geotab_db, monkeypatch):
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
+    )
+    record = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aDef2",
+            category="postratamiento",
+            description="Nivel bajo de DEF",
+        ),
+    )
+    application_id = record.applications[0].id
+
+    updated = motor_catalog.update_geotab_rule_application(
+        application_id,
+        GeotabRuleApplicationUpdateRequest(description="Derate por postratamiento"),
+    )
+    assert updated.applications[0].description == "Derate por postratamiento"
+
+    with pytest.raises(ValueError, match="banda"):
+        motor_catalog.update_geotab_rule_application(
+            application_id,
+            GeotabRuleApplicationUpdateRequest(
+                description="Calidad de DEF", band="rango_bajo"
+            ),
+        )
+    with pytest.raises(ValueError, match="motor"):
+        motor_catalog.update_geotab_rule_application(
+            application_id,
+            GeotabRuleApplicationUpdateRequest(
+                description="Calidad de DEF", motor_id=1
+            ),
+        )
+
+
+def test_rule_group_rejects_aftertreatment_rules(geotab_db, rule_motor_id, monkeypatch):
+    monkeypatch.setattr(
+        motor_catalog, "resolve_geotab_rule", lambda db_id, rule_id: _fake_inspection(rule_id)
+    )
+    aftertreatment_rule = motor_catalog.create_geotab_rule(
+        geotab_db["database_id"],
+        GeotabRuleCreateRequest(
+            rule_id="aDef3",
+            category="postratamiento",
+            description="Regeneracion DPF requerida",
+        ),
+    )
+    with pytest.raises(ValueError, match="operacion"):
+        motor_catalog.create_geotab_rule_group(
+            geotab_db["database_id"],
+            GeotabRuleGroupCreateRequest(
+                motor_id=rule_motor_id, rule_record_ids=[aftertreatment_rule.id]
+            ),
+        )
+
+
+def test_database_rejects_aftertreatment_with_motor(geotab_db, rule_motor_id):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO geotab_rules (database_id, name, rule_id, category)
+                    VALUES (%s, 'DEF con motor', 'aDefScope', 'postratamiento')
+                    RETURNING id;
+                    """,
+                    (geotab_db["database_id"],),
+                )
+                rule_record_id = int(cur.fetchone()["id"])
+                cur.execute(
+                    """
+                    INSERT INTO geotab_rule_applications (
+                        geotab_rule_id, category, motor_id, description
+                    )
+                    VALUES (%s, 'postratamiento', %s, 'Nivel bajo de DEF');
+                    """,
+                    (rule_record_id, rule_motor_id),
+                )
+            conn.commit()
+
+
+def test_legacy_description_constraints_are_replaced(motor_tables):
+    """El bootstrap reemplaza los dos CHECK historicos por el CHECK por categoria."""
+    _run_runtime_reconciliation()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT conname, pg_get_constraintdef(oid) AS definition
+                FROM pg_constraint
+                WHERE conrelid IN (
+                    'geotab_rules'::regclass,
+                    'geotab_rule_applications'::regclass
+                );
+                """
+            )
+            constraints = {row["conname"]: row["definition"] for row in cur.fetchall()}
+
+    assert "ck_geotab_rule_app_description_habito_only" not in constraints
+    assert "ck_geotab_rule_app_description" not in constraints
+    assert "ck_geotab_rule_app_description_by_category" in constraints
+    assert "ck_geotab_rule_app_postratamiento_scope" in constraints
+    assert "postratamiento" in constraints["ck_geotab_rules_category"]
+    assert "postratamiento" in constraints["ck_geotab_rule_applications_category"]
 
 
 # ── Pool de credenciales ──────────────────────────────────────────────
