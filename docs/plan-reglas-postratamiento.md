@@ -89,16 +89,25 @@ para que cambiar la lista sea trivial.
 
 ```python
 AFTERTREATMENT_DESCRIPTIONS = (
-    "Nivel bajo de DEF",
-    "Calidad de DEF",
-    "Regeneracion DPF requerida",
-    "Regeneracion DPF inhibida",
-    "Nivel alto de hollin DPF",
-    "Temperatura alta de escape",
-    "Falla SCR o sensor NOx",
-    "Derate por postratamiento",
+    "Falla de presion diferencial DPF",
+    "Regeneracion DPF demasiado frecuente",
+    "Falla del sistema DPF",
+    "Regeneracion manual activa",
+    "Regeneracion manual inactiva con lampara DPF encendida",
+    "Saturacion DPF 110%",
+    "Saturacion DPF 120%",
+    "Saturacion DPF 130%",
+    "Saturacion DPF 144%",
+    "Saturacion DPF 155%",
 )
 ```
+
+**Actualizado el 2026-09-18** con las reglas que Navitrans tiene configuradas en Geotab:
+la propuesta inicial era una taxonomía teórica (DEF, SCR, derates) y las reglas reales
+son todas de DPF. Las tres primeras son fallas J1939 (3251, 5397, 3936) y valen para
+cualquier motor compatible; las cinco de saturación llevan el umbral de carga de hollín
+porque es lo único que las distingue entre sí. Un motor con otros cortes agrega valores
+nuevos: la lista es aditiva.
 
 (Sin acentos en los valores persistidos para evitar el gotcha de normalización que ya
 tiene `_normalize_safe_habit_description` con `casefold`; el label visible en la UI puede
@@ -324,15 +333,17 @@ borrado, y que el alta de operación/hábito sigue igual.
 
 ## 10. Decisiones abiertas (confirmar antes o durante la ejecución)
 
-1. **Enum de clasificación (§3.2).** Implementado tal cual; el negocio todavía debe
-   validar nombres y cobertura (¿se separa "Nivel bajo de DEF" por etapa de inducement?
-   ¿hace falta "Lampara MIL"?). Cambiar la lista es tocar `AFTERTREATMENT_DESCRIPTIONS`
-   en el servicio, el CHECK del bootstrap, una migración nueva y la constante del
-   frontend.
-2. **Alcance global vs por motor.** Este plan las hace **globales** (`motor_id NULL`),
-   como los hábitos seguros: los eventos de DEF/DPF son del vehículo y no dependen de las
-   bandas del motor. Si más adelante se necesita por motor, basta relajar el CHECK de
-   scope y reutilizar la lógica de `operacion`; no hay que rediseñar.
+1. **Enum de clasificación (§3.2).** ~~Abierta~~ **resuelta el 2026-09-18**: la lista
+   espeja las reglas configuradas en Geotab. Cambiarla es tocar
+   `AFTERTREATMENT_DESCRIPTIONS` en el servicio, el CHECK del bootstrap (y **mover su
+   marcador de versión** al último valor nuevo), una migración nueva y la constante del
+   frontend, más lo mismo del lado de Portal Clientes.
+2. **Alcance global vs por motor.** Confirmado **global** (`motor_id NULL`) el
+   2026-09-18, aun sabiendo que las reglas de saturación se configuraron para el A26 y
+   sus umbrales dependen del motor. Riesgo asumido: si otro motor usa los mismos
+   porcentajes, sus reglas no se distinguirán de las del A26. Si hiciera falta, basta
+   relajar `ck_geotab_rule_app_postratamiento_scope` y reutilizar la lógica de
+   `operacion`; no hay que rediseñar.
 3. **Bandera de export vs orden de despliegue.** El plan usa bandera (§6) porque un
    valor desconocido rompe el sync completo de Portal Clientes. Alternativa: sin bandera
    y desplegar Portal primero; más simple pero frágil.
