@@ -168,19 +168,28 @@ SAFE_HABIT_DESCRIPTIONS = (
     "Baches o Resaltos fuertes",
     "Aceleraciones bruscas",
 )
-# Clasificacion de las reglas del sistema de postratamiento (DEF/urea, DPF, SCR,
-# derates). Igual que los habitos seguros: alcance global a la database, sin motor
-# ni banda de RPM. Los valores van SIN acentos porque el normalizador compara con
-# casefold, que no quita tildes; la etiqueta visible la pone el frontend.
+# Clasificacion de las reglas del sistema de postratamiento. Igual que los habitos
+# seguros: alcance global a la database, sin motor ni banda de RPM. Los valores van
+# SIN acentos porque el normalizador compara con casefold, que no quita tildes; la
+# etiqueta visible la pone el frontend.
+#
+# La lista sale de las reglas realmente configuradas en Geotab, no de una
+# taxonomia teorica del postratamiento: hoy todas son de DPF. Las tres primeras
+# son fallas J1939 (3251, 5397, 3936) y valen para cualquier motor compatible; las
+# de saturacion llevan el umbral de carga de hollin en el nombre porque es lo que
+# distingue una regla de la siguiente. Un motor con otros cortes agrega valores
+# nuevos: la lista es aditiva.
 AFTERTREATMENT_DESCRIPTIONS = (
-    "Nivel bajo de DEF",
-    "Calidad de DEF",
-    "Regeneracion DPF requerida",
-    "Regeneracion DPF inhibida",
-    "Nivel alto de hollin DPF",
-    "Temperatura alta de escape",
-    "Falla SCR o sensor NOx",
-    "Derate por postratamiento",
+    "Falla de presion diferencial DPF",
+    "Regeneracion DPF demasiado frecuente",
+    "Falla del sistema DPF",
+    "Regeneracion manual activa",
+    "Regeneracion manual inactiva con lampara DPF encendida",
+    "Saturacion DPF 110%",
+    "Saturacion DPF 120%",
+    "Saturacion DPF 130%",
+    "Saturacion DPF 144%",
+    "Saturacion DPF 155%",
 )
 # Categorias sin motor propio: la regla aplica a toda la database.
 GLOBAL_RULE_CATEGORIES = ("habito_seguro", "postratamiento")
@@ -1190,13 +1199,18 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
             """
             DO $$
             BEGIN
+                -- El marcador de version del CHECK es el ultimo valor del enum de
+                -- postratamiento: comparar la definicion (y no solo el nombre) es lo
+                -- que permite ampliar la lista sin renombrar el CHECK en cada cambio.
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint
                     WHERE conname = 'ck_geotab_rule_app_description_by_category'
+                      AND pg_get_constraintdef(oid) LIKE '%Saturacion DPF 155%'
                 ) THEN
                     ALTER TABLE geotab_rule_applications
                         DROP CONSTRAINT IF EXISTS ck_geotab_rule_app_description_habito_only,
-                        DROP CONSTRAINT IF EXISTS ck_geotab_rule_app_description;
+                        DROP CONSTRAINT IF EXISTS ck_geotab_rule_app_description,
+                        DROP CONSTRAINT IF EXISTS ck_geotab_rule_app_description_by_category;
                     ALTER TABLE geotab_rule_applications
                     ADD CONSTRAINT ck_geotab_rule_app_description_by_category
                     CHECK (
@@ -1212,10 +1226,14 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
                         OR (
                             category = 'postratamiento'
                             AND description IN (
-                                'Nivel bajo de DEF', 'Calidad de DEF',
-                                'Regeneracion DPF requerida', 'Regeneracion DPF inhibida',
-                                'Nivel alto de hollin DPF', 'Temperatura alta de escape',
-                                'Falla SCR o sensor NOx', 'Derate por postratamiento'
+                                'Falla de presion diferencial DPF',
+                                'Regeneracion DPF demasiado frecuente',
+                                'Falla del sistema DPF',
+                                'Regeneracion manual activa',
+                                'Regeneracion manual inactiva con lampara DPF encendida',
+                                'Saturacion DPF 110%', 'Saturacion DPF 120%',
+                                'Saturacion DPF 130%', 'Saturacion DPF 144%',
+                                'Saturacion DPF 155%'
                             )
                         )
                     );

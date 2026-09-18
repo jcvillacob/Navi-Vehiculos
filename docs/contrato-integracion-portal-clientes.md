@@ -340,8 +340,8 @@ llega: mandarlo en `null` borra el dato.
 ### 2.7 Reglas de sistema de postratamiento (`category = postratamiento`)
 
 Tercera categoría de regla, además de `operacion` y `habito_seguro`. Agrupa los eventos
-del **sistema de postratamiento** del motor: DEF/urea, DPF, SCR y los derates asociados.
-No son hábitos del conductor ni bandas de RPM, así que se reportan aparte.
+del **sistema de postratamiento** del motor. No son hábitos del conductor ni bandas de
+RPM, así que se reportan aparte.
 
 Alcance y forma, idénticos a los de `habito_seguro`:
 
@@ -351,19 +351,29 @@ Alcance y forma, idénticos a los de `habito_seguro`:
 - `description` trae la clasificación explícita, administrada en Navi-Vehículos e
   independiente del nombre de la regla en Geotab. Enum cerrado:
 
-| `description` |
-|---|
-| `Nivel bajo de DEF` |
-| `Calidad de DEF` |
-| `Regeneracion DPF requerida` |
-| `Regeneracion DPF inhibida` |
-| `Nivel alto de hollin DPF` |
-| `Temperatura alta de escape` |
-| `Falla SCR o sensor NOx` |
-| `Derate por postratamiento` |
+| `description` | Qué detecta la regla |
+|---|---|
+| `Falla de presion diferencial DPF` | Falla activa del diagnóstico de presión diferencial, J1939 3251 |
+| `Regeneracion DPF demasiado frecuente` | Falla activa de regeneración demasiado frecuente, J1939 5397 |
+| `Falla del sistema DPF` | Falla activa del sistema DPF, J1939 3936 |
+| `Regeneracion manual activa` | Interruptor de regeneración forzada encendido con lámpara DPF encendida |
+| `Regeneracion manual inactiva con lampara DPF encendida` | Lámpara DPF encendida sin regeneración forzada |
+| `Saturacion DPF 110%` | Carga de hollín entre 110% y 120%, con lámpara DPF encendida |
+| `Saturacion DPF 120%` | Carga de hollín entre 120% y 130%, con lámpara DPF encendida |
+| `Saturacion DPF 130%` | Carga de hollín entre 130% y 144%, con lámpara DPF encendida |
+| `Saturacion DPF 144%` | Carga de hollín entre 144% y 155%, sin regeneración activa |
+| `Saturacion DPF 155%` | Carga de hollín por encima de 155%, sin regeneración activa |
 
 Los valores van **sin acentos**, tal como se persisten; la tilde es cosa de la etiqueta
 visible. El consumidor debe compararlos literalmente.
+
+La lista sale de las reglas realmente configuradas en Geotab, no de una taxonomía
+teórica del postratamiento: hoy todas son de DPF. Las tres primeras son fallas J1939 y
+valen para cualquier motor compatible. Las cinco de saturación llevan el umbral en el
+nombre porque es lo único que las distingue entre sí; los cortes son los del motor para
+el que se configuró la regla, así que **un motor con otros umbrales agrega valores
+nuevos al enum**. La lista es aditiva y el consumidor debe tolerar valores que todavía
+no conoce.
 
 **Despliegue.** Navi Vehículos solo emite esta categoría con la bandera
 `INTEGRATION_EXPORT_POSTRATAMIENTO` encendida, apagada por defecto. El motivo es que hoy

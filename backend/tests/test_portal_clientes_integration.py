@@ -646,13 +646,13 @@ def test_create_aftertreatment_rule(geotab_db, monkeypatch):
         GeotabRuleCreateRequest(
             rule_id="aDef1",
             category="postratamiento",
-            description="Nivel bajo de DEF",
+            description="Falla del sistema DPF",
         ),
     )
     assert record.category == "postratamiento"
     application = record.applications[0]
     assert application.category == "postratamiento"
-    assert application.description == "Nivel bajo de DEF"
+    assert application.description == "Falla del sistema DPF"
     # Categoria global: sin motor y sin banda de RPM.
     assert application.motor_id is None
     assert application.band is None
@@ -683,7 +683,7 @@ def test_aftertreatment_rule_rejects_motor_band_and_foreign_description(
             GeotabRuleCreateRequest(
                 rule_id="aDefMotor",
                 category="postratamiento",
-                description="Calidad de DEF",
+                description="Saturacion DPF 110%",
                 motor_id=rule_motor_id,
             ),
         )
@@ -693,7 +693,7 @@ def test_aftertreatment_rule_rejects_motor_band_and_foreign_description(
             GeotabRuleCreateRequest(
                 rule_id="aDefBand",
                 category="postratamiento",
-                description="Calidad de DEF",
+                description="Saturacion DPF 110%",
                 band="ralenti",
             ),
         )
@@ -713,7 +713,7 @@ def test_aftertreatment_rule_rejects_motor_band_and_foreign_description(
             GeotabRuleCreateRequest(
                 rule_id="aSafeDef",
                 category="habito_seguro",
-                description="Nivel bajo de DEF",
+                description="Falla del sistema DPF",
             ),
         )
 
@@ -738,29 +738,29 @@ def test_update_aftertreatment_application_description(geotab_db, monkeypatch):
         GeotabRuleCreateRequest(
             rule_id="aDef2",
             category="postratamiento",
-            description="Nivel bajo de DEF",
+            description="Falla del sistema DPF",
         ),
     )
     application_id = record.applications[0].id
 
     updated = motor_catalog.update_geotab_rule_application(
         application_id,
-        GeotabRuleApplicationUpdateRequest(description="Derate por postratamiento"),
+        GeotabRuleApplicationUpdateRequest(description="Saturacion DPF 155%"),
     )
-    assert updated.applications[0].description == "Derate por postratamiento"
+    assert updated.applications[0].description == "Saturacion DPF 155%"
 
     with pytest.raises(ValueError, match="banda"):
         motor_catalog.update_geotab_rule_application(
             application_id,
             GeotabRuleApplicationUpdateRequest(
-                description="Calidad de DEF", band="rango_bajo"
+                description="Saturacion DPF 110%", band="rango_bajo"
             ),
         )
     with pytest.raises(ValueError, match="motor"):
         motor_catalog.update_geotab_rule_application(
             application_id,
             GeotabRuleApplicationUpdateRequest(
-                description="Calidad de DEF", motor_id=1
+                description="Saturacion DPF 110%", motor_id=1
             ),
         )
 
@@ -774,7 +774,7 @@ def test_rule_group_rejects_aftertreatment_rules(geotab_db, rule_motor_id, monke
         GeotabRuleCreateRequest(
             rule_id="aDef3",
             category="postratamiento",
-            description="Regeneracion DPF requerida",
+            description="Regeneracion manual activa",
         ),
     )
     with pytest.raises(ValueError, match="operacion"):
@@ -804,7 +804,7 @@ def test_database_rejects_aftertreatment_with_motor(geotab_db, rule_motor_id):
                     INSERT INTO geotab_rule_applications (
                         geotab_rule_id, category, motor_id, description
                     )
-                    VALUES (%s, 'postratamiento', %s, 'Nivel bajo de DEF');
+                    VALUES (%s, 'postratamiento', %s, 'Falla del sistema DPF');
                     """,
                     (rule_record_id, rule_motor_id),
                 )
@@ -834,6 +834,36 @@ def test_legacy_description_constraints_are_replaced(motor_tables):
     assert "ck_geotab_rule_app_postratamiento_scope" in constraints
     assert "postratamiento" in constraints["ck_geotab_rules_category"]
     assert "postratamiento" in constraints["ck_geotab_rule_applications_category"]
+    # El CHECK se recrea cuando cambia el enum, no solo cuando falta el nombre.
+    description_check = constraints["ck_geotab_rule_app_description_by_category"]
+    assert "Saturacion DPF 155%" in description_check
+    assert "Nivel bajo de DEF" not in description_check
+
+
+def test_database_rejects_legacy_aftertreatment_description(geotab_db):
+    """La clasificacion vieja de postratamiento ya no pasa el CHECK."""
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO geotab_rules (database_id, name, rule_id, category)
+                    VALUES (%s, 'DEF legacy', 'aDefLegacy', 'postratamiento')
+                    RETURNING id;
+                    """,
+                    (geotab_db["database_id"],),
+                )
+                rule_record_id = int(cur.fetchone()["id"])
+                cur.execute(
+                    """
+                    INSERT INTO geotab_rule_applications (
+                        geotab_rule_id, category, description
+                    )
+                    VALUES (%s, 'postratamiento', 'Nivel bajo de DEF');
+                    """,
+                    (rule_record_id,),
+                )
+            conn.commit()
 
 
 # ── Pool de credenciales ──────────────────────────────────────────────
@@ -1219,7 +1249,7 @@ async def test_snapshot_gates_aftertreatment_rules(client, vehicle, monkeypatch)
         GeotabRuleCreateRequest(
             rule_id="aDefSnap",
             category="postratamiento",
-            description="Nivel bajo de DEF",
+            description="Falla del sistema DPF",
         ),
     )
 
@@ -1243,7 +1273,7 @@ async def test_snapshot_gates_aftertreatment_rules(client, vehicle, monkeypatch)
         rule for rule in customer["databases"][0]["rules"] if rule["rule_id"] == "aDefSnap"
     )
     assert exported["category"] == "postratamiento"
-    assert exported["description"] == "Nivel bajo de DEF"
+    assert exported["description"] == "Falla del sistema DPF"
     # Categoria global: aplica a toda la database y no lleva banda de RPM.
     assert exported["motor_type"] is None
     assert exported["band"] is None

@@ -58,14 +58,19 @@ const SAFE_HABIT_DESCRIPTIONS = [
 // app/services/motor_catalog.py: AFTERTREATMENT_DESCRIPTIONS). El `value` viaja sin
 // acentos porque es el valor persistido; el `label` es solo para leerlo.
 const AFTERTREATMENT_DESCRIPTIONS = [
-  { value: "Nivel bajo de DEF", label: "Nivel bajo de DEF" },
-  { value: "Calidad de DEF", label: "Calidad de DEF" },
-  { value: "Regeneracion DPF requerida", label: "Regeneración DPF requerida" },
-  { value: "Regeneracion DPF inhibida", label: "Regeneración DPF inhibida" },
-  { value: "Nivel alto de hollin DPF", label: "Nivel alto de hollín DPF" },
-  { value: "Temperatura alta de escape", label: "Temperatura alta de escape" },
-  { value: "Falla SCR o sensor NOx", label: "Falla SCR o sensor NOx" },
-  { value: "Derate por postratamiento", label: "Derate por postratamiento" }
+  { value: "Falla de presion diferencial DPF", label: "Falla de presión diferencial DPF" },
+  { value: "Regeneracion DPF demasiado frecuente", label: "Regeneración DPF demasiado frecuente" },
+  { value: "Falla del sistema DPF", label: "Falla del sistema DPF" },
+  { value: "Regeneracion manual activa", label: "Regeneración manual activa" },
+  {
+    value: "Regeneracion manual inactiva con lampara DPF encendida",
+    label: "Regeneración manual inactiva con lámpara DPF encendida"
+  },
+  { value: "Saturacion DPF 110%", label: "Saturación DPF 110%" },
+  { value: "Saturacion DPF 120%", label: "Saturación DPF 120%" },
+  { value: "Saturacion DPF 130%", label: "Saturación DPF 130%" },
+  { value: "Saturacion DPF 144%", label: "Saturación DPF 144%" },
+  { value: "Saturacion DPF 155%", label: "Saturación DPF 155%" }
 ];
 
 const AFTERTREATMENT_LABELS = AFTERTREATMENT_DESCRIPTIONS.reduce((acc, option) => {
