@@ -1323,6 +1323,35 @@ def _run_motor_tables_ddl_inner(conn: psycopg.Connection) -> None:
               );
             """
         )
+        # Y el sentido contrario, que faltaba. `create_geotab_rule` rechaza dar
+        # de alta "Excesos de RPM" como habito seguro —debe registrarse como
+        # banda de operacion—, asi que una database registrada despues de esa
+        # regla se quedaba SOLO con la aplicacion de operacion y el ETL nunca
+        # pedia sus ExceptionEvent: la pantalla mostraba el porcentaje de la
+        # banda y cero eventos. La aplicacion derivada se crea aqui, no en el
+        # alta, para que tambien repare las databases ya cargadas.
+        #
+        # Solo desde la regla SIN descenso: el descenso es un subconjunto de
+        # ella (el transform publica sin_descenso = total - descenso), asi que
+        # derivar de las dos deja dos reglas fisicas bajo la misma etiqueta de
+        # habito y el consumidor se queda con una sola, arbitrariamente.
+        cur.execute(
+            """
+            INSERT INTO geotab_rule_applications (
+                geotab_rule_id, category, motor_id, event_type,
+                description, band, is_descenso
+            )
+            SELECT
+                operation.geotab_rule_id, 'habito_seguro', operation.motor_id,
+                'exceso_rpm', 'Excesos de RPM', NULL, FALSE
+            FROM geotab_rule_applications operation
+            WHERE operation.category = 'operacion'
+              AND operation.band = 'exceso_rpm'
+              AND operation.motor_id IS NOT NULL
+              AND operation.is_descenso = FALSE
+            ON CONFLICT DO NOTHING;
+            """
+        )
         cur.execute(
             """
             INSERT INTO geotab_rule_applications (
@@ -5392,6 +5421,59 @@ def _validate_vehicle_in_customer_geotab(
             exc_info=True,
         )
         return "unknown", None
+
+
+def lookup_device_in_customer_geotab(
+    database_id: int,
+    *,
+    plate: str | None = None,
+    vin: str | None = None,
+) -> dict | None:
+    """Busca un device en una database Geotab configurada de un cliente.
+
+    Se usa en la consulta individual antes de que el vehiculo exista o este
+    asignado localmente; por eso no depende de ``vehicle_motor_assignments``.
+    Las credenciales se resuelven desde el pool de la database fisica, igual
+    que las demas integraciones Geotab del cliente.
+    """
+    from app.clients.geotab_client import get_device_from_plate, get_device_from_vin
+
+    with psycopg.connect(_database_dsn(), row_factory=dict_row) as conn:
+        _ensure_motor_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT connection_type, provider_config
+                FROM customer_databases
+                WHERE id = %s;
+                """,
+                (database_id,),
+            )
+            database = cur.fetchone()
+
+    if database is None:
+        raise ValueError("La database seleccionada no existe.")
+    if database["connection_type"] != "geotab":
+        raise ValueError("La database seleccionada no es de tipo Geotab.")
+
+    provider_config = database.get("provider_config") or {}
+    if isinstance(provider_config, str):
+        import json as _json
+
+        provider_config = _json.loads(provider_config)
+    plate_prefix = provider_config.get("plate_prefix")
+
+    def _lookup(cfg: GeotabConfig) -> dict | None:
+        device = (
+            get_device_from_plate(plate, cfg, plate_prefix=plate_prefix)
+            if plate
+            else None
+        )
+        if device is None and vin:
+            device = get_device_from_vin(vin, cfg)
+        return device
+
+    return call_with_geotab_credentials(database_id, _lookup)
 
 
 def _update_geotab_customer_status(

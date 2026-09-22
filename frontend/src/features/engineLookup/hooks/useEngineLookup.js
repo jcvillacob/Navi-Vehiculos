@@ -62,7 +62,7 @@ export function useEngineLookup() {
     setSteps([]);
   };
 
-  const searchVehicle = async (identifier, { force = false } = {}) => {
+  const searchVehicle = async (identifier, { force = false, customerDatabaseId = null } = {}) => {
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -75,6 +75,7 @@ export function useEngineLookup() {
     try {
       const response = await lookupVehicleStream(identifier, {
         force,
+        customerDatabaseId,
         signal: controller.signal,
         onStep: async (step) => {
           const now = Date.now();

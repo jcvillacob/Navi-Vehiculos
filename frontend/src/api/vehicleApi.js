@@ -418,16 +418,18 @@ export async function fetchActiveTallerOrders({ forceRefresh = false } = {}) {
 
 // ── Vehicle ───────────────────────────────────────────────────────────────────
 
-export async function lookupVehicle(identifier, { force = false } = {}) {
+export async function lookupVehicle(identifier, { force = false, customerDatabaseId = null } = {}) {
   const query = new URLSearchParams({ identifier: identifier.trim().toUpperCase() });
   if (force) query.set("force", "true");
+  if (customerDatabaseId) query.set("customer_database_id", String(customerDatabaseId));
   const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/lookup?${query.toString()}`));
   return parseJsonOrThrow(response, "Error consultando la API");
 }
 
-export async function lookupVehicleStream(identifier, { force = false, onStep, signal } = {}) {
+export async function lookupVehicleStream(identifier, { force = false, customerDatabaseId = null, onStep, signal } = {}) {
   const query = new URLSearchParams({ identifier: identifier.trim().toUpperCase() });
   if (force) query.set("force", "true");
+  if (customerDatabaseId) query.set("customer_database_id", String(customerDatabaseId));
   const response = await fetchWithAuth(buildUrl(`/api/v1/vehicle/lookup/stream?${query.toString()}`), { signal });
 
   if (!response.ok) {

@@ -621,33 +621,131 @@ h1, h2, h3, h4, h5, h6 {
   gap: 8px;
 }
 
-.lookup-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.lookup-tab {
+.lookup-geotab-source {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(230px, 1fr) minmax(290px, 1.2fr);
+  align-items: center;
+  gap: 20px;
+  margin-top: 12px;
+  padding: 15px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   background: var(--surface);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-xs);
 }
 
-.lookup-tab:hover {
+.lookup-source-intro,
+.lookup-source-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.lookup-source-field {
+  padding-left: 20px;
+  border-left: 1px solid var(--border);
+}
+
+.lookup-source-field label {
+  flex: 1;
+}
+
+.lookup-source-icon,
+.lookup-batch-icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  color: var(--text-secondary);
   background: var(--bg);
+}
+
+.lookup-source-icon svg,
+.lookup-batch-icon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.lookup-geotab-source-label {
+  display: block;
+  font-family: "Poppins", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text);
+}
+
+.lookup-geotab-source .support-copy {
+  margin: 2px 0 0;
+}
+
+.lookup-geotab-source label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.lookup-geotab-source select {
+  min-width: 0;
+}
+
+.lookup-batch-button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  width: 304px;
+  min-height: 58px;
+  gap: 12px;
+  padding: 10px 14px;
+  text-align: left;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
 }
 
-.lookup-tab.is-active {
-  background: var(--red);
-  color: #ffffff;
-  border-color: transparent;
+.lookup-batch-button:hover {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
-.lookup-tab.is-active:hover {
-  background: var(--red-hover);
+.lookup-batch-button strong,
+.lookup-batch-button small {
+  display: block;
+}
+
+.lookup-batch-button strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lookup-batch-button small {
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.lookup-batch-arrow {
+  justify-self: end;
+  margin-left: 4px;
+  color: var(--text-muted);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.lookup-page-header {
+  align-items: start;
 }
 
 .lookup-bar-input {
@@ -868,6 +966,118 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.lookup-found-notice {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 16px;
+  padding: 13px 16px;
+  border: 1px solid var(--status-ok-border);
+  border-radius: var(--radius-md);
+  background: linear-gradient(100deg, var(--status-ok-bg), color-mix(in srgb, var(--surface) 78%, var(--status-ok-bg)));
+}
+
+.lookup-found-check {
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  color: #fff;
+  background: #83bf45;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.lookup-found-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.lookup-found-copy strong {
+  color: var(--status-ok-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lookup-found-copy span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.lookup-found-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.lookup-found-chip {
+  padding: 4px 9px;
+  border: 1px solid var(--status-ok-border);
+  border-radius: var(--radius-pill);
+  color: var(--status-ok-text);
+  background: color-mix(in srgb, var(--status-ok-bg) 75%, white);
+  font-family: "Poppins", sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.lookup-found-chip.is-unknown,
+.lookup-found-chip.is-not_found {
+  border-color: var(--border-strong);
+  color: var(--text-muted);
+  background: var(--surface);
+}
+
+.lookup-found-time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 142px;
+  padding-left: 16px;
+  border-left: 1px solid var(--status-ok-border);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.lookup-found-time > span:first-child {
+  color: var(--text-secondary);
+  font-size: 17px;
+}
+
+.lookup-found-time > span:last-child {
+  display: grid;
+  gap: 1px;
+}
+
+.lookup-found-time strong {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.lookup-found-refresh {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  box-shadow: var(--shadow-xs);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.lookup-found-refresh:hover {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .lookup-result-section {
@@ -6637,6 +6847,33 @@ select.control-sm {
   .rendimientos-summary-grid {
     grid-template-columns: 1fr;
   }
+
+  .lookup-geotab-source {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .lookup-source-intro {
+    grid-column: 1 / -1;
+  }
+
+  .lookup-source-field:first-of-type {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .lookup-found-notice {
+    grid-template-columns: auto minmax(180px, 1fr) auto;
+  }
+
+  .lookup-found-time {
+    grid-column: 2 / -1;
+    justify-self: end;
+  }
+
+  .lookup-found-refresh {
+    grid-column: 2 / -1;
+    justify-self: end;
+  }
 }
 
 @media (max-width: 900px) {
@@ -6750,6 +6987,42 @@ select.control-sm {
 }
 
 @media (max-width: 720px) {
+  .lookup-geotab-source {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .lookup-source-intro,
+  .lookup-source-field {
+    grid-column: auto;
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .lookup-batch-button {
+    width: 100%;
+  }
+
+  .lookup-found-notice {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .lookup-found-statuses,
+  .lookup-found-time,
+  .lookup-found-refresh {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .lookup-found-time {
+    justify-self: stretch;
+    padding-top: 10px;
+    padding-left: 0;
+    border-top: 1px solid var(--status-ok-border);
+    border-left: 0;
+  }
+
   .content-shell {
     padding: 16px 14px 28px;
   }

@@ -38,6 +38,43 @@ function GeotabBadge({ label, status }) {
   );
 }
 
+function LookupFoundNotice({ result, geotabLabel, hasMotor, queriedAt, cached, loading, onForceSearch }) {
+  const formattedQueriedAt = new Intl.DateTimeFormat("es-CO", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(queriedAt);
+  const customerFound = result.geotab_customer_status === "found";
+
+  return (
+    <section className="lookup-found-notice" aria-live="polite">
+      <span className="lookup-found-check" aria-hidden="true">✓</span>
+      <div className="lookup-found-copy">
+        <strong>Vehículo encontrado</strong>
+        <span>{cached ? "Datos cargados desde cache local." : "Se encontraron los datos en la base de datos seleccionada."}</span>
+      </div>
+      <div className="lookup-found-statuses">
+        <span className={`lookup-found-chip is-${result.geotab_status}`}>{geotabLabel}: {result.geotab_status === "found" ? "OK" : "?"}</span>
+        <span className={`lookup-found-chip is-${customerFound ? "found" : "unknown"}`}>Cliente: {customerFound ? "OK" : "Pendiente"}</span>
+        <span className={`lookup-found-chip is-${hasMotor ? "found" : "unknown"}`}>{hasMotor ? "Registrado" : "Sin catalogar"}</span>
+      </div>
+      <div className="lookup-found-time">
+        <span aria-hidden="true">◷</span>
+        <span><strong>Última consulta</strong>{formattedQueriedAt}</span>
+      </div>
+      {cached && onForceSearch ? (
+        <button
+          type="button"
+          className="lookup-found-refresh"
+          onClick={onForceSearch}
+          disabled={loading}
+        >
+          {loading ? "Buscando..." : "Buscar de nuevo"}
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
 export default function LookupDetails({
   result,
   loading,
@@ -46,9 +83,11 @@ export default function LookupDetails({
   canManageVehicle,
   isManualAssignment,
   onAction,
-  onForceSearch
+  onForceSearch,
+  geotabLabel = "Navitrans"
 }) {
   const [showSources, setShowSources] = useState(false);
+  const [queriedAt] = useState(() => new Date());
 
   if (!result) {
     return null;
@@ -74,6 +113,7 @@ export default function LookupDetails({
     : isManualAssignment
       ? "Asignacion manual"
       : result.status;
+  const showFoundNotice = Boolean(result.plate) && (isOk || isManualAssignment);
 
   const actionLabel = !canAct
     ? null
@@ -87,20 +127,8 @@ export default function LookupDetails({
 
   return (
     <section className="card lookup-result-card">
-      {/* ── Header: badges + status ── */}
-      <header className="lookup-result-header">
-        <div className="detail-status-group">
-          <GeotabBadge label="Navitrans" status={result.geotab_status} />
-          <GeotabBadge
-            label="Cliente"
-            status={result.geotab_customer_status || "not_applicable"}
-          />
-          <span className={`status ${statusClass}`}>{statusLabel}</span>
-        </div>
-      </header>
-
       {/* ── Cache banner ── */}
-      {result.cached && onForceSearch ? (
+      {result.cached && onForceSearch && !showFoundNotice ? (
         <div className="notice-banner notice-info">
           Datos cargados desde cache local.
           <button
@@ -113,6 +141,31 @@ export default function LookupDetails({
             {loading ? "Buscando..." : "Buscar de nuevo"}
           </button>
         </div>
+      ) : null}
+      {showFoundNotice ? (
+        <LookupFoundNotice
+          result={result}
+          geotabLabel={geotabLabel}
+          hasMotor={hasMotor}
+          queriedAt={queriedAt}
+          cached={result.cached}
+          loading={loading}
+          onForceSearch={onForceSearch}
+        />
+      ) : null}
+      {/* La alerta de encontrado ya contiene estos estados; se conserva el
+          encabezado compacto para respuestas parciales o no encontradas. */}
+      {!showFoundNotice ? (
+        <header className="lookup-result-header">
+          <div className="detail-status-group">
+            <GeotabBadge label={geotabLabel} status={result.geotab_status} />
+            <GeotabBadge
+              label="Cliente"
+              status={result.geotab_customer_status || "not_applicable"}
+            />
+            <span className={`status ${statusClass}`}>{statusLabel}</span>
+          </div>
+        </header>
       ) : null}
 
       {/* ── Identificacion ── */}

@@ -67,15 +67,17 @@ router = APIRouter(prefix="/vehicle", tags=["vehicle"])
 def lookup_vehicle(
     identifier: str = Query(..., min_length=3, max_length=32, description="Placa o VIN del vehiculo"),
     force: bool = Query(default=False, description="Forzar consulta externa ignorando cache local"),
+    customer_database_id: int | None = Query(default=None, ge=1, description="Database Geotab del cliente para la consulta"),
     _user: dict = Depends(require_permission("engine_lookup.use")),
 ) -> VehicleLookupResponse:
-    return lookup_vehicle_service(identifier, force=force)
+    return lookup_vehicle_service(identifier, force=force, customer_database_id=customer_database_id)
 
 
 @router.get("/lookup/stream")
 def lookup_vehicle_stream(
     identifier: str = Query(..., min_length=3, max_length=32, description="Placa o VIN del vehiculo"),
     force: bool = Query(default=False, description="Forzar consulta externa ignorando cache local"),
+    customer_database_id: int | None = Query(default=None, ge=1, description="Database Geotab del cliente para la consulta"),
     _user: dict = Depends(require_permission("engine_lookup.use")),
 ):
     """Lookup individual con eventos de progreso en formato NDJSON.
@@ -97,7 +99,12 @@ def lookup_vehicle_stream(
 
         def run_lookup():
             try:
-                response = lookup_vehicle_service(identifier, force=force, on_step=on_step)
+                response = lookup_vehicle_service(
+                    identifier,
+                    force=force,
+                    customer_database_id=customer_database_id,
+                    on_step=on_step,
+                )
                 q.put(
                     json.dumps(
                         {"type": "result", "result": response.model_dump()}, default=str
